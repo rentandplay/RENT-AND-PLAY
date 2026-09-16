@@ -1,0 +1,15 @@
+rent-and-play/
+├── apps/
+│   ├── web/
+│   ├── mobile/
+│   └── backend/
+├── firmware/
+│   └── esp32-terminal/
+├── database/
+├── packages/
+│   └── api-contracts/
+├── infrastructure/
+├── docs/
+├── tests/
+├── scripts/
+└── .github/

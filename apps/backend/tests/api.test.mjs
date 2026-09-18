@@ -1,15 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createApi} from '../src/server.mjs';
-import {hashPassword} from '../src/auth.mjs';
-import {pool} from '../src/db.mjs';
 
-test('API protects dashboard, checks database password, uses HttpOnly sessions, and revokes logout',async()=>{
-  const hash=await hashPassword('test-password-with-length');
-  const row={id:1,full_name:'Test Owner',email:'owner@example.test',role:'OWNER',is_active:1,password_hash:hash};
-  const executed=[];
-  const db={execute:async(sql,params)=>{executed.push({sql,params});return sql.startsWith('SELECT')?[[row]]:[{}];},release:()=>{}};
-  const server=createApi({getConnection:async()=>db,checkSchema:async()=>{},dashboard:async()=>({stats:{active:0}})});
+test('API protects dashboard, uses Firebase session cookies, checks profiles, and clears logout',async()=>{
+  const row={id:'firebase-uid',full_name:'Test Owner',email:'owner@example.test',role:'OWNER',is_active:true};
+  const signedIn=[];
+  const revoked=new Set();
+  const sessions={signIn:async(email,password)=>{signedIn.push({email,password});return password==='test-password-with-length'?{uid:row.id,cookie:'signed-cookie',seconds:28800}:null;},verify:async token=>token==='signed-cookie'&&!revoked.has(token)?{uid:row.id}:null,revoke:token=>revoked.add(token)};
+  const services={health:async()=>{},getUser:async id=>id===row.id?row:null,touchLogin:async()=>{},dashboard:async()=>({stats:{active:0}}),inventoryList:async()=>({items:[],categories:[]})};
+  const server=createApi({services,sessions});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base=`http://127.0.0.1:${server.address().port}`;
   try {
@@ -35,6 +34,6 @@ test('API protects dashboard, checks database password, uses HttpOnly sessions, 
     const nextCookie=next.headers.get('set-cookie').split(';')[0];
     assert.equal((await fetch(base+'/api/auth/logout',{method:'POST',headers:{Cookie:nextCookie}})).status,200);
     assert.equal((await fetch(base+'/api/auth/me',{headers:{Cookie:nextCookie}})).status,401);
-    assert.ok(executed.some(e=>e.sql.includes('email=?')&&e.params[0]===row.email));
-  } finally {await new Promise(resolve=>server.close(resolve));await pool.end();}
+    assert.ok(signedIn.some(entry=>entry.email===row.email));
+  } finally {await new Promise(resolve=>server.close(resolve));}
 });

@@ -3,13 +3,19 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "node --env-file-if-exists=.env src/server.mjs",
     "start": "node --env-file-if-exists=.env src/server.mjs",
-    "db:check": "node --env-file-if-exists=.env scripts/check-db.mjs",
+    "firebase:check": "node --env-file-if-exists=.env scripts/check-db.mjs",
+    "db:check": "npm run firebase:check",
     "user:create": "node --env-file-if-exists=.env scripts/create-owner.mjs",
     "test": "node --test tests/*.test.mjs"
   },
-  "dependencies": { "bcryptjs": "^3.0.2", "mysql2": "^3.14.5", "qrcode": "^1.5.4" }
+  "dependencies": {
+    "firebase-admin": "^14.4.0",
+    "qrcode": "^1.5.4"
+  }
 }

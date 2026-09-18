@@ -1,68 +1,66 @@
-# Rent & Play MySQL backend
+# Rent & Play Firebase backend
 
-The login and dashboard use the existing MySQL 8 database through this Node.js backend. It targets the tables in `rent_and_play_mysql_schema_v2_fixed.sql` and the schema name `rent_and_play_db` shown in Workbench. It never recreates the database or imports starter/sample records.
+The Node.js REST API now uses Firebase Authentication for owner/operator passwords and Cloud Firestore for application data. The browser still talks only to this backend; Firebase Admin credentials are never exposed to web code.
 
-## First setup in VS Code
+## Firebase setup
 
-Requires Node.js 22 or newer and your MySQL service running.
-
-In a terminal at the project root:
+1. Create a Firebase project and enable **Authentication > Sign-in method > Email/Password**.
+2. Create the default Cloud Firestore database.
+3. In **Project settings > General**, copy the Web API key.
+4. In **Project settings > Service accounts**, create a service-account key for local development. Store it outside this repository.
+5. From `apps/backend`, install dependencies and create the local environment file:
 
 ```powershell
-cd apps\backend
 npm.cmd install
 Copy-Item .env.example .env
 ```
 
-Open `apps/backend/.env` in VS Code. Enter the host, port, username, password, and schema name from your Workbench connection. In particular, replace `DB_PASSWORD=YOUR_MYSQL_PASSWORD` with your database login password. Quote passwords containing `#` with double quotes. This file is ignored by Git. Do not put database credentials in any web file.
+Set `FIREBASE_PROJECT_ID` and `FIREBASE_WEB_API_KEY` in `.env`. For Admin SDK credentials, either set `GOOGLE_APPLICATION_CREDENTIALS` to the absolute path of the downloaded JSON key or put its single-line JSON value in `FIREBASE_SERVICE_ACCOUNT_JSON`. Never commit that key.
 
-The schema name in the downloaded SQL file is `rent_and_play`, but the screenshot shows `rent_and_play_db`. Use the name of the database you actually created; you do not need to import the SQL again.
-
-Check the connection and table columns:
+Verify the connection and create the first owner:
 
 ```powershell
-npm.cmd run db:check
-```
-
-Your screenshot shows an empty `users` table. Create your first owner account:
-
-```powershell
+npm.cmd run firebase:check
 npm.cmd run user:create
 ```
 
-This command asks for your full name, login email, and a new password (12+ characters). Password input is hidden. It stores a salted scrypt hash in the existing `users` table and only works when no user accounts exist. It never overwrites a user. The website login password is separate from the MySQL connection password.
+The owner command creates one Firebase Authentication account, its matching `users/{uid}` Firestore profile, and four starter equipment categories when the category collection is empty. It refuses to overwrite an existing profile.
 
-Start the backend:
+Start the backend, then start the web app in a second terminal:
 
 ```powershell
 npm.cmd run dev
 ```
 
-Keep it running. In a second terminal at the project root:
-
 ```powershell
-cd apps\web
+cd ..\web
 npm.cmd run dev
 ```
 
-Open http://127.0.0.1:5173 and sign in with the owner account you created.
+Open http://127.0.0.1:5173 and sign in with the owner account.
 
-## Implemented API
+## Authentication and API
 
-- `POST /api/auth/login`: parameterized user lookup, scrypt/bcrypt verification, active owner/operator check, last-login update, and opaque HttpOnly session cookie.
-- `GET /api/auth/me`: current account, rechecking active status and role.
-- `POST /api/auth/logout`: revoke the server session and clear the cookie.
-- `GET /api/dashboard`: authenticated, consistent read of items/current rates, customers, categories, open rentals, pending verification records, registered terminals, and current/previous-week confirmed fees.
-- `GET /api/health`: database connection and schema validation.
+`POST /api/auth/login` validates the password with Firebase Authentication, exchanges the returned ID token for an HttpOnly Firebase session cookie, then checks the active `users/{uid}` profile and its `OWNER` or `OPERATOR` role. Protected routes revalidate both the Firebase session and Firestore profile. Standard sessions last eight hours; Remember me uses Firebase's maximum supported 14 days. Login is rate limited, write requests check their browser origin, and logout clears and locally revokes the presented cookie.
 
-Run `npm test` for authentication, API access, inventory validation, rental guards, Philippine due-date boundaries, fee aggregation, and empty-data tests. Run `node --env-file=.env --test tests/*.test.mjs` to also exercise real MySQL inventory writes in an outer transaction that always rolls back its test records.
+The existing dashboard and inventory API routes are unchanged. Inventory writes use Firestore transactions. The `item_codes/{ITEM_CODE}` registry enforces unique item codes, and stale edits are rejected using `updated_at`. QR tokens and historical rates remain stable.
 
-Inventory endpoints require an active owner/operator session: `GET /api/inventory`, `GET /api/inventory/:id`, `GET /api/inventory/:id/qr`, `POST /api/inventory`, `PATCH /api/inventory/:id`, and `POST /api/inventory/:id/actions`. Actions support maintenance, complete-maintenance, archive, and restore. Updates send the item's `updated_at` as `version` to reject stale edits. Writes use transactions, row locks, parameterized SQL, audit logs, and status/rate history. QR tokens remain stable. Archive preserves records, and existing rental price snapshots are not overwritten.
+Run unit tests with:
 
-## Data and sessions
+```powershell
+npm.cmd test
+```
 
-DATETIME fields are interpreted in Philippine time (`+08:00`). Fee charts exclude pending/unconfirmed rentals and refundable deposits. They show recorded rental charges, not proof of payment collection. An online terminal requires `status=ONLINE` and a last-seen timestamp within 90 seconds.
+The Firestore write integration test runs only against the Firebase emulator when `FIRESTORE_EMULATOR_HOST` is set, so tests never modify a production project accidentally.
 
-Sessions last eight hours by default or 30 days with Remember me. They live in backend memory, so restarting the backend signs users out. Login is rate limited and browser write requests are checked against allowed origins. For deployment, use HTTPS and `COOKIE_SECURE=true`; replace memory sessions with persistent shared storage if scaling to multiple instances.
+## Firestore collections
 
-Mobile rental/return creation and authenticated ESP32 confirmation endpoints are not implemented in this login/dashboard change. The dashboard displays their database records without bypassing the physical confirmation gate.
+- `users/{uid}`: `full_name`, `email`, `role`, `is_active`, timestamps
+- `item_categories`, `items`, `item_codes`, `item_rates`
+- `customers`, `rentals`
+- `verification_requests`, `terminals`
+- `maintenance_records`, `item_status_history`, `audit_logs`
+
+References between collections are string document IDs such as `item_id`, `customer_id`, `rental_id`, and `terminal_id`. Date fields are Firestore timestamps. Rental fees and deposits are numeric PHP amounts.
+
+The included Firestore rules deny direct client access because all web, mobile, and ESP32 traffic is expected to pass through the trusted REST API. Deploy them with the Firebase CLI when you are ready to connect the project.

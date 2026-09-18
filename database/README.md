@@ -1,11 +1,10 @@
 # Database
 
-Use PostgreSQL as the shared source of truth.
+This directory preserves the original relational design as a reference for collection fields and business rules.
 
-- `schema/` - current complete schema
+- `schema/` - legacy complete SQL schema
 - `migrations/` - ordered schema changes
 - `seeds/` - development/sample data
 - `diagrams/` - ERD files
 
-Clients must NOT connect directly to PostgreSQL.
-Only the Backend API should access it.
+The running application uses Cloud Firestore. Clients must use the Backend API rather than direct privileged database access.

@@ -32,6 +32,9 @@ ios/Pods/
 
 # Logs
 *.log
+firebase-debug.log
+.firebase/
+service-account*.json
 
 # Temporary
 tmp/

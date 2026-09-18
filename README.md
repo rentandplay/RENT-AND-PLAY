@@ -4,7 +4,7 @@ Scalable monorepo structure for the Rent & Play system.
 
 ## Main architecture
 
-Web / Mobile / ESP32 -> Backend REST API -> MySQL
+Web / Mobile / ESP32 -> Backend REST API -> Firebase Authentication + Cloud Firestore
 
 The Web, Mobile, Backend, and ESP32 firmware are separate applications/projects
 inside one main repository.
@@ -15,7 +15,7 @@ inside one main repository.
 - `apps/mobile` - Mobile QR rental/return workflow
 - `apps/backend` - Shared REST API and business rules
 - `firmware/esp32-terminal` - ESP32 verification terminal firmware
-- `database` - Original schema/migration references; the running login/dashboard uses the existing MySQL database
+- `database` - Legacy relational schema reference; the running application uses Cloud Firestore
 - `packages/api-contracts` - Shared API schemas/examples
 - `docs` - Proposal, architecture, ERD, API, testing, and defense notes
 - `tests/system` - End-to-end system flow test notes

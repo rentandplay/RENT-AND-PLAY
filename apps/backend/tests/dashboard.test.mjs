@@ -21,7 +21,7 @@ test('weekly fee buckets respect Monday midnight in Manila and exclude pending r
     {'This week':[200,350,0,0,0,0,0],'Last week':[0,0,0,0,0,0,100]});
 });
 test('an empty database produces zero cards and empty lists rather than sample records',async()=>{
-  const db={query:async()=>[[]],commit:async()=>{},rollback:async()=>{}};
+  const db={collection:()=>({get:async()=>({docs:[]})})};
   const result=await loadDashboard(db,new Date('2026-09-15T12:00:00+08:00'));
   assert.deepEqual(result.stats,{active:0,available:0,dueToday:0,overdue:0,fees:0});
   assert.deepEqual(result.rentals,[]);assert.deepEqual(result.items,[]);

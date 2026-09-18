@@ -1,18 +1,18 @@
 # Rent & Play web workspace
 
-Responsive owner/operator login and dashboard using the supplied logo. Built with HTML, CSS, and JavaScript, connected to the MySQL backend in `apps/backend`. Existing TypeScript API scaffolds are retained.
+Responsive owner/operator login and dashboard using the supplied logo. Built with HTML, CSS, and JavaScript, connected to the Firebase-backed REST API in `apps/backend`. Existing TypeScript API scaffolds are retained.
 
 ## Run
 
 Configure and start the backend first; see `../backend/README.md` for database setup and first-account creation. In a second VS Code terminal, from `apps/web`, run `npm run dev`, then open http://127.0.0.1:5173.
 
-Sign in with an active OWNER or OPERATOR account in your MySQL `users` table. There are no default passwords or demo access. Login is validated on the server.
+Sign in with an active Firebase Authentication account that has a matching active `users/{uid}` Firestore profile with an `OWNER` or `OPERATOR` role. There are no default passwords or demo access.
 
 `npm run check` checks JavaScript syntax.
 
 ## Included
 
-- Working MySQL inventory: add/edit equipment, per-item QR labels, current pricing with rate history, maintenance and inspection records, reversible archive/restore, and status history.
+- Working Firestore inventory: add/edit equipment, per-item QR labels, current pricing with rate history, maintenance and inspection records, reversible archive/restore, and status history.
 - Inventory search, category/status filters (including archives), sorting, table/card views, 12-item pagination, and CSV export of the filtered collection. Active/pending rentals lock availability, condition changes, and archiving.
 - Database-backed login, password visibility, optional remembered session, and server-side sign-out.
 - Live availability, active/pending rentals, due/overdue alerts, confirmed-fee chart, equipment categories, customer records, and terminal status.

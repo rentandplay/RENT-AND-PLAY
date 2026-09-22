@@ -3,5 +3,5 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "node server.mjs", "start": "node server.mjs", "check": "node --check src/app.js && node --check src/inventory.js" }
+  "scripts": { "dev": "node server.mjs", "start": "node server.mjs", "check": "node --check src/app.js && node --check src/inventory.js && node --check src/workspace-ui.js && node --check server.mjs" }
 }

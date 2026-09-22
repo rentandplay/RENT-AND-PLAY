@@ -7,7 +7,7 @@ test('API protects dashboard, uses Firebase session cookies, checks profiles, an
   const signedIn=[];
   const revoked=new Set();
   const sessions={signIn:async(email,password)=>{signedIn.push({email,password});return password==='test-password-with-length'?{uid:row.id,cookie:'signed-cookie',seconds:28800}:null;},verify:async token=>token==='signed-cookie'&&!revoked.has(token)?{uid:row.id}:null,revoke:token=>revoked.add(token)};
-  const services={health:async()=>{},getUser:async id=>id===row.id?row:null,touchLogin:async()=>{},dashboard:async()=>({stats:{active:0}}),inventoryList:async()=>({items:[],categories:[]})};
+  const services={health:async()=>{},getUser:async id=>id===row.id?row:null,touchLogin:async()=>{},dashboard:async()=>({stats:{active:0}}),inventoryList:async()=>({items:[],categories:[]}),workspace:async role=>({role,customers:[]}),createCustomer:async(actor,input)=>({id:'customer-1',actor,...input}),saveSettings:async input=>input};
   const server=createApi({services,sessions});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base=`http://127.0.0.1:${server.address().port}`;
@@ -27,6 +27,11 @@ test('API protects dashboard, uses Firebase session cookies, checks profiles, an
     assert.equal((await response.json()).user.password_hash,undefined);
     const dashboard=await fetch(base+'/api/dashboard',{headers:{Cookie:cookie}});
     assert.equal(dashboard.status,200);
+    const workspace=await fetch(base+'/api/workspace',{headers:{Cookie:cookie}});assert.equal(workspace.status,200);assert.equal((await workspace.json()).role,'OWNER');
+    const customer=await fetch(base+'/api/customers',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({fullName:'Customer'})});assert.equal(customer.status,201);
+    row.role='OPERATOR';
+    assert.equal((await fetch(base+'/api/settings',{method:'PATCH',headers:{Cookie:cookie,'Content-Type':'application/json'},body:'{}'})).status,403);
+    row.role='OWNER';
     row.is_active=0;
     assert.equal((await fetch(base+'/api/dashboard',{headers:{Cookie:cookie}})).status,401);
     row.is_active=1;

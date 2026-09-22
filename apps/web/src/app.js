@@ -1,4 +1,5 @@
 import {createInventory} from './inventory.js';
+import {createWorkspaceUI} from './workspace-ui.js';
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const icons = {
@@ -33,7 +34,9 @@ const navGroups = [
   {label:'Operations',emoji:'🔧',items:[['Maintenance','Maintenance'],['ESP32 / Verification','ESP32 terminal']]}
 ];
 const pageLabels = {Inventory:'Equipment','ESP32 terminal':'ESP32 / Verification'};
-let user=null, data=null, page='Dashboard', filter='All rentals', query='', period='This week', category='', connectionError='', toastTimer, refreshing=false;
+const pageRoutes={Dashboard:'/',Inventory:'/equipment',Customers:'/customers','Rates & Fees':'/rates',Rentals:'/rentals',Returns:'/returns','Transaction History':'/transactions',Maintenance:'/maintenance','ESP32 terminal':'/verification',Reports:'/reports',Settings:'/settings',Profile:'/profile'};
+const routePages=Object.fromEntries(Object.entries(pageRoutes).map(([key,value])=>[value,key]));
+let user=null, data=null, page=routePages[location.pathname]||'Dashboard', filter='All rentals', query='', period='This week', category='', connectionError='', toastTimer, refreshing=false;
 let profileEditing=false;
 let theme=document.documentElement.dataset.theme || 'light';
 let sidebarCollapsed=false;
@@ -101,9 +104,28 @@ function toast(message) {
   const el=document.querySelector('#toast');el.textContent=message;el.classList.add('visible');
   clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('visible'),4000);
 }
+function goTo(next,replace=false) {
+  page=next;profileEditing=false;category='';filter='All rentals';query='';
+  const route=pageRoutes[next]||'/';if(location.pathname!==route)history[replace?'replaceState':'pushState']({page:next},'',route);
+  render();window.scrollTo(0,0);
+}
 function showModal(title,body) {
   modal.innerHTML=`<div class="modal-heading"><h2>${escape(title)}</h2><button class="icon-button" id="close-modal" aria-label="Close dialog">✕</button></div>${body}`;
   modal.showModal();document.querySelector('#close-modal').onclick=()=>modal.close();
+}
+function sessionLoading() {
+  app.innerHTML=`<main class="session-loading" aria-live="polite"><div class="session-loading-card"><img class="session-logo" src="/public/logo.png" alt="Rent and Play"/><div class="session-brand-copy"><strong>rent<span class="orange">&</span>play</strong><small>RENTAL MANAGEMENT</small></div><span class="session-spinner" aria-hidden="true"></span><p>Opening your workspace…</p></div></main>`;
+}
+function notificationFingerprint() {
+  if(!data)return '';
+  return [...data.rentals.filter(r=>r.displayStatus==='Overdue').map(r=>`r:${r.id}:${r.due_at}`),...data.pending.map(r=>`v:${r.id}:${r.requested_at}`)].sort().join('|');
+}
+function openNotifications() {
+  const overdue=data?.rentals.filter(r=>r.displayStatus==='Overdue')||[],pending=data?.pending||[],fingerprint=notificationFingerprint();
+  try{localStorage.setItem('rent-play-notifications-seen',fingerprint);}catch{}
+  document.querySelector('.notification i')?.remove();
+  showModal('Notifications',`<div class="notification-list">${overdue.map(r=>`<button data-notification-page="Rentals"><span class="notification-mark overdue-mark">!</span><span><strong>Overdue rental · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · Due ${escape(formatDate(r.due_at))}</small></span>${icon('arrow')}</button>`).join('')}${pending.map(r=>`<button data-notification-page="ESP32 terminal"><span class="notification-mark pending-mark">•</span><span><strong>Verification waiting · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · ${escape(r.transaction_type)}</small></span>${icon('arrow')}</button>`).join('')}${!overdue.length&&!pending.length?'<div class="workspace-empty"><h3>You’re all caught up</h3><p>No overdue rentals or pending verifications.</p></div>':''}</div>`);
+  modal.querySelectorAll('[data-notification-page]').forEach(button=>button.onclick=()=>{modal.close();goTo(button.dataset.notificationPage);});
 }
 modal.addEventListener('click',e=>{
   if(e.target!==modal)return;
@@ -121,13 +143,16 @@ function login(message='') {
     const input=document.querySelector('#password');input.type=input.type==='password'?'text':'password';
     e.currentTarget.setAttribute('aria-label',input.type==='password'?'Show password':'Hide password');
   };
-  document.querySelector('#forgot').onclick=()=>showModal('Account help','<p>Contact your owner for account access or password recovery.</p><p>If this is the first setup, create the owner account using <code>npm run user:create</code> in the backend terminal. Passwords are stored as hashes, never as plain text.</p>');
+  document.querySelector('#forgot').onclick=()=>{
+    showModal('Reset your password','<p>Enter your workspace email and Firebase will send a secure password-reset link.</p><form id="reset-form" class="admin-form"><label>Email address<input name="email" type="email" autocomplete="email" required/></label><p class="form-error" role="alert"></p><button class="primary" type="submit">Send reset link</button></form>');
+    document.querySelector('#reset-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),error=form.querySelector('.form-error');button.disabled=true;try{await api('/auth/password-reset',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});modal.close();toast('If that account exists, a reset email has been sent.');}catch(problem){error.textContent=problem.message;button.disabled=false;}};
+  };
   document.querySelector('#login-form').onsubmit=async e=>{
     e.preventDefault();const button=e.currentTarget.querySelector('[type="submit"]');button.disabled=true;
     document.querySelector('#login-error').textContent='';
     try {
       const result=await api('/auth/login',{method:'POST',body:JSON.stringify({email:document.querySelector('#email').value,password:document.querySelector('#password').value,remember:document.querySelector('#remember').checked})});
-      user=result.user;page='Dashboard';await refresh();
+      user=result.user;page='Dashboard';history.replaceState({page},'',pageRoutes.Dashboard);await refresh();
     } catch(error) {
       const el=document.querySelector('#login-error');if(el)el.textContent=error.message;
     } finally {button.disabled=false;}
@@ -163,12 +188,6 @@ function dashboard() {
 function inventory() {
   return '<div id="inventory-root" aria-live="polite"><section class="panel"><p>Loading your inventory…</p></section></div>';
 }
-function customers() {
-  return `<section class="panel"><div class="panel-title"><div><h3>Your rental community</h3><p>${data.customers.length} active customer(s) in your database.</p></div></div>${data.customers.length?`<div class="customer-grid">${data.customers.map(c=>`<article><span class="avatar">${escape(initials(c.full_name))}</span><h3>${escape(c.full_name)}</h3><p>${escape(c.customer_code)}</p></article>`).join('')}</div>`:empty('No customers yet','Customer records will appear here when they are added.','users')}</section>`;
-}
-function placeholderPage(title,message) {
-  return `<section class="panel">${empty(title,message)}</section>`;
-}
 function profile() {
   const details=profileEditing?`<section class="panel profile-form-card"><span class="eyebrow">EDIT PROFILE</span><h2>Update your details</h2><p>Your name appears throughout the workspace. Your email is also your Firebase login.</p><form id="profile-form" class="profile-form"><label>Full name<input name="fullName" value="${escape(user.name)}" minlength="2" maxlength="150" autocomplete="name" required/></label><label>Login email<input name="email" type="email" value="${escape(user.email)}" maxlength="191" autocomplete="email" required/></label><label>Role<input value="${escape(user.role)}" disabled/><small>Account roles are managed separately for security.</small></label><p class="profile-error" role="alert"></p><div class="profile-actions"><button class="secondary" id="profile-cancel" type="button">Cancel</button><button class="primary" type="submit">Save changes</button></div></form></section>`:`<section class="panel profile-overview"><div class="profile-overview-heading"><div><span class="eyebrow">PROFILE OVERVIEW</span><h2>Account details</h2><p>Review the information connected to your workspace account.</p></div><button class="primary" id="profile-edit" type="button">Edit profile</button></div><dl class="profile-details"><div><dt>Full name</dt><dd>${escape(user.name)}</dd></div><div><dt>Login email</dt><dd>${escape(user.email)}</dd></div><div><dt>Account role</dt><dd>${escape(user.role)}</dd></div><div><dt>Account status</dt><dd><span class="profile-active">Active</span></dd></div></dl><div class="profile-note"><strong>Login details</strong><p>If you change the email address, use the new email the next time you sign in.</p></div></section>`;
   return `<div class="profile-layout"><section class="panel profile-card"><span class="profile-avatar">${escape(initials(user.name))}</span><h2>${escape(user.name)}</h2><p>${escape(user.email)}</p><span class="profile-role">${escape(user.role)}</span><small>Account ID</small><code>${escape(user.id)}</code></section>${details}</div>`;
@@ -178,31 +197,39 @@ function verification() {
 }
 function render() {
   if(!user)return;
-  const body=!data?`<section class="panel">${empty('Waiting for your database','Check the backend connection, then select Refresh.')}</section>`:page==='Dashboard'?dashboard():page==='Inventory'?inventory():page==='Rentals'?rentalsTable(true):page==='Customers'?customers():page==='Reports'?`${chart()}<div class="info-box">Rental fees are recorded charges, not a payment collection report. Deposits are excluded from the fee chart.</div><button class="primary" id="export">${icon('chart')} Export open rentals</button>`:page==='ESP32 terminal'?verification():page==='Profile'?profile():page==='Returns'?placeholderPage('Returns','Return records and verification activity will appear here.'):page==='Transaction History'?placeholderPage('Transaction History','Completed rental and return transactions will appear here.'):page==='Rates & Fees'?placeholderPage('Rates & Fees','Configure equipment rates, deposits, and fees here.'):page==='Maintenance'?placeholderPage('Maintenance','Equipment maintenance records will appear here.'):`<section class="panel help-panel"><h3>Your connected workspace</h3><p>Signed in as ${escape(user.name)} (${escape(user.role)}). Inventory, customers, rentals, fees, and verification records come from Cloud Firestore through the backend API.</p><h3>Rental and return workflow</h3><p>Scan the equipment QR in the mobile app, submit the request, then verify the physical equipment and press the ESP32 confirmation button.</p><h3>Updates</h3><p>The dashboard refreshes every 30 seconds while you are signed in. Use Refresh for the latest records.</p></section>`;
+  const workspacePages=['Customers','Rates & Fees','Rentals','Returns','Transaction History','Maintenance','Reports','Settings'];
+  const body=!data?`<section class="panel">${empty('Waiting for your database','Check the backend connection, then select Refresh.')}</section>`:page==='Dashboard'?dashboard():page==='Inventory'?inventory():page==='ESP32 terminal'?verification():page==='Profile'?profile():workspacePages.includes(page)?workspaceUI.render(page,user,appearanceSettings()):`<section class="panel">${empty('Page unavailable','Choose another workspace section.')}</section>`;
   const groupedNav=navGroups.map(group=>`<section class="nav-section"><div class="nav-section-title"><span class="nav-emoji" aria-hidden="true">${group.emoji}</span><span class="sidebar-label">${group.label}</span></div>${group.items.map(([label,target])=>`<button data-page="${target}" class="nav-child ${page===target?'active':''}"><span class="sidebar-label">${label}</span>${target==='Rentals'?`<span class="nav-count">${data?.stats.active ?? '–'}</span>`:''}</button>`).join('')}</section>`).join('');
   const displayPage=pageLabels[page] || page;
-  app.innerHTML=`<div class="workspace"><aside class="sidebar"><a class="brand" href="#">${brand}</a><div class="store"><span class="store-icon">${icon('box')}</span><div><strong>Rent & Play</strong><small>Los Baños, Laguna</small></div></div><nav><button data-page="Dashboard" class="nav-root ${page==='Dashboard'?'active':''}"><span class="nav-emoji" aria-hidden="true">🏠</span><span class="sidebar-label">Dashboard</span></button>${groupedNav}<button data-page="Reports" class="nav-root ${page==='Reports'?'active':''}"><span class="nav-emoji" aria-hidden="true">📊</span><span class="sidebar-label">Reports</span></button></nav><div class="sidebar-bottom"><button data-page="Settings"><span class="nav-emoji" aria-hidden="true">⚙️</span> Settings</button><button id="logout"><span class="nav-emoji" aria-hidden="true">🚪</span> Logout</button><div class="demo-status"><span></span><div><strong>${connectionError?'Connection interrupted':'Connected workspace'}</strong><small>${data?'Cloud Firestore records':'Waiting for database'}</small></div></div><div class="operator"><span class="avatar">${escape(initials(user.name))}</span><div><strong>${escape(user.name)}</strong><small>${escape(user.role)}</small></div></div></div></aside><div class="workspace-body"><header class="topbar"><button class="icon-button menu-toggle" id="mobile-menu" aria-label="Toggle navigation">${icon('menu')}</button><div class="breadcrumb">Workspace <span>/</span> <strong>${displayPage}</strong></div><div class="top-actions"><button class="text-button" id="refresh">Refresh</button><button class="icon-button notification" id="notifications" aria-label="View notifications">${icon('bell')}${data?.stats.overdue?'<i></i>':''}</button><span class="avatar small">${escape(initials(user.name))}</span></div></header><main class="content"><div class="page-heading"><div><h1>${page==='Dashboard'?`Let’s make it a good day, ${escape(user.name.split(' ')[0])}`:displayPage}<span class="orange">${page==='Dashboard'?'.':''}</span></h1><p>${page==='Dashboard'?'Here’s what’s happening at Rent & Play today.':'Your Rent & Play operator workspace.'}</p></div><div class="date-label">${icon('clock')} ${new Intl.DateTimeFormat('en-PH',{weekday:'short',month:'short',day:'numeric',year:'numeric',timeZone:'Asia/Manila'}).format(new Date())}</div></div>${connectionError?`<div class="connection-banner" role="alert">${escape(connectionError)}${data?' Showing the last successfully loaded records.':''}</div>`:''}${body}<footer class="content-footer"><span>© ${new Date().getFullYear()} Rent & Play</span><span>${data?`Updated ${new Intl.DateTimeFormat('en-PH',{hour:'numeric',minute:'2-digit',timeZone:'Asia/Manila'}).format(new Date(data.refreshedAt))}`:'Waiting for database'}</span></footer></main></div></div>`;
+  let notificationsSeen='';try{notificationsSeen=localStorage.getItem('rent-play-notifications-seen')||'';}catch{}
+  const showNotificationDot=!!notificationFingerprint()&&notificationFingerprint()!==notificationsSeen;
+  app.innerHTML=`<div class="workspace"><aside class="sidebar"><a class="brand" href="#">${brand}</a><div class="store"><span class="store-icon">${icon('box')}</span><div><strong>Rent & Play</strong><small>Los Baños, Laguna</small></div></div><nav><button data-page="Dashboard" class="nav-root ${page==='Dashboard'?'active':''}"><span class="nav-emoji" aria-hidden="true">🏠</span><span class="sidebar-label">Dashboard</span></button>${groupedNav}<button data-page="Reports" class="nav-root ${page==='Reports'?'active':''}"><span class="nav-emoji" aria-hidden="true">📊</span><span class="sidebar-label">Reports</span></button></nav><div class="sidebar-bottom"><button data-page="Settings"><span class="nav-emoji" aria-hidden="true">⚙️</span> Settings</button><button id="logout"><span class="nav-emoji" aria-hidden="true">🚪</span> Logout</button><div class="demo-status"><span></span><div><strong>${connectionError?'Connection interrupted':'Connected workspace'}</strong><small>${data?'Cloud Firestore records':'Waiting for database'}</small></div></div><div class="operator"><span class="avatar">${escape(initials(user.name))}</span><div><strong>${escape(user.name)}</strong><small>${escape(user.role)}</small></div></div></div></aside><div class="workspace-body"><header class="topbar"><button class="icon-button menu-toggle" id="mobile-menu" aria-label="Toggle navigation">${icon('menu')}</button><div class="breadcrumb">Workspace <span>/</span> <strong>${displayPage}</strong></div><div class="top-actions"><button class="text-button" id="refresh">Refresh</button><button class="icon-button notification" id="notifications" aria-label="View notifications">${icon('bell')}${showNotificationDot?'<i></i>':''}</button><div class="profile-menu"><button class="profile-menu-toggle" id="profile-menu-toggle" type="button" aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false"><span class="avatar small">${escape(initials(user.name))}</span><span class="profile-menu-chevron" aria-hidden="true">▾</span></button><div class="profile-dropdown" id="profile-dropdown" role="menu" hidden><div class="profile-dropdown-user"><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></div><button data-page="Profile" role="menuitem">${icon('users')} View profile</button><button data-page="Settings" role="menuitem">${icon('settings')} Settings</button><button data-action="logout" class="profile-dropdown-logout" role="menuitem">${icon('out')} Logout</button></div></div></div></header><main class="content"><div class="page-heading"><div><h1>${page==='Dashboard'?`Let’s make it a good day, ${escape(user.name.split(' ')[0])}`:displayPage}<span class="orange">${page==='Dashboard'?'.':''}</span></h1><p>${page==='Dashboard'?'Here’s what’s happening at Rent & Play today.':'Your Rent & Play operator workspace.'}</p></div><div class="date-label">${icon('clock')} ${new Intl.DateTimeFormat('en-PH',{weekday:'short',month:'short',day:'numeric',year:'numeric',timeZone:'Asia/Manila'}).format(new Date())}</div></div>${connectionError?`<div class="connection-banner" role="alert">${escape(connectionError)}${data?' Showing the last successfully loaded records.':''}</div>`:''}${body}<footer class="content-footer"><span>© ${new Date().getFullYear()} Rent & Play</span><span>${data?`Updated ${new Intl.DateTimeFormat('en-PH',{hour:'numeric',minute:'2-digit',timeZone:'Asia/Manila'}).format(new Date(data.refreshedAt))}`:'Waiting for database'}</span></footer></main></div></div>`;
   const operatorCard=document.querySelector('.operator');
   if(operatorCard){operatorCard.dataset.page='Profile';operatorCard.tabIndex=0;operatorCard.setAttribute('role','button');operatorCard.setAttribute('aria-label','Open profile');}
-  const profileIcon=document.querySelector('.top-actions .avatar.small');
-  if(profileIcon){profileIcon.dataset.page='Profile';profileIcon.tabIndex=0;profileIcon.setAttribute('role','button');profileIcon.setAttribute('aria-label','Open profile');profileIcon.title='Open profile';}
   const helpPanel=document.querySelector('.help-panel');
-  if(helpPanel)helpPanel.insertAdjacentHTML('afterbegin',appearanceSettings());
   bind();updateThemeControls();
 }
 function bind() {
   if(page==='Inventory' && data)inventoryController.mount(document.querySelector('#inventory-root'),category);
   const themeSwitch=document.querySelector('#dark-mode');
   if(themeSwitch)themeSwitch.onclick=()=>setTheme(theme==='dark'?'light':'dark');
-  document.querySelectorAll('[data-page]').forEach(el=>{el.onclick=()=>{page=el.dataset.page;profileEditing=false;category='';filter='All rentals';query='';render();window.scrollTo(0,0);};if(el.getAttribute('role')==='button')el.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();el.click();}};});
-  document.querySelectorAll('[data-category]').forEach(el=>el.onclick=()=>{category=data.categories[Number(el.dataset.category)].name;page='Inventory';render();});
-  document.querySelector('#refresh').onclick=refresh;
-  document.querySelector('#logout').onclick=async()=>{
-    try {await api('/auth/logout',{method:'POST'});user=null;data=null;connectionError='';modal.close();login();}
+  document.querySelectorAll('[data-page]').forEach(el=>{el.onclick=()=>goTo(el.dataset.page);if(el.getAttribute('role')==='button')el.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();el.click();}};});
+  document.querySelectorAll('[data-category]').forEach(el=>el.onclick=()=>{category=data.categories[Number(el.dataset.category)].name;goTo('Inventory');});
+  document.querySelector('#refresh').onclick=async()=>{await refresh();if(['Customers','Rates & Fees','Rentals','Returns','Transaction History','Maintenance','Reports','Settings'].includes(page)){await workspaceUI.refresh();render();}};
+  const accountMenu=document.querySelector('.profile-menu'),accountToggle=document.querySelector('#profile-menu-toggle'),accountDropdown=document.querySelector('#profile-dropdown');
+  const closeAccountMenu=()=>{accountDropdown.hidden=true;accountToggle.setAttribute('aria-expanded','false');};
+  accountToggle.onclick=event=>{event.stopPropagation();const opening=accountDropdown.hidden;accountDropdown.hidden=!opening;accountToggle.setAttribute('aria-expanded',String(opening));if(opening)accountDropdown.querySelector('[role="menuitem"]')?.focus();};
+  accountMenu.onclick=event=>event.stopPropagation();
+  document.onclick=closeAccountMenu;
+  accountMenu.onkeydown=event=>{if(event.key==='Escape'){closeAccountMenu();accountToggle.focus();}};
+  const logout=async()=>{
+    try {await api('/auth/logout',{method:'POST'});user=null;data=null;connectionError='';history.replaceState({},'',pageRoutes.Dashboard);modal.close();login();}
     catch(error){toast(error.message);}
   };
+  document.querySelector('#logout').onclick=logout;
+  document.querySelector('[data-action="logout"]').onclick=logout;
   configureSidebar();
-  document.querySelector('#notifications').onclick=()=>showModal('Rentals needing attention',!data?'<p>Database records are not loaded yet.</p>':`${data.rentals.filter(r=>r.displayStatus==='Overdue').map(r=>`<div class="alert-item">${badge('Overdue')}<h3>${escape(r.item_name)} · ${escape(r.customer)}</h3><p>Due ${escape(formatDate(r.due_at))}</p></div>`).join('')||'<p>No overdue rentals.</p>'}<p>${data.pending.length} request(s) awaiting physical verification.</p>`);
+  document.querySelector('#notifications').onclick=openNotifications;
   document.querySelectorAll('[data-filter]').forEach(el=>el.onclick=()=>{filter=el.dataset.filter;render();});
   const search=document.querySelector('#rental-search');
   if(search)search.oninput=e=>{const pos=e.target.selectionStart;query=e.target.value;render();const next=document.querySelector('#rental-search');next.focus();next.setSelectionRange(pos,pos);};
@@ -222,6 +249,7 @@ function bind() {
     try {const values=Object.fromEntries(new FormData(profileForm));const result=await api('/profile',{method:'PATCH',body:JSON.stringify(values)});user=result.user;profileEditing=false;render();toast('Profile updated.');}
     catch(problem){error.textContent=problem.message;button.disabled=false;}
   };
+  workspaceUI.bind(page,user,render);
 }
 function exportCsv() {
   const cell=value=>{const v=String(value ?? '');return '"'+(/^[=+@\-\t\r]/.test(v)?"'"+v:v).replaceAll('"','""')+'"';};
@@ -232,13 +260,18 @@ function exportCsv() {
 async function boot() {
   // Previous demo flags have no authority over the backend session.
   localStorage.removeItem('rent-play-demo');sessionStorage.removeItem('rent-play-demo');
-  login();
+  sessionLoading();
   try {const result=await api('/auth/me');user=result.user;await refresh();}
   catch(error) {
     if(error.status!==401)login(error.message);
-    else try {await api('/health');}catch(healthError){const el=document.querySelector('#login-error');if(el)el.textContent=healthError.message;}
+    else {
+      login();
+      try {await api('/health');}catch(healthError){const el=document.querySelector('#login-error');if(el)el.textContent=healthError.message;}
+    }
   }
 }
 const inventoryController=createInventory({api,escape,icon,symbol,badge,stateLabel,formatDate,showModal,modal,toast,refresh});
-setInterval(()=>{if(user && !modal.open && document.visibilityState==='visible' && !document.querySelector('#rental-search:focus,#inv-search:focus,.sidebar.open'))refresh();},30000);
+const workspaceUI=createWorkspaceUI({api,escape,icon,showModal,modal,toast,money,formatDate});
+window.addEventListener('popstate',()=>{page=routePages[location.pathname]||'Dashboard';if(user)render();});
+setInterval(async()=>{if(user&&!modal.open&&document.visibilityState==='visible'&&!document.querySelector('#rental-search:focus,#inv-search:focus,#module-search:focus,.admin-form input:focus,.admin-form textarea:focus,.admin-form select:focus,.sidebar.open')){await refresh();if(['Customers','Rates & Fees','Rentals','Returns','Transaction History','Maintenance','Reports','Settings'].includes(page)){await workspaceUI.refresh();render();}}},30000);
 boot();

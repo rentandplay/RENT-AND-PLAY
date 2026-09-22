@@ -13,13 +13,19 @@ Sign in with an active Firebase Authentication account that has a matching activ
 ## Included
 
 - Working Firestore inventory: add/edit equipment, per-item QR labels, current pricing with rate history, maintenance and inspection records, reversible archive/restore, and status history.
+- Customer directory with search, add/edit, and reversible archive/restore controls.
+- Dedicated rental, return, and complete transaction-history views backed by Firestore records.
+- Pricing workspace for publishing new active rates while preserving historical rates, plus a consolidated maintenance workspace.
+- Business reports with operational summaries, utilization rankings, and CSV export.
+- Owner-only business settings and Firebase/Firestore user administration; operators receive read-only business details.
 - Inventory search, category/status filters (including archives), sorting, table/card views, 12-item pagination, and CSV export of the filtered collection. Active/pending rentals lock availability, condition changes, and archiving.
-- Database-backed login, password visibility, optional remembered session, and server-side sign-out.
+- Database-backed login, Firebase password-reset email, password visibility, optional remembered session, and server-side sign-out.
 - Live availability, active/pending rentals, due/overdue alerts, confirmed-fee chart, equipment categories, customer records, and terminal status.
 - Search and status filters, rental detail dialogs, weekly fee selection, and CSV export of open rentals.
 - Automatic refresh every 30 seconds and manual refresh. Database failures are shown explicitly; previously loaded records are labeled as stale.
 - Responsive mobile sidebar, labeled inputs, keyboard focus states, native accessible dialogs, and reduced-motion support.
 - Light/dark appearance switch in Settings & Help and sun/moon toggle on login. Theme preference is saved in this browser and applied before first paint; toggling preserves form input.
+- Browser-history routing for direct URLs such as `/equipment`, `/customers`, and `/reports`, plus an actionable notification center.
 
 ## Responsibilities
 

@@ -5,6 +5,7 @@ import path from 'node:path';
 
 const root = path.resolve(fileURLToPath(new URL('.', import.meta.url)));
 const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml' };
+const port=Number(process.env.PORT||5173);
 http.createServer(async (req, res) => {
   if(req.url.startsWith('/api/')) {
     const headers = {...req.headers};
@@ -21,10 +22,11 @@ http.createServer(async (req, res) => {
   }
   try {
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-    const target = path.resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
+    const appRoutes=new Set(['/','/equipment','/customers','/rates','/rentals','/returns','/transactions','/maintenance','/verification','/reports','/settings','/profile']);
+    const target = path.resolve(root, '.' + (appRoutes.has(pathname) ? '/index.html' : pathname));
     if (!target.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
-    if (!(pathname === '/' || pathname === '/index.html' || pathname === '/src/app.js' || pathname === '/src/inventory.js' || pathname === '/src/styles.css' || pathname.startsWith('/public/')) || pathname.split('/').some(part=>part.startsWith('.'))) {res.writeHead(404).end();return;}
+    if (!(appRoutes.has(pathname) || pathname === '/index.html' || pathname === '/src/app.js' || pathname === '/src/inventory.js' || pathname === '/src/workspace-ui.js' || pathname === '/src/styles.css' || pathname.startsWith('/public/')) || pathname.split('/').some(part=>part.startsWith('.'))) {res.writeHead(404).end();return;}
     const body = await readFile(target);
     res.writeHead(200, { 'Content-Type': types[path.extname(target)] || 'application/octet-stream', 'Cache-Control': 'no-store' }).end(body);
   } catch { res.writeHead(404).end('Not found'); }
-}).listen(5173, '127.0.0.1', () => console.log('Rent & Play: http://localhost:5173'));
+}).listen(port, '127.0.0.1', () => console.log(`Rent & Play: http://localhost:${port}`));

@@ -5,7 +5,6 @@ rent-and-play/
 │   └── backend/
 ├── firmware/
 │   └── esp32-terminal/
-├── database/
 ├── packages/
 │   └── api-contracts/
 ├── infrastructure/

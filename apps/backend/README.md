@@ -43,6 +43,8 @@ Open http://127.0.0.1:5173 and sign in with the owner account.
 
 `POST /api/auth/login` validates the password with Firebase Authentication, exchanges the returned ID token for an HttpOnly Firebase session cookie, then checks the active `users/{uid}` profile and its `OWNER` or `OPERATOR` role. Protected routes revalidate both the Firebase session and Firestore profile. Standard sessions last eight hours; Remember me uses Firebase's maximum supported 14 days. Login is rate limited, write requests check their browser origin, and logout clears and locally revokes the presented cookie.
 
+The web administration API also exposes authenticated workspace data, customer management, rate publishing, and owner-only business settings/user management. `POST /api/auth/password-reset` requests a Firebase password-reset email without revealing whether an account exists.
+
 The existing dashboard and inventory API routes are unchanged. Inventory writes use Firestore transactions. The `item_codes/{ITEM_CODE}` registry enforces unique item codes, and stale edits are rejected using `updated_at`. QR tokens and historical rates remain stable.
 
 Run unit tests with:

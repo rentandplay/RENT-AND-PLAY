@@ -5,6 +5,7 @@ import {firebaseAuth,firestore,requireFirebaseConfig} from './firebase.mjs';
 import {loadDashboard} from './dashboard.mjs';
 import {inventoryList,inventoryDetail,inventoryQr,createItem,updateItem,itemAction} from './inventory.mjs';
 import {updateProfile} from './profile.mjs';
+import {loadWorkspace,createCustomer,updateCustomer,saveRate,saveSettings,createWorkspaceUser,updateWorkspaceUser} from './workspace.mjs';
 
 const defaultServices={
   async health(){requireFirebaseConfig();await firestore.collection('users').limit(1).get();},
@@ -13,7 +14,8 @@ const defaultServices={
   updateProfile:(id,input)=>updateProfile(firebaseAuth,firestore,id,input),
   dashboard:()=>loadDashboard(firestore),
   inventoryList:()=>inventoryList(firestore),inventoryDetail:id=>inventoryDetail(firestore,id),inventoryQr:id=>inventoryQr(firestore,id),
-  createItem:(actor,input)=>createItem(firestore,actor,input),updateItem:(actor,id,input)=>updateItem(firestore,actor,id,input),itemAction:(actor,id,input)=>itemAction(firestore,actor,id,input)
+  createItem:(actor,input)=>createItem(firestore,actor,input),updateItem:(actor,id,input)=>updateItem(firestore,actor,id,input),itemAction:(actor,id,input)=>itemAction(firestore,actor,id,input),
+  workspace:role=>loadWorkspace(firestore,role),createCustomer:(actor,input)=>createCustomer(firestore,actor,input),updateCustomer:(id,input)=>updateCustomer(firestore,id,input),saveRate:(actor,input)=>saveRate(firestore,actor,input),saveSettings:input=>saveSettings(firestore,input),createUser:input=>createWorkspaceUser(firebaseAuth,firestore,input),updateUser:(actor,id,input)=>updateWorkspaceUser(firebaseAuth,firestore,actor,id,input)
 };
 
 export function createApi({services=defaultServices,sessions=new FirebaseSessions()}={}) {
@@ -33,6 +35,11 @@ export function createApi({services=defaultServices,sessions=new FirebaseSession
       if(['POST','PATCH','PUT','DELETE'].includes(req.method)&&((req.headers.origin&&!origins.has(req.headers.origin))||req.headers['sec-fetch-site']==='cross-site'))return send(res,403,{error:'Request origin is not allowed.'});
       if(path==='/api/auth/logout'&&req.method==='POST'){if(await sessions.verify(token))sessions.revoke?.(token);return send(res,200,{ok:true},{'Set-Cookie':cookie('',0,true)});}
       if(path==='/api/health'&&req.method==='GET'){await services.health();return send(res,200,{database:true,provider:'firebase'});}
+      if(path==='/api/auth/password-reset'&&req.method==='POST'){
+        const input=await body(req),email=typeof input?.email==='string'?input.email.trim().toLowerCase():'';
+        if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return send(res,400,{error:'Enter a valid email address.'});
+        await sessions.sendPasswordReset(email).catch(()=>{});return send(res,200,{ok:true});
+      }
       if(path==='/api/auth/login'&&req.method==='POST'){
         const ip=req.socket.remoteAddress,now=Date.now();for(const [key,value] of attempts)if(now-value.since>900000)attempts.delete(key);
         const entry=attempts.get(ip)||{since:now,count:0};if(entry.count>=10)return send(res,429,{error:'Too many attempts. Try again in 15 minutes.'});attempts.set(ip,{...entry,count:entry.count+1});
@@ -45,11 +52,18 @@ export function createApi({services=defaultServices,sessions=new FirebaseSession
         return send(res,200,{user:publicUser(user)},{'Set-Cookie':cookie(session.cookie,session.seconds,input.remember===true)});
       }
       const inventoryRoute=path.match(/^\/api\/inventory(?:\/([A-Za-z0-9_-]{1,128})(?:\/(qr|actions))?)?$/);
-      if((['/api/auth/me','/api/dashboard'].includes(path)&&req.method==='GET')||(path==='/api/profile'&&req.method==='PATCH')||inventoryRoute){
+      const customerRoute=path.match(/^\/api\/customers(?:\/([A-Za-z0-9_-]{1,128}))?$/),userRoute=path.match(/^\/api\/users(?:\/([A-Za-z0-9_-]{1,128}))?$/);
+      const workspaceRoute=path==='/api/workspace'||path==='/api/rates'||path==='/api/settings'||customerRoute||userRoute;
+      if((['/api/auth/me','/api/dashboard'].includes(path)&&req.method==='GET')||(path==='/api/profile'&&req.method==='PATCH')||inventoryRoute||workspaceRoute){
         const claims=await sessions.verify(token);if(!claims)return send(res,401,{error:'Please sign in.'});
         const user=await services.getUser(claims.uid);if(!user?.is_active||!['OWNER','OPERATOR'].includes(user.role))return send(res,401,{error:'Please sign in.'});
         if(path==='/api/auth/me')return send(res,200,{user:publicUser(user)});
         if(path==='/api/profile')return send(res,200,{user:publicUser(await services.updateProfile(user.id,await body(req)))});
+        if(path==='/api/workspace'&&req.method==='GET')return send(res,200,await services.workspace(user.role));
+        if(customerRoute){const [,id]=customerRoute;if(req.method==='POST'&&!id)return send(res,201,{customer:await services.createCustomer(user.id,await body(req))});if(req.method==='PATCH'&&id)return send(res,200,{customer:await services.updateCustomer(id,await body(req))});return send(res,405,{error:'Method not allowed.'});}
+        if(path==='/api/rates'&&req.method==='POST')return send(res,201,{rate:await services.saveRate(user.id,await body(req))});
+        if(path==='/api/settings'&&req.method==='PATCH'){if(user.role!=='OWNER')return send(res,403,{error:'Owner access is required.'});return send(res,200,{settings:await services.saveSettings(await body(req))});}
+        if(userRoute){if(user.role!=='OWNER')return send(res,403,{error:'Owner access is required.'});const [,id]=userRoute;if(req.method==='POST'&&!id)return send(res,201,{user:await services.createUser(await body(req))});if(req.method==='PATCH'&&id)return send(res,200,{user:await services.updateUser(user.id,id,await body(req))});return send(res,405,{error:'Method not allowed.'});}
         if(inventoryRoute){
           const [,id,action]=inventoryRoute;
           if(req.method==='GET'&&!id)return send(res,200,await services.inventoryList());

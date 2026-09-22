@@ -20,4 +20,8 @@ export class FirebaseSessions {
     try{return await this.auth.verifySessionCookie(cookie,true);}catch{return null;}
   }
   revoke(cookie){if(cookie)this.revoked.add(cookie);}
+  async sendPasswordReset(email) {
+    requireFirebaseConfig();
+    await this.fetcher(`https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestType:'PASSWORD_RESET',email})});
+  }
 }

@@ -3,9 +3,10 @@ import {pathToFileURL} from 'node:url';
 import {FirebaseSessions,publicUser} from './auth.mjs';
 import {firebaseAuth,firestore,requireFirebaseConfig} from './firebase.mjs';
 import {loadDashboard} from './dashboard.mjs';
-import {inventoryList,inventoryDetail,inventoryQr,createItem,updateItem,itemAction} from './inventory.mjs';
+import {inventoryList,inventoryDetail,inventoryQr,inventoryQrLabels,createItem,updateItem,itemAction} from './inventory.mjs';
 import {updateProfile} from './profile.mjs';
-import {loadWorkspace,createCustomer,updateCustomer,saveRate,saveSettings,createWorkspaceUser,updateWorkspaceUser} from './workspace.mjs';
+import {loadWorkspace,createCustomer,updateCustomer,saveRate,savePricing,saveSettings,createWorkspaceUser,updateWorkspaceUser} from './workspace.mjs';
+import {loadPricing,quoteRental} from './pricing.mjs';
 
 const defaultServices={
   async health(){requireFirebaseConfig();await firestore.collection('users').limit(1).get();},
@@ -13,9 +14,27 @@ const defaultServices={
   async touchLogin(id){await firestore.collection('users').doc(String(id)).update({last_login_at:new Date()});},
   updateProfile:(id,input)=>updateProfile(firebaseAuth,firestore,id,input),
   dashboard:()=>loadDashboard(firestore),
-  inventoryList:()=>inventoryList(firestore),inventoryDetail:id=>inventoryDetail(firestore,id),inventoryQr:id=>inventoryQr(firestore,id),
+  inventoryList:()=>inventoryList(firestore),inventoryDetail:id=>inventoryDetail(firestore,id),inventoryQr:id=>inventoryQr(firestore,id),inventoryQrLabels:()=>inventoryQrLabels(firestore),
   createItem:(actor,input)=>createItem(firestore,actor,input),updateItem:(actor,id,input)=>updateItem(firestore,actor,id,input),itemAction:(actor,id,input)=>itemAction(firestore,actor,id,input),
-  workspace:role=>loadWorkspace(firestore,role),createCustomer:(actor,input)=>createCustomer(firestore,actor,input),updateCustomer:(id,input)=>updateCustomer(firestore,id,input),saveRate:(actor,input)=>saveRate(firestore,actor,input),saveSettings:input=>saveSettings(firestore,input),createUser:input=>createWorkspaceUser(firebaseAuth,firestore,input),updateUser:(actor,id,input)=>updateWorkspaceUser(firebaseAuth,firestore,actor,id,input)
+  workspace:role=>loadWorkspace(firestore,role),pricing:()=>loadPricing(firestore,{allowInvalidFallback:true}),savePricing:(actor,input)=>savePricing(firestore,actor,input),
+  pricingQuote:async input=>{
+    if(!input||typeof input!=='object'||Array.isArray(input))throw Object.assign(new Error('Rental quote details are required.'),{status:400});
+    const pricing=await loadPricing(firestore);let productId=input.productId;
+    if(input.itemId){
+      const itemId=String(input.itemId);
+      if(!/^[A-Za-z0-9_-]{1,128}$/.test(itemId))throw Object.assign(new Error('Invalid equipment ID.'),{status:400});
+      const item=await firestore.collection('items').doc(itemId).get();
+      if(!item.exists)throw Object.assign(new Error('Equipment not found.'),{status:404});
+      const record=item.data();
+      if(record.is_active===false||record.status!=='AVAILABLE')throw Object.assign(new Error('This equipment is not available for rental.'),{status:409});
+      const openRentals=await firestore.collection('rentals').where('item_id','==',itemId).get();
+      if(openRentals.docs.some(doc=>['ACTIVE','PENDING_VERIFICATION'].includes(doc.data().status)))throw Object.assign(new Error('This equipment already has an open rental.'),{status:409});
+      productId=record.pricing_product_id;
+      if(!productId)throw Object.assign(new Error('Link this equipment to a client rate sheet product before quoting.'),{status:400});
+    }
+    return quoteRental(pricing,{...input,productId});
+  },
+  createCustomer:(actor,input)=>createCustomer(firestore,actor,input),updateCustomer:(id,input)=>updateCustomer(firestore,id,input),saveRate:(actor,input)=>saveRate(firestore,actor,input),saveSettings:input=>saveSettings(firestore,input),createUser:input=>createWorkspaceUser(firebaseAuth,firestore,input),updateUser:(actor,id,input)=>updateWorkspaceUser(firebaseAuth,firestore,actor,id,input)
 };
 
 export function createApi({services=defaultServices,sessions=new FirebaseSessions()}={}) {
@@ -52,14 +71,19 @@ export function createApi({services=defaultServices,sessions=new FirebaseSession
         return send(res,200,{user:publicUser(user)},{'Set-Cookie':cookie(session.cookie,session.seconds,input.remember===true)});
       }
       const inventoryRoute=path.match(/^\/api\/inventory(?:\/([A-Za-z0-9_-]{1,128})(?:\/(qr|actions))?)?$/);
+      const inventoryQrLabelsRoute=path==='/api/inventory/qr-labels';
       const customerRoute=path.match(/^\/api\/customers(?:\/([A-Za-z0-9_-]{1,128}))?$/),userRoute=path.match(/^\/api\/users(?:\/([A-Za-z0-9_-]{1,128}))?$/);
-      const workspaceRoute=path==='/api/workspace'||path==='/api/rates'||path==='/api/settings'||customerRoute||userRoute;
-      if((['/api/auth/me','/api/dashboard'].includes(path)&&req.method==='GET')||(path==='/api/profile'&&req.method==='PATCH')||inventoryRoute||workspaceRoute){
+      const workspaceRoute=path==='/api/workspace'||path==='/api/rates'||path==='/api/pricing'||path==='/api/pricing/quote'||path==='/api/settings'||customerRoute||userRoute;
+      if((['/api/auth/me','/api/dashboard'].includes(path)&&req.method==='GET')||(path==='/api/profile'&&req.method==='PATCH')||inventoryRoute||inventoryQrLabelsRoute||workspaceRoute){
         const claims=await sessions.verify(token);if(!claims)return send(res,401,{error:'Please sign in.'});
         const user=await services.getUser(claims.uid);if(!user?.is_active||!['OWNER','OPERATOR'].includes(user.role))return send(res,401,{error:'Please sign in.'});
         if(path==='/api/auth/me')return send(res,200,{user:publicUser(user)});
         if(path==='/api/profile')return send(res,200,{user:publicUser(await services.updateProfile(user.id,await body(req)))});
         if(path==='/api/workspace'&&req.method==='GET')return send(res,200,await services.workspace(user.role));
+        if(inventoryQrLabelsRoute&&req.method==='GET')return send(res,200,await services.inventoryQrLabels());
+        if(path==='/api/pricing'&&req.method==='GET')return send(res,200,await services.pricing());
+        if(path==='/api/pricing'&&req.method==='PUT')return send(res,200,{pricing:await services.savePricing(user.id,await body(req))});
+        if(path==='/api/pricing/quote'&&req.method==='POST')return send(res,200,{quote:await services.pricingQuote(await body(req))});
         if(customerRoute){const [,id]=customerRoute;if(req.method==='POST'&&!id)return send(res,201,{customer:await services.createCustomer(user.id,await body(req))});if(req.method==='PATCH'&&id)return send(res,200,{customer:await services.updateCustomer(id,await body(req))});return send(res,405,{error:'Method not allowed.'});}
         if(path==='/api/rates'&&req.method==='POST')return send(res,201,{rate:await services.saveRate(user.id,await body(req))});
         if(path==='/api/settings'&&req.method==='PATCH'){if(user.role!=='OWNER')return send(res,403,{error:'Owner access is required.'});return send(res,200,{settings:await services.saveSettings(await body(req))});}

@@ -8,17 +8,22 @@ Configure and start the backend first; see `../backend/README.md` for database s
 
 Sign in with an active Firebase Authentication account that has a matching active `users/{uid}` Firestore profile with an `OWNER` or `OPERATOR` role. There are no default passwords or demo access.
 
-`npm run check` checks JavaScript syntax.
+`npm run check` checks JavaScript syntax. `npm test` checks analytics calculations.
 
 ## Included
 
-- Working Firestore inventory: add/edit equipment, per-item QR labels, current pricing with rate history, maintenance and inspection records, reversible archive/restore, and status history.
+- Working Firestore inventory: add/edit equipment, per-item QR labels created automatically with each new item, current pricing with rate history, maintenance and inspection records, reversible archive/restore, and status history.
+- MX10 QR-label printing directly from the web page over Bluetooth LE, with a 50 × 30 mm preview, 10 mm physical sticker gap, sensor-based label positioning/calibration, paper-out reporting when the MX10 sends status notifications, and downloadable individual SVG/all-label sheet. Web Bluetooth needs a supported browser and secure HTTPS; the existing MX10 flow supports Android Chrome.
 - Customer directory with search, add/edit, and reversible archive/restore controls.
 - Dedicated rental, return, and complete transaction-history views backed by Firestore records.
-- Pricing workspace for publishing new active rates while preserving historical rates, plus a consolidated maintenance workspace.
-- Business reports with operational summaries, utilization rankings, and CSV export.
+- Pricing workspace with compact pricing settings and a quote preview. Admins can manage hourly and package prices, card sale prices, deposits, overtime, service hours, and rental rules. Physical equipment can be linked to a pricing product by its QR inventory record; legacy per-item rates keep their history.
+- Reports with all 14 business analytics: revenue and rental-count trends; equipment utilization; most/least rented (including zero-rental items); revenue per item and category; overdue and on-time rates; average rental duration; repeat customer rate; maintenance frequency and downtime; terminal verification time with average, median and P95.
+- Analytics filters for 7/30/90/365 days or custom dates (up to 366 days), daily/calendar-week/calendar-month grouping, category, and equipment. Full equipment performance, trend values, category totals and terminal results use 5-row pagination where needed. CSV exports all matching rows, not just the current page.
+- In-page definitions and data-coverage notes explain formulas, exclusions, missing timestamps and partial periods. See `../../docs/analytics-demo-guide.md` for the panel demonstration guide.
 - Owner-only business settings and Firebase/Firestore user administration; operators receive read-only business details.
-- Inventory search, category/status filters (including archives), sorting, table/card views, 12-item pagination, and CSV export of the filtered collection. Active/pending rentals lock availability, condition changes, and archiving.
+- Horizontal Settings tabs for Business, Appearance, Preferences, Users (owners only), and Account & security. Tabs support arrow keys and Home/End; business and preference drafts survive tab changes. Business edits have save/discard controls, and account settings link to the profile and Firebase password-reset email.
+- Browser-local preferences control automatic refresh and the default analytics period/grouping. Restore defaults requires Save to apply. Automatic refresh pauses while in Settings so edits are not interrupted; manual Refresh remains available. Currency/timezone are read-only because reporting currently uses PHP and Philippine time; the grace setting does not recalculate penalties or analytics.
+- Inventory search, category/status filters (including archives), sorting, table/card views, 5-item pagination, and CSV export of the filtered collection. Active/pending rentals lock availability, condition changes, and archiving.
 - Database-backed login, Firebase password-reset email, password visibility, optional remembered session, and server-side sign-out.
 - Live availability, active/pending rentals, due/overdue alerts, confirmed-fee chart, equipment categories, customer records, and terminal status.
 - Search and status filters, rental detail dialogs, weekly fee selection, and CSV export of open rentals.
@@ -30,6 +35,10 @@ Sign in with an active Firebase Authentication account that has a matching activ
 ## Responsibilities
 
 The web dashboard reads real database records through `/api/dashboard`, proxied to the backend on port 3000. Database credentials never go to the browser. Empty tables show empty lists and zero totals.
+
+Reports use ACTIVE/COMPLETED rentals and their recorded fees, not verified payment receipts. Refundable deposits, pending requests, and cancelled rentals are excluded. Date filters use Philippine time; calendar weeks start on Monday. Current equipment status and the "overdue now" count are live snapshots. The overdue rate uses rentals due in the period; the on-time rate uses completed returns in the period, so the two rates are not complements.
+
+Utilization merges overlapping rental intervals and divides by observed calendar hours since item creation, excluding recorded archived intervals. Nights and maintenance remain in the denominator. Missing creation dates use the period start and are disclosed; insufficient archive history excludes that item from utilization. Downtime merges maintenance intervals per item, including work carried over into the period. Terminal timing requires valid request/confirmation dates and a terminal ID, with explicit rental/return confirmation fallback. Missing samples show a dash instead of a fabricated average.
 
 Rental initiation and return processing belong to the mobile app and ESP32 workflow. The web dashboard monitors their stored records; it does not generate requests or simulate confirmation. Those mobile/device write endpoints are separate work.
 

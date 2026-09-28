@@ -1,9 +1,10 @@
 import {asDate,dateFields,docData} from './firebase.mjs';
+import {loadPricing,savePricing as persistPricing} from './pricing.mjs';
 
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const rows=snapshot=>snapshot.docs.map(docData);
 const clean=(value,max=255)=>typeof value==='string'?value.trim().slice(0,max):'';
-const serial=(record)=>dateFields(record,['created_at','updated_at','last_login_at','started_at','completed_at','effective_from','effective_to','requested_at','confirmed_rental_at','confirmed_return_at','due_at','cancelled_at']);
+const serial=(record)=>dateFields(record,['created_at','updated_at','last_login_at','started_at','completed_at','effective_from','effective_to','requested_at','confirmed_at','changed_at','confirmed_rental_at','confirmed_return_at','due_at','cancelled_at']);
 
 export function validateCustomer(input={}) {
   const full_name=clean(input.fullName,150),customer_code=clean(input.code,50).toUpperCase(),email=clean(input.email,191).toLowerCase(),phone=clean(input.phone,40),address=clean(input.address,500);
@@ -13,8 +14,8 @@ export function validateCustomer(input={}) {
   return {full_name,customer_code,email:email||null,phone:phone||null,address:address||null};
 }
 
-export async function loadWorkspace(db,role='OPERATOR') {
-  const names=['customers','rentals','items','item_rates','maintenance_records','terminals','verification_requests'];
+export async function loadWorkspace(db,role='OPERATOR',now=new Date()) {
+  const names=['customers','rentals','items','item_categories','item_rates','maintenance_records','terminals','verification_requests','item_status_history'];
   const snapshots=await Promise.all(names.map(name=>db.collection(name).get()));
   const source=Object.fromEntries(names.map((name,index)=>[name,rows(snapshots[index])]));
   const itemMap=new Map(source.items.map(item=>[item.id,item]));
@@ -22,11 +23,12 @@ export async function loadWorkspace(db,role='OPERATOR') {
   const transactions=source.rentals.map(rental=>({...rental,item_name:itemMap.get(String(rental.item_id))?.name||'Unknown equipment',item_code:itemMap.get(String(rental.item_id))?.item_code||'',customer_name:customerMap.get(String(rental.customer_id))?.full_name||'Unknown customer'})).sort((a,b)=>(asDate(b.created_at)||0)-(asDate(a.created_at)||0));
   const maintenance=source.maintenance_records.map(record=>({...record,item_name:itemMap.get(String(record.item_id))?.name||'Unknown equipment',item_code:itemMap.get(String(record.item_id))?.item_code||''})).sort((a,b)=>(asDate(b.started_at)||0)-(asDate(a.started_at)||0));
   const rates=source.item_rates.map(rate=>({...rate,item_name:itemMap.get(String(rate.item_id))?.name||'Unknown equipment',item_code:itemMap.get(String(rate.item_id))?.item_code||''})).sort((a,b)=>(asDate(b.effective_from)||0)-(asDate(a.effective_from)||0));
-  const settingsDoc=await db.collection('settings').doc('business').get();
+  const [settingsDoc,pricing]=await Promise.all([db.collection('settings').doc('business').get(),loadPricing(db,{allowInvalidFallback:true})]);
   const settings=settingsDoc.exists?settingsDoc.data():{business_name:'Rent & Play',location:'Los Baños, Laguna',currency:'PHP',timezone:'Asia/Manila',default_late_grace_hours:0};
   let users=[];
   if(role==='OWNER')users=rows(await db.collection('users').get()).sort((a,b)=>(a.full_name||'').localeCompare(b.full_name||'')).map(serial);
-  return {customers:source.customers.sort((a,b)=>(a.full_name||'').localeCompare(b.full_name||'')).map(serial),transactions:transactions.map(serial),maintenance:maintenance.map(serial),rates:rates.map(serial),items:source.items.map(serial),terminals:source.terminals.map(serial),verification:source.verification_requests.map(serial),settings,users};
+  const statusHistory=source.item_status_history.map(({id,item_id,old_status,new_status,changed_at})=>serial({id,item_id,old_status,new_status,changed_at}));
+  return {customers:source.customers.sort((a,b)=>(a.full_name||'').localeCompare(b.full_name||'')).map(serial),transactions:transactions.map(serial),maintenance:maintenance.map(serial),rates:rates.map(serial),items:source.items.map(serial),categories:source.item_categories.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(serial),terminals:source.terminals.map(serial),verification:source.verification_requests.map(serial),statusHistory,settings,pricing,users,refreshedAt:now.toISOString()};
 }
 
 export async function createCustomer(db,actor,input,now=new Date()) {
@@ -57,6 +59,10 @@ export async function saveRate(db,actor,input,now=new Date()) {
   for(const doc of active.docs)if(doc.data().is_active!==false)batch.update(doc.ref,{is_active:false,effective_to:now});
   const ref=db.collection('item_rates').doc();batch.create(ref,{item_id:itemId,rate_type:rateType,rental_rate:rentalRate,deposit_amount:deposit,late_penalty_rate:late,is_active:true,effective_from:now,effective_to:null,created_by:String(actor)});await batch.commit();
   return {id:ref.id,item_id:itemId,rate_type:rateType,rental_rate:rentalRate,deposit_amount:deposit,late_penalty_rate:late,is_active:true};
+}
+
+export async function savePricing(db,actor,input,now=new Date()) {
+  return persistPricing(db,actor,input,now);
 }
 
 export async function saveSettings(db,input,now=new Date()) {

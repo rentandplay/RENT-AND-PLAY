@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Rent & Play: Backend",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--env-file-if-exists=.env"],
+      "program": "${workspaceFolder}/apps/backend/src/server.mjs",
+      "cwd": "${workspaceFolder}/apps/backend",
+      "console": "internalConsole",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Rent & Play: Web",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "node",
+      "program": "${workspaceFolder}/apps/web/server.mjs",
+      "cwd": "${workspaceFolder}/apps/web",
+      "console": "internalConsole",
+      "skipFiles": ["<node_internals>/**"],
+      "serverReadyAction": {
+        "pattern": "Rent & Play: (https?://\\S+)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Rent & Play: Start App",
+      "configurations": [
+        "Rent & Play: Backend",
+        "Rent & Play: Web"
+      ],
+      "stopAll": true
+    }
+  ]
+}

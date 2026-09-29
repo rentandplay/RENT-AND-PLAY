@@ -10,10 +10,10 @@ const PRINTER = Object.freeze({
 
 const MX10_IMAGE_PRINT_PROFILE = Object.freeze({
   quality: 0x34,
-  energyPercent: 70,
-  energy: Math.round(0xffff * 70 / 100),
-  speed: 0x05,
-  packetDelayMs: 25,
+  energyPercent: Math.round(48000 / 0xffff * 100),
+  energy: 48000,
+  speed: 32,
+  packetDelayMs: 7,
 });
 
 const SENSOR_THRESHOLD_KEY = 'rent-play-mx10-label-sensor-threshold';
@@ -21,6 +21,7 @@ const SAVED_DEVICE_ID_KEY = 'rent-play-mx10-bluetooth-device-id';
 const SENSOR_SEARCH_LIMIT = 50;
 const SENSOR_SAMPLE_WINDOW = 4;
 const LABEL_POSITION_FALLBACK_MS = 6100; // Fun Print's MX10/V5G timing for a 30 mm label.
+const LABEL_POSITION_SETTLE_MS = 900;
 const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 15000;
 
@@ -204,7 +205,6 @@ export function createMx10Printer() {
   let printerWarning = '';
   let sensorScan = null;
   let sensorCalibrationValid = false;
-  let labelPositionReady = false;
   let activePrintJob = null;
   let pendingStatusQuery = null;
   let rxBuffer = [];
@@ -368,7 +368,6 @@ export function createMx10Printer() {
     txCharacteristic = null;
     rxCharacteristic = null;
     rxBuffer = [];
-    labelPositionReady = false;
     clearSavedDeviceId();
     notify();
     return { disconnected: wasConnected, permissionForgotten: false };
@@ -442,7 +441,6 @@ export function createMx10Printer() {
     sensorScan = null;
     window.clearTimeout(scan.timeout);
     sensorCalibrationValid = false;
-    labelPositionReady = false;
     try { localStorage.removeItem(SENSOR_THRESHOLD_KEY); } catch { /* The MX10 default remains available if storage is blocked. */ }
     sensorSearching = false;
     sensorProgress = 0;
@@ -455,20 +453,6 @@ export function createMx10Printer() {
     return value;
   }
 
-  async function positionNextLabel() {
-    if (!connected()) throw new Error('Bluetooth disconnected before label alignment.');
-    aligning = true;
-    notify();
-    try {
-      await writeBytes(positionLabelCommand());
-      labelPositionReady = true;
-      return true;
-    } finally {
-      aligning = false;
-      notify();
-    }
-  }
-
   function triggerPrintAlignment(job) {
     if (!job?.dataSent || job.alignmentPromise) return job?.alignmentPromise || Promise.resolve(false);
     if (paperOut) {
@@ -479,12 +463,12 @@ export function createMx10Printer() {
     if (job.timer) window.clearTimeout(job.timer);
     aligning = true;
     notify();
-    job.alignmentPromise = writeBytes(positionLabelCommand()).then(() => {
-      labelPositionReady = true;
+    job.alignmentPromise = writeBytes(positionLabelCommand()).then(() => delay(LABEL_POSITION_SETTLE_MS)).then(() => {
+      if (!connected()) throw new Error('Bluetooth disconnected before label positioning finished.');
       job.alignmentMethod = 'sensor';
       job.resolveAlignment?.({ method: job.alignmentMethod });
       return true;
-    }, error => {
+    }).catch(error => {
       job.rejectAlignment?.(error);
       throw error;
     }).finally(() => {
@@ -513,7 +497,7 @@ export function createMx10Printer() {
         sensorSearching = false;
         sensorProgress = 100;
         notify();
-        positionNextLabel().then(() => scan.resolve({ threshold, aligned: true }), scan.reject);
+        scan.resolve({ threshold, calibrated: true });
         return;
       }
     }
@@ -581,7 +565,6 @@ export function createMx10Printer() {
     txCharacteristic = null;
     rxCharacteristic = null;
     rxBuffer = [];
-    labelPositionReady = false;
     if (sensorScan) failSensorScan(new Error('Bluetooth disconnected during label calibration.'));
     if (pendingStatusQuery) settleStatusQuery(null);
     if (activePrintJob?.rejectAlignment) activePrintJob.rejectAlignment(new Error('Bluetooth disconnected before the MX10 aligned the next label.'));
@@ -613,7 +596,6 @@ export function createMx10Printer() {
     paperOut = null;
     printerWarning = '';
     sensorCalibrationValid = false;
-    labelPositionReady = false;
     sensorSearching = true;
     sensorProgress = 0;
     notify();
@@ -633,7 +615,6 @@ export function createMx10Printer() {
     paperOut = null;
     printerWarning = '';
     sensorCalibrationValid = hasSavedSensorThreshold();
-    labelPositionReady = false;
     notify();
     try {
       const selected = await navigator.bluetooth.requestDevice({
@@ -699,10 +680,6 @@ export function createMx10Printer() {
     if (rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate) await refreshPrinterStatus();
     if (paperOut) throw new Error('The MX10 reports that it is out of paper. Reload the label roll before printing.');
     const raster = await rasterizeLabel(svg, calibration);
-    if (!labelPositionReady) {
-      await positionNextLabel();
-      await delay(900);
-    }
     const rows = raster.rows;
     const job = buildPrintJob(rows);
     const totalChunks = Math.ceil(job.length / PRINTER.chunkSize);

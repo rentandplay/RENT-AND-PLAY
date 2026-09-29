@@ -244,3 +244,75 @@
 .inv-print-settings+.inv-form-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .inv-print-settings+.inv-form-actions button{width:100%;min-width:0;padding:10px 6px;gap:6px;white-space:normal;font-size:10px;line-height:1.2}
 @media(max-width:520px){.inv-printer-panel>.inv-printer-actions{grid-template-columns:1fr}.inv-print-settings+.inv-form-actions{grid-template-columns:1fr 1fr}.inv-print-settings+.inv-form-actions #inv-qr-print{grid-column:1/-1}}
+
+/* Keep the QR print controls visible in a wide, landscape preview dialog. */
+dialog:has(.inv-print-settings){
+  width:min(1120px,calc(100vw - 48px));
+  max-width:calc(100vw - 48px);
+  max-height:calc(100dvh - 40px);
+  padding:22px 26px 18px;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+dialog:has(.inv-print-settings)>.modal-heading{flex:0 0 auto;margin-bottom:12px}
+dialog:has(.inv-print-settings) .inv-print-settings{
+  flex:1 1 auto;
+  min-height:0;
+  overflow:auto;
+  grid-template-columns:minmax(0,1.05fr) minmax(360px,.95fr);
+  grid-template-areas:
+    "heading heading"
+    "preview calibration"
+    "preview printer"
+    "measurement progress"
+    "note note";
+  grid-template-rows:auto auto auto auto auto;
+  align-items:start;
+  gap:12px 24px;
+  padding:2px 2px 4px;
+}
+dialog:has(.inv-print-settings) .inv-print-preview-heading{grid-area:heading}
+dialog:has(.inv-print-settings) .inv-print-preview-frame{grid-area:preview;min-height:300px;padding:18px}
+dialog:has(.inv-print-settings) .inv-print-measurement{grid-area:measurement;text-align:left;margin:0}
+dialog:has(.inv-print-settings) .inv-print-calibration{grid-area:calibration;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+dialog:has(.inv-print-settings) .inv-printer-panel{grid-area:printer}
+dialog:has(.inv-print-settings) .inv-printer-progress{grid-area:progress}
+dialog:has(.inv-print-settings) .inv-print-note{grid-area:note;margin:0}
+dialog:has(.inv-print-settings) .inv-form-actions{
+  flex:0 0 auto;
+  justify-content:flex-end;
+  flex-wrap:nowrap;
+  border-top:1px solid #e4e8ee;
+  padding-top:14px;
+  margin-top:12px;
+  background:inherit;
+}
+dialog:has(.inv-print-settings) .inv-form-actions button{flex:0 0 auto;min-width:120px}
+dialog:has(.inv-print-settings) #inv-qr-print{min-width:150px}
+[data-theme=dark] dialog:has(.inv-print-settings) .inv-form-actions{border-color:#304056}
+.inv-print-format{display:flex;flex-direction:column;gap:5px;align-items:flex-start;color:#657386;font-size:9px;font-weight:600;white-space:nowrap}
+.inv-print-format select{min-width:150px;padding:7px 10px;font-size:11px}
+dialog:has(.inv-print-settings) .inv-print-preview-art img{display:block;width:300px;height:180px;max-width:none;object-fit:fill;flex:none}
+dialog:has(.inv-print-settings) .inv-print-measurement{overflow-wrap:anywhere;line-height:1.55}
+[data-theme=dark] .inv-print-format{color:#9baac0}
+[data-theme=dark] .inv-print-format select{background:#142031;border-color:#304056;color:#e3eaf4}
+
+@media(max-width:899px){
+  dialog:has(.inv-print-settings){width:min(680px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:18px 18px 14px}
+  dialog:has(.inv-print-settings) .inv-print-settings{
+    grid-template-columns:minmax(0,1fr);
+    grid-template-areas:"heading" "preview" "measurement" "calibration" "printer" "progress" "note";
+    gap:12px;
+  }
+  dialog:has(.inv-print-settings) .inv-print-preview-frame{min-height:0}
+  dialog:has(.inv-print-settings) .inv-print-measurement{text-align:center}
+  dialog:has(.inv-print-settings) .inv-form-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  dialog:has(.inv-print-settings) .inv-form-actions button{min-width:0;padding:10px 8px;white-space:normal;font-size:11px;line-height:1.25}
+  dialog:has(.inv-print-settings) #inv-qr-print{min-width:0}
+}
+@media(max-width:420px){
+  dialog:has(.inv-print-settings){padding:14px 12px 12px}
+  dialog:has(.inv-print-settings) .inv-form-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+  dialog:has(.inv-print-settings) #inv-qr-print{grid-column:1/-1}
+}

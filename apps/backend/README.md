@@ -8,14 +8,16 @@ The Node.js REST API now uses Firebase Authentication for owner/operator passwor
 2. Create the default Cloud Firestore database.
 3. In **Project settings > General**, copy the Web API key.
 4. In **Project settings > Service accounts**, create a service-account key for local development. Store it outside this repository.
-5. From `apps/backend`, install dependencies and create the local environment file:
+5. Install Node.js 22 or newer. From `apps/backend`, install the exact dependency versions in the lockfile and create the local environment file once on this laptop:
 
 ```powershell
-npm.cmd install
-Copy-Item .env.example .env
+npm.cmd ci
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 Set `FIREBASE_PROJECT_ID` and `FIREBASE_WEB_API_KEY` in `.env`. For Admin SDK credentials, either set `GOOGLE_APPLICATION_CREDENTIALS` to the absolute path of the downloaded JSON key or put its single-line JSON value in `FIREBASE_SERVICE_ACCOUNT_JSON`. Never commit that key.
+
+The `.vscode/launch.json` Run and Debug configurations are shared through Git. After setting up Firebase on this laptop, choose **Rent & Play: Start App** from the Run and Debug menu and press **F5** to start both backend and web. `node_modules`, `.env`, and the service-account key are local to each laptop; they are intentionally not stored in Git.
 
 Verify the connection and create the first owner:
 

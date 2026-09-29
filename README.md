@@ -40,4 +40,20 @@ Open this root folder in VS Code:
 
 `File -> Open Folder -> rent-and-play`
 
-For the connected login and dashboard, follow [apps/backend/README.md](apps/backend/README.md), then run the web app from `apps/web` in a second terminal. No demo access or default accounts are enabled.
+## Run on another laptop
+
+The VS Code **Rent & Play: Start App** launch configuration is included in Git. Each laptop needs a one-time local setup because Git does not include installed `node_modules` packages or Firebase credentials.
+
+1. Clone the repository, open its root folder in VS Code, and install Node.js 22 or newer.
+2. In a PowerShell terminal at the repository root, install the backend dependencies and create a local environment file if one does not exist:
+
+```powershell
+cd apps/backend
+npm.cmd ci
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+3. Edit `apps/backend/.env` with your Firebase project ID, Web API key, and local Admin SDK credentials. Follow [apps/backend/README.md](apps/backend/README.md) for Firebase setup.
+4. In VS Code, choose **Rent & Play: Start App** in Run and Debug, then press **F5**. After this laptop is set up, use that same Run button each time.
+
+Run `npm.cmd ci` again after backend dependencies change in `package-lock.json` or if `node_modules` is removed. The `.env` file and service-account key must stay local and must not be committed to GitHub. No demo access or default accounts are enabled.

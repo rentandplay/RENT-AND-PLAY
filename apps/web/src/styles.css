@@ -321,3 +321,29 @@ dialog:has(.inv-print-settings) .inv-print-measurement{overflow-wrap:anywhere;li
   dialog:has(.inv-print-settings) .inv-form-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
   dialog:has(.inv-print-settings) #inv-qr-print{grid-column:1/-1}
 }
+.stat-link{display:block;width:100%;text-align:left;color:inherit;font-size:inherit;cursor:pointer;transition:transform .18s,border-color .18s,box-shadow .18s}
+.stat-link:hover{transform:translateY(-2px);border-color:#efc19e;box-shadow:0 7px 18px #20334c12}
+.stat-link:active{transform:translateY(0)}
+.sidebar{scrollbar-width:thin;scrollbar-color:#8997a7 transparent}
+.sidebar::-webkit-scrollbar{width:8px}
+.sidebar::-webkit-scrollbar-track{background:transparent;margin-block:8px}
+.sidebar::-webkit-scrollbar-thumb{min-height:42px;background-color:#8997a7;border:2px solid transparent;border-radius:999px;background-clip:padding-box;transition:background-color .2s}
+.sidebar:hover::-webkit-scrollbar-thumb{background-color:#ee8534}
+[data-theme="dark"] .sidebar{scrollbar-color:#52647a transparent}
+[data-theme="dark"] .sidebar::-webkit-scrollbar-thumb{background-color:#52647a}
+[data-theme="dark"] .sidebar:hover::-webkit-scrollbar-thumb{background-color:#ee8534}
+.breadcrumb-current{display:inline;margin:0;color:#506077;font-size:inherit;font-weight:500;line-height:inherit}
+.module-heading.module-actions{justify-content:flex-end;align-items:center}
+.inv-intro{justify-content:flex-end}
+.profile-overview-heading{justify-content:flex-end}
+.inv-tools{flex-wrap:wrap;justify-content:flex-end}
+.inv-tools>.primary{white-space:nowrap}
+.module-toolbar-actions{display:flex;align-items:center;gap:14px}
+.module-toolbar-actions>span{white-space:nowrap}
+.rates-panel-title{align-items:center}
+.rates-panel-title .pricing-actions{justify-content:flex-end}
+.analytics-filter-actions{grid-column:1/-1;display:flex;justify-content:flex-end;padding-top:14px;border-top:1px solid #e6ebf0}
+[data-theme="dark"] .analytics-filter-actions{border-color:#304056}
+@media(max-width:980px){.rates-panel-title{align-items:flex-start;flex-direction:column}.rates-panel-title .pricing-actions{justify-content:flex-start;width:100%}}
+@media(max-width:720px){.inv-tools{width:100%;justify-content:space-between}.inv-tools>.primary{margin-left:auto}.module-toolbar-actions{width:100%;justify-content:space-between}}
+@media(max-width:620px){.rates-panel-title .pricing-actions{width:100%}.rates-panel-title .pricing-actions button{width:auto;flex:1 1 140px}}

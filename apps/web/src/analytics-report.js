@@ -32,13 +32,14 @@ export function renderAnalyticsReport(model,selection,view,h) {
   const card=(title,value,note)=>`<article class="panel"><span>${title}</span><strong>${value}</strong><small>${note}</small></article>`;
   const choices=(options,value)=>options.map(([id,label])=>`<option value="${e(id)}" ${id===value?'selected':''}>${e(label)}</option>`).join('');
   const items=(model.items||[]).filter(item=>!selection.categoryId||String(item.category_id)===selection.categoryId).sort((a,b)=>a.name.localeCompare(b.name));
-  const header=`<div class="module-heading"><div><span class="eyebrow">MEASURE · UNDERSTAND · IMPROVE</span><h2>Business analytics</h2><p>Demand, equipment performance, and service quality in one report.</p></div><button class="primary" id="report-export" ${result.error?'disabled':''}>Export analytics CSV</button></div>`;
+  const header='';
   const filters=`<section class="panel analytics-filters" aria-label="Analytics filters">
     <label>Period<select id="analytics-period">${choices([['7d','Last 7 days'],['30d','Last 30 days'],['90d','Last 90 days'],['365d','Last 365 days'],['custom','Custom dates']],selection.period)}</select></label>
     ${selection.period==='custom'?`<label>From<input id="analytics-from" type="date" value="${e(selection.from)}" max="${today}"/></label><label>To<input id="analytics-to" type="date" value="${e(selection.to)}" max="${today}"/></label>`:''}
     <label>Trend grouping<select id="analytics-group">${choices([['auto','Automatic'],['daily','Daily'],['weekly','Weekly'],['monthly','Monthly']],selection.groupBy||'auto')}</select></label>
     <label>Category<select id="analytics-category"><option value="">All categories</option>${choices((model.categories||[]).map(row=>[String(row.id),row.name]),selection.categoryId)}</select></label>
     <label>Equipment<select id="analytics-item"><option value="">All equipment</option>${choices(items.map(row=>[String(row.id),`${row.name} · ${row.item_code}`]),selection.itemId)}</select></label>
+    <div class="analytics-filter-actions"><button class="primary" id="report-export" ${result.error?'disabled':''}>Export analytics CSV</button></div>
   </section>`;
   if(result.error)return `${header}${filters}<div class="info-box" role="alert">${e(result.error)}</div>`;
   const {totals:t,range}=result;

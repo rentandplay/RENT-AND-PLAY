@@ -140,6 +140,19 @@
 .profile-actions{gap:10px}.profile-overview{padding:32px}.profile-overview-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}.profile-overview-heading h2{font-size:22px;margin:8px 0}.profile-details{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#edf0f3;border:1px solid #edf0f3;border-radius:10px;overflow:hidden;margin:28px 0}.profile-details>div{background:white;padding:20px}.profile-details dt{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#909baa;margin-bottom:9px}.profile-details dd{margin:0;font-size:13px;font-weight:650;color:#334760;overflow-wrap:anywhere}.profile-active{display:inline-flex;align-items:center;gap:7px;color:#4f7b6b}.profile-active:before{content:'';width:7px;height:7px;border-radius:50%;background:#72a38e}.profile-note{padding:17px 18px;border-radius:9px;background:#f7f9fb}.profile-note strong{display:block;font-size:11px;margin-bottom:4px}.profile-note p{font-size:11px}
 @media(max-width:800px){.profile-layout{grid-template-columns:1fr}.profile-card{padding:28px 22px}.profile-form-card{padding:24px}}
 @media(max-width:520px){.profile-overview{padding:24px}.profile-overview-heading{display:grid}.profile-overview-heading .primary{width:100%}.profile-details{grid-template-columns:1fr}}
+
+/* Expandable navigation groups */
+.sidebar nav .nav-section-title{width:100%;border:0;border-radius:8px;background:transparent;text-align:left;cursor:pointer;transition:background-color .18s,color .18s}
+.sidebar nav .nav-section-title:hover{background:#f0f3f7;color:#344a63}
+.nav-section-items{display:flex;flex-direction:column;gap:2px}
+.nav-section-items[hidden]{display:none!important}
+.nav-group-chevron{display:flex;align-items:center;justify-content:center;margin-left:auto;color:#8b98a8;transition:transform .18s,color .18s}
+.nav-group-chevron svg{width:13px;height:13px}
+.nav-section-title[aria-expanded="false"] .nav-group-chevron{transform:rotate(-90deg)}
+[data-theme="dark"] .sidebar nav .nav-section-title{color:#d1dbe8}
+[data-theme="dark"] .sidebar nav .nav-section-title:hover{background:#223247;color:#e1eaf7}
+[data-theme="dark"] .nav-group-chevron{color:#9eafc4}
+@media(min-width:721px){.sidebar-collapsed .nav-group-chevron{display:none}}
 /* Reports analytics */
 .revenue-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}.revenue-actions .text-button{white-space:nowrap}
 .analytics-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;padding:18px 20px}
@@ -251,7 +264,7 @@
 @media(max-width:520px){.inv-printer-panel>.inv-printer-actions{grid-template-columns:1fr}.inv-print-settings+.inv-form-actions{grid-template-columns:1fr 1fr}.inv-print-settings+.inv-form-actions #inv-qr-print{grid-column:1/-1}}
 
 /* Keep the QR print controls visible in a wide, landscape preview dialog. */
-dialog:has(.inv-print-settings){
+dialog[open]:has(.inv-print-settings){
   width:min(1120px,calc(100vw - 48px));
   max-width:calc(100vw - 48px);
   max-height:calc(100dvh - 40px);
@@ -260,8 +273,8 @@ dialog:has(.inv-print-settings){
   flex-direction:column;
   overflow:hidden;
 }
-dialog:has(.inv-print-settings)>.modal-heading{flex:0 0 auto;margin-bottom:12px}
-dialog:has(.inv-print-settings) .inv-print-settings{
+dialog[open]:has(.inv-print-settings)>.modal-heading{flex:0 0 auto;margin-bottom:12px}
+dialog[open]:has(.inv-print-settings) .inv-print-settings{
   flex:1 1 auto;
   min-height:0;
   overflow:auto;
@@ -277,14 +290,14 @@ dialog:has(.inv-print-settings) .inv-print-settings{
   gap:12px 24px;
   padding:2px 2px 4px;
 }
-dialog:has(.inv-print-settings) .inv-print-preview-heading{grid-area:heading}
-dialog:has(.inv-print-settings) .inv-print-preview-frame{grid-area:preview;min-height:300px;padding:18px}
-dialog:has(.inv-print-settings) .inv-print-measurement{grid-area:measurement;text-align:left;margin:0}
-dialog:has(.inv-print-settings) .inv-print-calibration{grid-area:calibration;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
-dialog:has(.inv-print-settings) .inv-printer-panel{grid-area:printer}
-dialog:has(.inv-print-settings) .inv-printer-progress{grid-area:progress}
-dialog:has(.inv-print-settings) .inv-print-note{grid-area:note;margin:0}
-dialog:has(.inv-print-settings) .inv-form-actions{
+dialog[open]:has(.inv-print-settings) .inv-print-preview-heading{grid-area:heading}
+dialog[open]:has(.inv-print-settings) .inv-print-preview-frame{grid-area:preview;min-height:300px;padding:18px}
+dialog[open]:has(.inv-print-settings) .inv-print-measurement{grid-area:measurement;text-align:left;margin:0}
+dialog[open]:has(.inv-print-settings) .inv-print-calibration{grid-area:calibration;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+dialog[open]:has(.inv-print-settings) .inv-printer-panel{grid-area:printer}
+dialog[open]:has(.inv-print-settings) .inv-printer-progress{grid-area:progress}
+dialog[open]:has(.inv-print-settings) .inv-print-note{grid-area:note;margin:0}
+dialog[open]:has(.inv-print-settings) .inv-form-actions{
   flex:0 0 auto;
   justify-content:flex-end;
   flex-wrap:nowrap;
@@ -293,33 +306,33 @@ dialog:has(.inv-print-settings) .inv-form-actions{
   margin-top:12px;
   background:inherit;
 }
-dialog:has(.inv-print-settings) .inv-form-actions button{flex:0 0 auto;min-width:120px}
-dialog:has(.inv-print-settings) #inv-qr-print{min-width:150px}
-[data-theme=dark] dialog:has(.inv-print-settings) .inv-form-actions{border-color:#304056}
+dialog[open]:has(.inv-print-settings) .inv-form-actions button{flex:0 0 auto;min-width:120px}
+dialog[open]:has(.inv-print-settings) #inv-qr-print{min-width:150px}
+[data-theme=dark] dialog[open]:has(.inv-print-settings) .inv-form-actions{border-color:#304056}
 .inv-print-format{display:flex;flex-direction:column;gap:5px;align-items:flex-start;color:#657386;font-size:9px;font-weight:600;white-space:nowrap}
 .inv-print-format select{min-width:150px;padding:7px 10px;font-size:11px}
-dialog:has(.inv-print-settings) .inv-print-preview-art img{display:block;width:300px;height:180px;max-width:none;object-fit:fill;flex:none}
-dialog:has(.inv-print-settings) .inv-print-measurement{overflow-wrap:anywhere;line-height:1.55}
+dialog[open]:has(.inv-print-settings) .inv-print-preview-art img{display:block;width:300px;height:180px;max-width:none;object-fit:fill;flex:none}
+dialog[open]:has(.inv-print-settings) .inv-print-measurement{overflow-wrap:anywhere;line-height:1.55}
 [data-theme=dark] .inv-print-format{color:#9baac0}
 [data-theme=dark] .inv-print-format select{background:#142031;border-color:#304056;color:#e3eaf4}
 
 @media(max-width:899px){
-  dialog:has(.inv-print-settings){width:min(680px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:18px 18px 14px}
-  dialog:has(.inv-print-settings) .inv-print-settings{
+  dialog[open]:has(.inv-print-settings){width:min(680px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:18px 18px 14px}
+  dialog[open]:has(.inv-print-settings) .inv-print-settings{
     grid-template-columns:minmax(0,1fr);
     grid-template-areas:"heading" "preview" "measurement" "calibration" "printer" "progress" "note";
     gap:12px;
   }
-  dialog:has(.inv-print-settings) .inv-print-preview-frame{min-height:0}
-  dialog:has(.inv-print-settings) .inv-print-measurement{text-align:center}
-  dialog:has(.inv-print-settings) .inv-form-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
-  dialog:has(.inv-print-settings) .inv-form-actions button{min-width:0;padding:10px 8px;white-space:normal;font-size:11px;line-height:1.25}
-  dialog:has(.inv-print-settings) #inv-qr-print{min-width:0}
+  dialog[open]:has(.inv-print-settings) .inv-print-preview-frame{min-height:0}
+  dialog[open]:has(.inv-print-settings) .inv-print-measurement{text-align:center}
+  dialog[open]:has(.inv-print-settings) .inv-form-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  dialog[open]:has(.inv-print-settings) .inv-form-actions button{min-width:0;padding:10px 8px;white-space:normal;font-size:11px;line-height:1.25}
+  dialog[open]:has(.inv-print-settings) #inv-qr-print{min-width:0}
 }
 @media(max-width:420px){
-  dialog:has(.inv-print-settings){padding:14px 12px 12px}
-  dialog:has(.inv-print-settings) .inv-form-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
-  dialog:has(.inv-print-settings) #inv-qr-print{grid-column:1/-1}
+  dialog[open]:has(.inv-print-settings){padding:14px 12px 12px}
+  dialog[open]:has(.inv-print-settings) .inv-form-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+  dialog[open]:has(.inv-print-settings) #inv-qr-print{grid-column:1/-1}
 }
 .stat-link{display:block;width:100%;text-align:left;color:inherit;font-size:inherit;cursor:pointer;transition:transform .18s,border-color .18s,box-shadow .18s}
 .stat-link:hover{transform:translateY(-2px);border-color:#efc19e;box-shadow:0 7px 18px #20334c12}
@@ -332,7 +345,7 @@ dialog:has(.inv-print-settings) .inv-print-measurement{overflow-wrap:anywhere;li
 [data-theme="dark"] .sidebar{scrollbar-color:#52647a transparent}
 [data-theme="dark"] .sidebar::-webkit-scrollbar-thumb{background-color:#52647a}
 [data-theme="dark"] .sidebar:hover::-webkit-scrollbar-thumb{background-color:#ee8534}
-.breadcrumb-current{display:inline;margin:0;color:#506077;font-size:inherit;font-weight:500;line-height:inherit}
+.breadcrumb-current{display:inline;margin:0;color:#506077;font-size:inherit;font-weight:700;line-height:inherit}
 .module-heading.module-actions{justify-content:flex-end;align-items:center}
 .inv-intro{justify-content:flex-end}
 .profile-overview-heading{justify-content:flex-end}

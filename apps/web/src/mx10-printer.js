@@ -10,10 +10,12 @@ const PRINTER = Object.freeze({
 
 const MX10_IMAGE_PRINT_PROFILE = Object.freeze({
   quality: 0x34,
-  energyPercent: Math.round(48000 / 0xffff * 100),
-  energy: 48000,
-  speed: 32,
-  packetDelayMs: 7,
+  density: 130, // Fun Print's 0D high image-density preset for MX10.
+  // Match the older working web printer's 70% heat setting; the lower preset printed QR labels faintly.
+  energy: 45874,
+  speed: 10,
+  endSpeed: 25,
+  packetDelayMs: 20, // Space no-response BLE writes to avoid losing raster data.
 });
 
 const SENSOR_THRESHOLD_KEY = 'rent-play-mx10-label-sensor-threshold';
@@ -82,9 +84,16 @@ function encodeRow(row) {
   return command(runLength.length <= Math.ceil(PRINTER.width / 8) ? 0xbf : 0xa2, payload);
 }
 
+function imageDensityCommand() {
+  const payload = new Uint8Array([0x01, MX10_IMAGE_PRINT_PROFILE.density]);
+  // Fun Print's MX10/V5G driver sends only the checksum byte in this density command.
+  return new Uint8Array([0x51, 0x78, 0xf2, 0x00, 0x02, 0x00, crc8(payload), 0xff]);
+}
+
 function buildPrintJob(rows) {
   const energy = MX10_IMAGE_PRINT_PROFILE.energy;
   const parts = [
+    imageDensityCommand(),
     command(0xa3, new Uint8Array([0x00])),
     command(0xa4, new Uint8Array([MX10_IMAGE_PRINT_PROFILE.quality])),
     command(0xa6, new Uint8Array([0xaa, 0x55, 0x17, 0x38, 0x44, 0x5f, 0x5f, 0x5f, 0x44, 0x38, 0x2c])),
@@ -93,7 +102,8 @@ function buildPrintJob(rows) {
     command(0xbd, new Uint8Array([MX10_IMAGE_PRINT_PROFILE.speed])),
   ];
   for (const row of rows) parts.push(encodeRow(row));
-  parts.push(command(0xbd, new Uint8Array([0x00])));
+  parts.push(command(0xbd, new Uint8Array([MX10_IMAGE_PRINT_PROFILE.endSpeed])));
+  parts.push(command(0xa1, new Uint8Array([0x00, 0x30])));
   parts.push(command(0xa6, new Uint8Array([0xaa, 0x55, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17])));
   parts.push(command(0xa3, new Uint8Array([0x00])));
   const job = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -130,20 +140,42 @@ const SENSOR_SEARCH_STEP = appendBytes(
 
 const PRINT_COMPLETE_FRAME = new Uint8Array([0x51, 0x78, 0xae, 0x01, 0x01, 0x00, 0x00, 0x00, 0xff]);
 
-function loadImage(svg) {
+function loadImage(svg, width, height) {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error('Could not prepare the QR label image. Download the SVG and try again.'));
-    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    image.onerror = () => reject(new Error('Could not prepare the label image. Download the PNG and try again.'));
+    const root = svg.match(/^<svg\b[^>]*>/)?.[0];
+    if (!root) { reject(new Error('Could not prepare the label image. Download the PNG and try again.')); return; }
+    const printerSizedRoot = root
+      .replace(/\swidth="[^"]*"/, '')
+      .replace(/\sheight="[^"]*"/, '')
+      .replace(/>$/, ` width="${width}px" height="${height}px">`);
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.replace(root, printerSizedRoot))}`;
   });
 }
 
-async function rasterizeLabel(svg, calibration) {
-  const image = await loadImage(svg);
+function paintQrMatrix(context, qrMatrix, qrGeometry, width, height) {
+  const size=Number(qrMatrix?.size),data=qrMatrix?.data,margin=Number(qrMatrix?.margin??4);
+  const x=Number(qrGeometry?.x),y=Number(qrGeometry?.y),boxSize=Number(qrGeometry?.size);
+  if(!Number.isInteger(size)||size<1||!data||data.length!==size*size||!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(boxSize)||boxSize<=0||!Number.isInteger(margin)||margin<0)return false;
+  const scaleX=width/500,scaleY=height/300,left=x*scaleX,top=y*scaleY,qrSize=boxSize*scaleX,moduleCount=size+margin*2,moduleSize=qrSize/moduleCount;
+  context.fillStyle='#fff';context.fillRect(left,top,qrSize,qrSize);
+  context.fillStyle='#000';
+  for(let row=0;row<size;row++)for(let column=0;column<size;column++){
+    if(Number(data[row*size+column])!==1)continue;
+    const leftDot=Math.round(left+(column+margin)*moduleSize),rightDot=Math.round(left+(column+margin+1)*moduleSize);
+    const topDot=Math.round(top+(row+margin)*moduleSize),bottomDot=Math.round(top+(row+margin+1)*moduleSize);
+    context.fillRect(leftDot,topDot,rightDot-leftDot,bottomDot-topDot);
+  }
+  return true;
+}
+
+async function rasterizeLabel(svg, calibration, printImage = {}) {
   const width = PRINTER.width;
   const artworkScale = width / 50;
   const height = Math.round(30 * artworkScale);
+  const image = await loadImage(svg, width, height);
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -158,6 +190,7 @@ async function rasterizeLabel(svg, calibration) {
   context.translate(Number(calibration.offsetX || 0) * PRINTER.dotsPerMm, Number(calibration.offsetY || 0) * PRINTER.dotsPerMm);
   context.imageSmoothingEnabled = false;
   context.drawImage(image, 0, 0, width, height);
+  paintQrMatrix(context,printImage.qrMatrix,printImage.qrGeometry,width,height);
   context.restore();
 
   const pixels = context.getImageData(0, 0, width, height).data;
@@ -173,6 +206,29 @@ async function rasterizeLabel(svg, calibration) {
     rows[y] = row;
   }
   return { rows, height };
+}
+
+export async function renderLabelPng(svg, calibration = {}, printImage = {}) {
+  const raster = await rasterizeLabel(svg, calibration, printImage);
+  const canvas = document.createElement('canvas');
+  canvas.width = PRINTER.width;
+  canvas.height = raster.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('This browser could not prepare the PNG label.');
+  const image = context.createImageData(PRINTER.width, raster.height);
+  for (let y = 0; y < raster.height; y += 1) {
+    const row = raster.rows[y];
+    for (let x = 0; x < PRINTER.width; x += 1) {
+      const offset = (y * PRINTER.width + x) * 4;
+      const value = row[x] ? 0 : 255;
+      image.data[offset] = value;
+      image.data[offset + 1] = value;
+      image.data[offset + 2] = value;
+      image.data[offset + 3] = 255;
+    }
+  }
+  context.putImageData(image, 0, 0);
+  return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not create the PNG label.')), 'image/png'));
 }
 
 async function getWritableCharacteristic(server) {
@@ -413,12 +469,14 @@ export function createMx10Printer() {
   async function writeBytes(bytes, onProgress, packetDelayMs = 7) {
     if (!connected()) throw new Error('Connect your MX10 before sending printer commands.');
     const characteristic = txCharacteristic;
-    const withoutResponse = characteristic.properties.writeWithoutResponse && typeof characteristic.writeValueWithoutResponse === 'function';
     const withResponse = characteristic.properties.write && typeof characteristic.writeValueWithResponse === 'function';
+    const withoutResponse = characteristic.properties.writeWithoutResponse && typeof characteristic.writeValueWithoutResponse === 'function';
     if (!withoutResponse && !withResponse) throw new Error('The MX10 print channel is not writable in this browser. Try current Chrome on Android.');
     const totalChunks = Math.ceil(bytes.length / PRINTER.chunkSize);
     for (let index = 0, offset = 0; offset < bytes.length; index += 1, offset += PRINTER.chunkSize) {
       const packet = bytes.slice(offset, Math.min(offset + PRINTER.chunkSize, bytes.length));
+      // The older working Rent & Play printer used paced write-without-response transfers.
+      // MX10 image jobs contain many row commands; keep this path when the device supports it.
       if (withoutResponse) await characteristic.writeValueWithoutResponse(packet);
       else await characteristic.writeValueWithResponse(packet);
       if (withoutResponse) await delay(packetDelayMs);
@@ -674,12 +732,12 @@ export function createMx10Printer() {
 
   void restoreSavedDevice();
 
-  async function printLabel(svg, calibration = {}, onProgress = () => {}) {
+  async function printLabel(svg, calibration = {}, printImage = {}) {
     if (!connected()) throw new Error('Connect your MX10 before printing.');
     if (printing || sensorSearching) throw new Error('Wait for the current printer operation to finish.');
     if (rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate) await refreshPrinterStatus();
     if (paperOut) throw new Error('The MX10 reports that it is out of paper. Reload the label roll before printing.');
-    const raster = await rasterizeLabel(svg, calibration);
+    const raster = await rasterizeLabel(svg, calibration, printImage);
     const rows = raster.rows;
     const job = buildPrintJob(rows);
     const totalChunks = Math.ceil(job.length / PRINTER.chunkSize);
@@ -694,7 +752,7 @@ export function createMx10Printer() {
         const packet = job.slice(offset, Math.min(offset + PRINTER.chunkSize, job.length));
         await writeBytes(packet, undefined, MX10_IMAGE_PRINT_PROFILE.packetDelayMs);
         progress = Math.floor(((index + 1) / totalChunks) * 100);
-        if (progress === 100 || progress % 5 === 0) { onProgress(progress); notify(); }
+        if (progress === 100 || progress % 5 === 0) notify();
       }
       printJob.dataSent = true;
       notify();
@@ -703,7 +761,7 @@ export function createMx10Printer() {
         printJob.rejectAlignment = reject;
         printJob.timer = window.setTimeout(() => triggerPrintAlignment(printJob).catch(() => {}), LABEL_POSITION_FALLBACK_MS);
       });
-      return { height: raster.height, labelGapMm: Number(calibration.gap ?? 10), energy: MX10_IMAGE_PRINT_PROFILE.energy, energyPercent: MX10_IMAGE_PRINT_PROFILE.energyPercent, aligned: true, alignmentMethod: alignment?.method || printJob.alignmentMethod || 'sensor' };
+      return { height: raster.height, labelGapMm: Number(calibration.gap ?? 10), energy: MX10_IMAGE_PRINT_PROFILE.energy, density: MX10_IMAGE_PRINT_PROFILE.density, aligned: true, alignmentMethod: alignment?.method || printJob.alignmentMethod || 'sensor' };
     } finally {
       if (printJob.timer) window.clearTimeout(printJob.timer);
       if (activePrintJob === printJob) activePrintJob = null;

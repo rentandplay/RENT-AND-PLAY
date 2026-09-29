@@ -69,7 +69,8 @@ export async function inventoryDetail(db,id) {
 export async function inventoryQr(db,id) {
   const {item}=await inventoryDetail(db,id);
   const token=await ensureQrToken(db,item);
-  return {svg:await QRCode.toString(token,{type:'svg',errorCorrectionLevel:'M',margin:4,width:240}),token,code:item.item_code,name:item.name};
+  const qr=QRCode.create(token,{errorCorrectionLevel:'M'});
+  return {svg:await QRCode.toString(token,{type:'svg',errorCorrectionLevel:'M',margin:4,width:240}),matrix:{size:qr.modules.size,data:Array.from(qr.modules.data),margin:4},token,code:item.item_code,name:item.name};
 }
 
 async function ensureQrToken(db,item) {

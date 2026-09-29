@@ -63,9 +63,13 @@ export function renderAnalyticsReport(model,selection,view,h) {
   const sorted=[...result.performance].sort((a,b)=>view.sort==='name'?a.name.localeCompare(b.name):view.sort==='least'?a.rentals-b.rentals||a.name.localeCompare(b.name):(b[view.sort]??-1)-(a[view.sort]??-1)||a.name.localeCompare(b.name));
   const equipmentView=paged(sorted,'analytics-equipment'),trendView=paged(result.trend,'analytics-trend'),terminalView=paged(result.terminalPerformance,'analytics-terminals');
   const equipmentRows=equipmentView.rows.map(row=>`<tr><td><strong>${e(row.name)}</strong><small>${e(row.code)} · ${e(row.category)}${row.active?'':' · Archived / historical'}</small></td><td>${row.rentals}</td><td>${cash(row.fees)}</td><td>${hours(row.rentedHours)}</td><td><strong>${percent(row.utilization)}</strong><small>${row.observedHours===null?'Collection history unavailable':`${number(row.observedHours)} observed h${row.observationAssumed?' · assumed start':''}`}</small></td><td>${row.maintenanceCount}</td><td>${hours(row.downtimeHours)}</td></tr>`).join('');
+  const selectedSection=view.section||'rental';
+  const sections=[['rental','Rental performance'],['equipment','Equipment insights'],['service','Service & operations'],['guide','Definitions & coverage']];
 
   return `${header}${filters}
     <p class="analytics-scope">${e(range.label)} · Philippine time · Recorded rental fees exclude deposits. ${range.to===today?'Today is a partial day.':''}</p>
+    <div class="analytics-tabs" role="tablist" aria-label="Report sections">${sections.map(([id,label])=>`<button type="button" id="analytics-tab-${id}" role="tab" aria-controls="analytics-panel-${id}" aria-selected="${selectedSection===id}" tabindex="${selectedSection===id?'0':'-1'}" data-analytics-tab="${id}">${label}</button>`).join('')}</div>
+    <section class="analytics-tab-panel" id="analytics-panel-rental" role="tabpanel" aria-labelledby="analytics-tab-rental" tabindex="0" data-analytics-panel="rental" ${selectedSection==='rental'?'':'hidden'}>
     <div class="analytics-section-heading"><span class="eyebrow">01 / DEMAND & INCOME</span><h2>Rental performance</h2></div>
     <div class="analytics-kpis">
       ${card('Confirmed rental fees',cash(t.fees),'Recorded charges in the selected period')}
@@ -78,6 +82,8 @@ export function renderAnalyticsReport(model,selection,view,h) {
       <section class="panel analytics-panel">${head('Rentals trend',`Confirmed rental count · ${result.groupBy}`)}${t.rentals?trendChart('rentals'):empty('No confirmed rentals','Choose another period or confirm a rental.')}</section>
     </div>
     <details class="panel analytics-values" data-analytics-detail="trend" ${view.details.trend?'open':''}><summary>View exact trend values</summary>${table(['PERIOD','RENTAL FEES','RENTALS'],trendView.rows.map(row=>`<tr><td>${e(row.label)}<small>${row.from} – ${row.to}</small></td><td>${cash(row.fees)}</td><td>${row.rentals}</td></tr>`).join(''))}${trendView.footer}</details>
+    </section>
+    <section class="analytics-tab-panel" id="analytics-panel-equipment" role="tabpanel" aria-labelledby="analytics-tab-equipment" tabindex="0" data-analytics-panel="equipment" ${selectedSection==='equipment'?'':'hidden'}>
     <div class="analytics-section-heading"><span class="eyebrow">02 / EQUIPMENT INSIGHTS</span><h2>What gets rented, what sits idle</h2><p>Rankings use the selected period. Full results are available in the table and CSV.</p></div>
     <div class="analytics-ranking-grid">
       <section class="panel analytics-panel">${head('Most rented equipment','Top 5 by confirmed rental count')}${ranking(result.equipment,row=>count(row.rentals,'rental'),row=>cash(row.fees))}</section>
@@ -92,6 +98,8 @@ export function renderAnalyticsReport(model,selection,view,h) {
       <section class="panel analytics-panel">${head('Revenue per category','Fees grouped by current equipment category')}${categoryRows||empty('No category fees','Category totals appear after rental confirmation.')}${result.categoryRevenue.length>5?categoryView.footer:''}</section>
       <section class="panel analytics-panel">${head('Equipment right now','Current status, regardless of the date filter')}${statusContent}</section>
     </div>
+    </section>
+    <section class="analytics-tab-panel" id="analytics-panel-service" role="tabpanel" aria-labelledby="analytics-tab-service" tabindex="0" data-analytics-panel="service" ${selectedSection==='service'?'':'hidden'}>
     <div class="analytics-section-heading"><span class="eyebrow">03 / SERVICE & OPERATIONS</span><h2>Returns, equipment care & the counter</h2></div>
     <div class="analytics-kpis">
       ${card('Overdue rate',percent(t.overdueRate),`${t.overdueRentals} of ${t.dueRentals} rentals due in period · ${t.overdueNow} overdue now`)}
@@ -109,6 +117,10 @@ export function renderAnalyticsReport(model,selection,view,h) {
       ${result.terminalPerformance.length?table(['TERMINAL','CONFIRMATIONS','AVERAGE','MEDIAN','P95'],terminalView.rows.map(row=>`<tr><td><strong>${e(row.name)}</strong><small>${e(row.code)}</small></td><td>${row.count}</td><td>${elapsed(row.averageSeconds)}</td><td>${elapsed(row.medianSeconds)}</td><td>${elapsed(row.p95Seconds)}</td></tr>`).join(''))+terminalView.footer:empty('No timed confirmations yet','This fills in when a confirmed terminal request has valid request and confirmation times.')}
       ${result.linkedConfirmationTimes?`<p class="analytics-footnote">${result.linkedConfirmationTimes} confirmation times came from their linked rental or return record.</p>`:''}
     </section>
+    </section>
+    <section class="analytics-tab-panel" id="analytics-panel-guide" role="tabpanel" aria-labelledby="analytics-tab-guide" tabindex="0" data-analytics-panel="guide" ${selectedSection==='guide'?'':'hidden'}>
+    <div class="analytics-section-heading"><span class="eyebrow">04 / REPORT GUIDE</span><h2>Definitions & data coverage</h2><p>See how each metric is calculated and what the underlying records can measure.</p></div>
     <details class="panel analytics-guide" data-analytics-detail="guide" ${view.details.guide?'open':''}><summary>How these 14 analytics are calculated</summary><p>Use these definitions to explain the report. A dash means there is not enough valid data for the metric.</p><div class="analytics-definition-grid">${analyticsDefinitions.map(([name,description],index)=>`<article><span>${String(index+1).padStart(2,'0')}</span><div><h3>${name}</h3><p>${description}</p></div></article>`).join('')}</div></details>
-    <details class="panel analytics-guide analytics-coverage" data-analytics-detail="coverage" ${(view.details.coverage??result.quality.length>0)?'open':''}><summary>Data coverage & measurement notes</summary><p>${t.rentals} confirmed rentals · ${t.onTimeSamples} returns with valid due dates · ${t.verificationCount} timed terminal confirmations.</p>${result.quality.length?`<ul>${result.quality.map(row=>`<li><strong>${row.count}</strong> ${e(row.text)}</li>`).join('')}</ul>`:'<p>No missing-date issues were detected in the records used by this report.</p>'}<p>Time-based metrics stop at the selected period end or the current time. Current equipment status and “overdue now” are live snapshots.</p></details>`;
+    <details class="panel analytics-guide analytics-coverage" data-analytics-detail="coverage" ${(view.details.coverage??result.quality.length>0)?'open':''}><summary>Data coverage & measurement notes</summary><p>${t.rentals} confirmed rentals · ${t.onTimeSamples} returns with valid due dates · ${t.verificationCount} timed terminal confirmations.</p>${result.quality.length?`<ul>${result.quality.map(row=>`<li><strong>${row.count}</strong> ${e(row.text)}</li>`).join('')}</ul>`:'<p>No missing-date issues were detected in the records used by this report.</p>'}<p>Time-based metrics stop at the selected period end or the current time. Current equipment status and “overdue now” are live snapshots.</p></details>
+    </section>`;
 }

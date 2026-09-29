@@ -11,7 +11,7 @@ export function createWorkspaceUI(h) {
   try{preferences=readPreferences(localStorage);}catch{}
   let settingsTab='business',businessDraft=null,businessDirty=false,businessSaving=false,preferencesDraft=null;
   const analyticsSelection={period:preferences.reportPeriod,from:'',to:'',categoryId:'',itemId:'',groupBy:preferences.reportGrouping};
-  const reportView={sort:'rentals',details:{}};
+  const reportView={section:'rental',sort:'rentals',details:{}};
   const activeRates=()=>model.rates.filter(rate=>rate.is_active!==false);
   const status=value=>`<span class="badge ${e(String(value||'unknown').toLowerCase().replaceAll('_','-'))}">${e(String(value||'Unknown').replaceAll('_',' '))}</span>`;
   const load=async(force=false)=>{if(model&&!force)return model;if(!loading||force)loading=api('/workspace').then(value=>(model=value));return loading;};
@@ -152,6 +152,18 @@ export function createWorkspaceUI(h) {
     });
     document.querySelector('#user-add')?.addEventListener('click',userForm);document.querySelectorAll('[data-user-toggle]').forEach(button=>button.onclick=async()=>{const u=model.users.find(v=>v.id===button.dataset.userToggle);button.disabled=true;try{await api(`/users/${u.id}`,{method:'PATCH',body:JSON.stringify({role:u.role,isActive:u.is_active===false})});await refresh();toast('User access updated.');rerender();}catch(problem){button.disabled=false;toast(problem.message);}});
     const updateAnalytics=()=>{for(const key of Object.keys(pages))if(key.startsWith('analytics-'))pages[key]=0;rerender();};
+    const selectAnalyticsTab=section=>{reportView.section=section;rerender();document.querySelector(`[data-analytics-tab="${section}"]`)?.focus();};
+    const analyticsTabs=[...document.querySelectorAll('[data-analytics-tab]')];
+    analyticsTabs.forEach(button=>{
+      button.onclick=()=>selectAnalyticsTab(button.dataset.analyticsTab);
+      button.onkeydown=event=>{
+        const index=analyticsTabs.indexOf(button);let target;
+        if(event.key==='ArrowRight')target=(index+1)%analyticsTabs.length;
+        if(event.key==='ArrowLeft')target=(index+analyticsTabs.length-1)%analyticsTabs.length;
+        if(event.key==='Home')target=0;if(event.key==='End')target=analyticsTabs.length-1;
+        if(target!==undefined){event.preventDefault();selectAnalyticsTab(analyticsTabs[target].dataset.analyticsTab);}
+      };
+    });
     document.querySelector('#analytics-period')?.addEventListener('change',event=>{analyticsSelection.period=event.target.value;if(analyticsSelection.period==='custom'&&(!analyticsSelection.from||!analyticsSelection.to)){const range=analyticsRange({period:'30d'});analyticsSelection.from=range.from;analyticsSelection.to=range.to;}updateAnalytics();});
     for(const field of ['from','to'])document.querySelector('#analytics-'+field)?.addEventListener('change',event=>{analyticsSelection[field]=event.target.value;updateAnalytics();});
     document.querySelector('#analytics-group')?.addEventListener('change',event=>{analyticsSelection.groupBy=event.target.value;updateAnalytics();});

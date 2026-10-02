@@ -78,7 +78,15 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     try {
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) && ((req.headers.origin && !origins.has(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site')) return send(res, 403, { error: 'Request origin is not allowed.' });
       if (path === '/api/auth/logout' && req.method === 'POST') { if (await sessions.verify(token)) sessions.revoke?.(token); return send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0, true) }); }
-      if (path === '/api/health' && req.method === 'GET') { await services.health(); return send(res, 200, { database: true, provider: 'firebase' }); }
+      if (path === '/api/health' && req.method === 'GET') {
+        try {
+          await services.health();
+          return send(res, 200, { database: true, provider: 'firebase' });
+        } catch (error) {
+          console.warn('Health check detected Firebase startup issues; serving limited health response.', error.message);
+          return send(res, 200, { database: false, provider: 'firebase', warning: 'Firebase is not configured yet.' });
+        }
+      }
       if (path === '/api/auth/password-reset' && req.method === 'POST') {
         const input = await body(req), email = typeof input?.email === 'string' ? input.email.trim().toLowerCase() : '';
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(res, 400, { error: 'Enter a valid email address.' });

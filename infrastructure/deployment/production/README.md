@@ -1,28 +1,19 @@
 # Free Render Deployment
 
-This deployment uses one Render Free web service for both the dashboard and API. It keeps login same-origin and continues to use the existing Firebase Authentication and Firestore project. Render supplies an `onrender.com` URL, so purchasing a custom domain is optional.
+The production target is one Render Free Node web service. It serves both the built dashboard and the Firebase-backed API, so the app uses one same-origin HTTPS URL and no paid Cloud Run or separately hosted static site. Render assigns an `onrender.com` address; a custom domain is not needed.
 
-## Free-Tier Limits
+## Deploy from GitHub
 
-- Render Free services sleep after 15 minutes without traffic and may take about a minute to wake.
-- Free services have monthly usage limits and are intended for hobby projects and previews, not guaranteed production uptime.
-- Firestore has free quotas; monitor usage in Firebase Console.
-- Do not attach paid compute or select a paid Render plan if deployment must stay at $0.
+1. Push this repository, including `render.yaml`, to the GitHub repository connected to your Render account. Do not commit `.env` or any Firebase credentials.
+2. In the [Render Dashboard](https://dashboard.render.com/), choose **New > Blueprint**, select the repository and the branch containing `render.yaml`, and create the service. Keep the service on the **Free** plan. If `rent-and-play.onrender.com` is already taken, choose another available service name and update `WEB_ORIGIN` to its exact `https://...onrender.com` URL.
+3. When Render requests environment values, copy `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`, and `FIREBASE_SERVICE_ACCOUNT_JSON` from your local `apps/backend/.env` into Render's private environment form. Never paste credentials into GitHub, source files, or chat.
+4. Wait for the build and health check to pass. Open the Render service URL. The website and API share the same origin, and the backend sets secure session cookies.
+5. In Firebase Console, open **Authentication > Settings > Authorized domains** and add the Render hostname (without `https://`) if it is not already present.
 
-## Deploy
+The deployment uses the existing active `ADMIN` Firebase account. It does not create accounts or change passwords.
 
-1. Sign in to [Render](https://dashboard.render.com/) with the GitHub account that has access to this repository.
-2. Make sure the intended app changes and the root `render.yaml`, `Dockerfile.render`, and `apps/production-render.mjs` are committed and pushed to the branch you will deploy. Render deploys from GitHub, not from uncommitted local files. Review existing worktree changes before pushing; do not include unrelated deletions.
-3. In Render, choose **New > Blueprint**, connect `RENT-AND-PLAY`, and deploy the `rent-and-play-app` service from `render.yaml`. Confirm the compute plan remains **Free**.
-4. Enter these values in Render's environment settings. Get them from the local backend `.env` without sharing them in chat:
-	- `FIREBASE_PROJECT_ID`
-	- `FIREBASE_WEB_API_KEY`
-	- `FIREBASE_SERVICE_ACCOUNT_JSON`
-	- `WEB_ORIGIN`, set to the exact HTTPS URL Render assigns to the service
-5. Wait for `/api/health` to become healthy, then open the generated `https://...onrender.com` URL and sign in with the existing admin account.
+## Free-tier limits
 
-The service uses `COOKIE_SECURE=true` and routes `/api/**` through the same-origin web server. Firebase service-account credentials are passed only as a Render environment secret; they are excluded from the Docker build context and must never be committed.
+Render Free services sleep after 15 minutes without traffic and may take about a minute to wake. Free web services are intended for hobby/testing use and have monthly usage limits. Firebase Hosting is not used in this deployment. Firestore has a free quota of 1 GiB storage, 50,000 document reads/day, and 20,000 writes/day; check current limits and usage in Firebase Console.
 
-## Later Updates
-
-After pushing reviewed changes to the connected GitHub branch, Render can automatically redeploy. Keep `.env`, service-account JSON, and other credentials out of Git. A custom domain can be connected later, but registering one costs money; the Render-provided domain remains free.
+A purchased custom domain costs money, so stay with the Render URL to keep deployment at $0. If usage exceeds a provider's no-cost quota, stop and review the dashboard before enabling any paid plan.

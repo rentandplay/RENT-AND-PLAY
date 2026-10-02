@@ -1,5 +1,7 @@
 import http from 'node:http';
-import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import nodePath from 'node:path';
 import { FirebaseSessions, publicUser } from './auth.mjs';
 import { firebaseAuth, firestore, requireFirebaseConfig } from './firebase.mjs';
 import { loadDashboard } from './dashboard.mjs';
@@ -7,6 +9,27 @@ import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createI
 import { updateProfile } from './profile.mjs';
 import { loadWorkspace, createCustomer, updateCustomer, saveRate, savePricing, saveSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
+
+const webRoot = nodePath.resolve(fileURLToPath(new URL('../../web/dist/', import.meta.url)));
+const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
+
+async function serveWeb(req, res, requestPath) {
+  if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405).end(); return; }
+  let pathname;
+  try { pathname = decodeURIComponent(requestPath); } catch { res.writeHead(400).end(); return; }
+  let target = nodePath.resolve(webRoot, `.${pathname === '/' ? '/index.html' : pathname}`);
+  if (!target.startsWith(webRoot + nodePath.sep)) { res.writeHead(403).end(); return; }
+  try {
+    let content;
+    try { content = await readFile(target); }
+    catch (error) {
+      if (error.code !== 'ENOENT' || nodePath.extname(pathname)) throw error;
+      target = nodePath.join(webRoot, 'index.html'); content = await readFile(target);
+    }
+    res.writeHead(200, { 'Content-Type': contentTypes[nodePath.extname(target)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    if (req.method === 'HEAD') res.end(); else res.end(content);
+  } catch { res.writeHead(404).end('Not found'); }
+}
 
 const defaultServices = {
   async health() { requireFirebaseConfig(); await firestore.collection('users').limit(1).get(); },
@@ -48,7 +71,9 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     try { return JSON.parse(value); } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
   }
   return http.createServer(async (req, res) => {
-    const path = new URL(req.url, 'http://127.0.0.1').pathname;
+    const requestPath = new URL(req.url, 'http://127.0.0.1').pathname;
+    if (!requestPath.startsWith('/api/')) return serveWeb(req, res, requestPath);
+    const path = requestPath;
     const token = (req.headers.cookie || '').split(';').map(v => v.trim()).find(v => v.startsWith('rent_play_session='))?.slice('rent_play_session='.length);
     try {
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) && ((req.headers.origin && !origins.has(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site')) return send(res, 403, { error: 'Request origin is not allowed.' });

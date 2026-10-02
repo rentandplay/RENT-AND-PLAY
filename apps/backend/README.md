@@ -1,6 +1,6 @@
 # Rent & Play Firebase backend
 
-The Node.js REST API now uses Firebase Authentication for owner/operator passwords and Cloud Firestore for application data. The browser still talks only to this backend; Firebase Admin credentials are never exposed to web code.
+The Node.js REST API uses Firebase Authentication for admin sign-in and Cloud Firestore for application data. Only active users with the `ADMIN` profile role can access this website. The browser talks only to this backend; Firebase Admin credentials are never exposed to web code.
 
 ## Firebase setup
 
@@ -19,14 +19,14 @@ Set `FIREBASE_PROJECT_ID` and `FIREBASE_WEB_API_KEY` in `.env`. For Admin SDK cr
 
 The `.vscode/launch.json` Run and Debug configurations are shared through Git. After setting up Firebase on this laptop, choose **Rent & Play: Start App** from the Run and Debug menu and press **F5** to start both backend and web. `node_modules`, `.env`, and the service-account key are local to each laptop; they are intentionally not stored in Git.
 
-Verify the connection and create the first owner:
+Verify the connection and create the first admin:
 
 ```powershell
 npm.cmd run firebase:check
 npm.cmd run user:create
 ```
 
-The owner command creates one Firebase Authentication account, its matching `users/{uid}` Firestore profile, and four starter equipment categories when the category collection is empty. It refuses to overwrite an existing profile.
+The account command creates one Firebase Authentication account, its matching active `ADMIN` `users/{uid}` Firestore profile, and four starter equipment categories when the category collection is empty. It refuses to overwrite an existing profile.
 
 Start the backend, then start the web app in a second terminal:
 
@@ -39,13 +39,13 @@ cd ..\web
 npm.cmd run dev
 ```
 
-Open http://127.0.0.1:5173 and sign in with the owner account.
+Open http://127.0.0.1:5173 and sign in with the admin account.
 
 ## Authentication and API
 
-`POST /api/auth/login` validates the password with Firebase Authentication, exchanges the returned ID token for an HttpOnly Firebase session cookie, then checks the active `users/{uid}` profile and its `OWNER` or `OPERATOR` role. Protected routes revalidate both the Firebase session and Firestore profile. Standard sessions last eight hours; Remember me uses Firebase's maximum supported 14 days. Login is rate limited, write requests check their browser origin, and logout clears and locally revokes the presented cookie.
+`POST /api/auth/login` validates the password with Firebase Authentication, exchanges the returned ID token for an HttpOnly Firebase session cookie, then checks that the matching `users/{uid}` profile is active and has role `ADMIN`. Protected routes revalidate both the Firebase session and Firestore profile. Standard sessions last eight hours; Remember me uses Firebase's maximum supported 14 days. Login is rate limited, write requests check their browser origin, and logout clears and locally revokes the presented cookie.
 
-The web administration API also exposes authenticated workspace data, customer management, the client rate sheet, rate publishing, and owner-only business settings/user management. `GET /api/pricing` reads the seeded rate sheet, `PUT /api/pricing` saves administrator changes, and `POST /api/pricing/quote` calculates a rental quote. Quotes can use a catalog product directly or an inventory item linked to that product. `POST /api/auth/password-reset` requests a Firebase password-reset email without revealing whether an account exists.
+The web administration API also exposes authenticated workspace data, customer management, the client rate sheet, rate publishing, and admin-only business settings/user management. `GET /api/pricing` reads the seeded rate sheet, `PUT /api/pricing` saves administrator changes, and `POST /api/pricing/quote` calculates a rental quote. Quotes can use a catalog product directly or an inventory item linked to that product. `POST /api/auth/password-reset` requests a Firebase password-reset email without revealing whether an account exists.
 
 The existing dashboard and inventory API routes are unchanged. Inventory writes use Firestore transactions. The `item_codes/{ITEM_CODE}` registry enforces unique item codes, and stale edits are rejected using `updated_at`. QR tokens and historical rates remain stable.
 

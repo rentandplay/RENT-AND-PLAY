@@ -1,10 +1,11 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#162a42" />
-  <title>Rent & Play · Operator workspace</title>
+  <title>Rent & Play · Admin workspace</title>
   <script>
     try { document.documentElement.dataset.theme = localStorage.getItem('rent-play-theme') === 'dark' ? 'dark' : 'light'; }
     catch { document.documentElement.dataset.theme = 'light'; }
@@ -12,10 +13,12 @@
   <link rel="icon" href="/public/logo.png" />
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
+
 <body>
   <div id="app"></div>
   <div id="toast" role="status" aria-live="polite"></div>
   <dialog id="modal"></dialog>
   <script type="module" src="/src/app.js"></script>
 </body>
+
 </html>

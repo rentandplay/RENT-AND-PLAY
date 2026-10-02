@@ -1,12 +1,12 @@
 # Rent & Play web workspace
 
-Responsive owner/operator login and dashboard using the supplied logo. Built with HTML, CSS, and JavaScript, connected to the Firebase-backed REST API in `apps/backend`. Existing TypeScript API scaffolds are retained.
+Responsive admin login and dashboard using the supplied logo. Built with HTML, CSS, and JavaScript, connected to the Firebase-backed REST API in `apps/backend`. Existing TypeScript API scaffolds are retained.
 
 ## Run
 
 Configure and start the backend first; see `../backend/README.md` for database setup and first-account creation. In a second VS Code terminal, from `apps/web`, run `npm run dev`, then open http://127.0.0.1:5173.
 
-Sign in with an active Firebase Authentication account that has a matching active `users/{uid}` Firestore profile with an `OWNER` or `OPERATOR` role. There are no default passwords or demo access.
+Sign in with an active Firebase Authentication account that has a matching active `users/{uid}` Firestore profile with the `ADMIN` role. Other account roles cannot access the website. There are no default passwords or demo access.
 
 `npm run check` checks JavaScript syntax. `npm test` checks analytics calculations.
 
@@ -20,8 +20,8 @@ Sign in with an active Firebase Authentication account that has a matching activ
 - Reports with all 14 business analytics: revenue and rental-count trends; equipment utilization; most/least rented (including zero-rental items); revenue per item and category; overdue and on-time rates; average rental duration; repeat customer rate; maintenance frequency and downtime; terminal verification time with average, median and P95.
 - Analytics filters for 7/30/90/365 days or custom dates (up to 366 days), daily/calendar-week/calendar-month grouping, category, and equipment. Full equipment performance, trend values, category totals and terminal results use 5-row pagination where needed. CSV exports all matching rows, not just the current page.
 - In-page definitions and data-coverage notes explain formulas, exclusions, missing timestamps and partial periods. See `../../docs/analytics-demo-guide.md` for the panel demonstration guide.
-- Owner-only business settings and Firebase/Firestore user administration; operators receive read-only business details.
-- Horizontal Settings tabs for Business, Appearance, Preferences, Users (owners only), and Account & security. Tabs support arrow keys and Home/End; business and preference drafts survive tab changes. Business edits have save/discard controls, and account settings link to the profile and Firebase password-reset email.
+- Admin-only business settings and Firebase/Firestore account administration.
+- Horizontal Settings tabs for Business, Appearance, Preferences, Accounts (admins only), and Account & security. Tabs support arrow keys and Home/End; business and preference drafts survive tab changes. Business edits have save/discard controls, and account settings link to the profile and Firebase password-reset email.
 - Browser-local preferences control automatic refresh and the default analytics period/grouping. Restore defaults requires Save to apply. Automatic refresh pauses while in Settings so edits are not interrupted; manual Refresh remains available. Currency/timezone are read-only because reporting currently uses PHP and Philippine time; the grace setting does not recalculate penalties or analytics.
 - Inventory search, category/status filters (including archives), sorting, table/card views, 5-item pagination, and CSV export of the filtered collection. Active/pending rentals lock availability, condition changes, and archiving.
 - Database-backed login, Firebase password-reset email, password visibility, optional remembered session, and server-side sign-out.

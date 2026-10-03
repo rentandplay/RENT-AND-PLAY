@@ -7,6 +7,8 @@ const output = path.join(root, 'dist');
 const sourceFiles = [
     'app.js',
     'inventory.js',
+    'equipment-label.js',
+    'label-logo.js',
     'mx10-printer.js',
     'workspace-ui.js',
     'settings-ui.js',

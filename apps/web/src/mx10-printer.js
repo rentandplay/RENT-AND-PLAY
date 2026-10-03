@@ -9,14 +9,30 @@ const PRINTER = Object.freeze({
 });
 
 const MX10_IMAGE_PRINT_PROFILE = Object.freeze({
-  quality: 0x34,
-  density: 130, // Fun Print's 0D high image-density preset for MX10.
-  // Match the older working web printer's 70% heat setting; the lower preset printed QR labels faintly.
-  energy: 45874,
   speed: 10,
   endSpeed: 25,
-  packetDelayMs: 20, // Space no-response BLE writes to avoid losing raster data.
+  fallbackPacketDelayMs: 7, // Pace firmware that cannot send buffer-flow notifications.
 });
+
+// Confirmed against the supplied Fun Print APK: print_webview_preview.js maps
+// MX10 to MX06 image presets; V5g.getEnerageByte stores energy little-endian.
+const IMAGE_DARKNESS = Object.freeze({
+  light: Object.freeze({ quality: 0x33, density: 150, energy: 10000 }),
+  medium: Object.freeze({ quality: 0x34, density: 180, energy: 10000 }),
+  dark: Object.freeze({ quality: 0x34, density: 200, energy: 15000 }),
+});
+
+export function normalizeMx10PrintSettings(settings = {}) {
+  settings ??= {};
+  const requestedStartFeed = Number(settings.startFeedMm ?? 2);
+  const requestedFeed = Number(settings.tearFeedMm ?? 3);
+  return {
+    paperMode: settings.paperMode === 'gapped' ? 'gapped' : 'continuous',
+    darkness: Object.hasOwn(IMAGE_DARKNESS, settings.darkness) ? settings.darkness : 'dark',
+    startFeedMm: Number.isFinite(requestedStartFeed) ? Math.round(Math.max(0, Math.min(5, requestedStartFeed)) * 2) / 2 : 2,
+    tearFeedMm: Number.isFinite(requestedFeed) ? Math.round(Math.max(0, Math.min(10, requestedFeed)) * 2) / 2 : 3,
+  };
+}
 
 const SENSOR_THRESHOLD_KEY = 'rent-play-mx10-label-sensor-threshold';
 const SAVED_DEVICE_ID_KEY = 'rent-play-mx10-bluetooth-device-id';
@@ -48,26 +64,6 @@ function command(opcode, payload = new Uint8Array()) {
   return output;
 }
 
-function encodeRun(row) {
-  const bytes = [];
-  let previous = -1;
-  let count = 0;
-  const flush = () => {
-    while (count > 0x7f) {
-      bytes.push(0x7f | ((previous & 1) << 7));
-      count -= 0x7f;
-    }
-    if (count) bytes.push(count | ((previous & 1) << 7));
-  };
-  for (const pixel of row) {
-    const bit = pixel ? 1 : 0;
-    if (bit === previous) count += 1;
-    else { flush(); previous = bit; count = 1; }
-  }
-  flush();
-  return new Uint8Array(bytes);
-}
-
 function encodeBytes(row) {
   const encoded = new Uint8Array(Math.ceil(row.length / 8));
   for (let start = 0; start < row.length; start += 8) {
@@ -79,31 +75,36 @@ function encodeBytes(row) {
 }
 
 function encodeRow(row) {
-  const runLength = encodeRun(row);
-  const payload = runLength.length <= Math.ceil(PRINTER.width / 8) ? runLength : encodeBytes(row);
-  return command(runLength.length <= Math.ceil(PRINTER.width / 8) ? 0xbf : 0xa2, payload);
+  // Match the supplied APK's V5G image path: fixed-width A2 bitmap rows.
+  return command(0xa2, encodeBytes(row));
 }
 
-function imageDensityCommand() {
-  const payload = new Uint8Array([0x01, MX10_IMAGE_PRINT_PROFILE.density]);
-  // Fun Print's MX10/V5G driver sends only the checksum byte in this density command.
-  return new Uint8Array([0x51, 0x78, 0xf2, 0x00, 0x02, 0x00, crc8(payload), 0xff]);
-}
-
-function buildPrintJob(rows) {
-  const energy = MX10_IMAGE_PRINT_PROFILE.energy;
+export function buildMx10PrintJob(rows, settings = {}) {
+  const { paperMode, darkness, startFeedMm, tearFeedMm } = normalizeMx10PrintSettings(settings);
+  const { energy, quality, density } = IMAGE_DARKNESS[darkness];
   const parts = [
-    imageDensityCommand(),
+    command(0xf2, new Uint8Array([0x01, density])),
     command(0xa3, new Uint8Array([0x00])),
-    command(0xa4, new Uint8Array([MX10_IMAGE_PRINT_PROFILE.quality])),
+    command(0xa4, new Uint8Array([quality])),
     command(0xa6, new Uint8Array([0xaa, 0x55, 0x17, 0x38, 0x44, 0x5f, 0x5f, 0x5f, 0x44, 0x38, 0x2c])),
-    command(0xaf, new Uint8Array([(energy >> 8) & 0xff, energy & 0xff])),
-    command(0xbe, new Uint8Array([0x01])),
+    command(0xaf, new Uint8Array([energy & 0xff, (energy >> 8) & 0xff])),
+    command(0xbe, new Uint8Array([0x00])),
     command(0xbd, new Uint8Array([MX10_IMAGE_PRINT_PROFILE.speed])),
   ];
-  for (const row of rows) parts.push(encodeRow(row));
+  // Seat continuous stock before the first raster row, especially after tearing.
+  // This is a forward feed, separate from the QR's required white border.
+  if (paperMode === 'continuous' && startFeedMm > 0) {
+    const startDots = startFeedMm * PRINTER.dotsPerMm;
+    parts.push(command(0xa1, new Uint8Array([startDots & 0xff, (startDots >> 8) & 0xff])));
+  }
+  for (const row of rows) {
+    if (row.length !== PRINTER.width) throw new Error('MX10 print rows must be 384 dots wide.');
+    parts.push(encodeRow(row));
+  }
   parts.push(command(0xbd, new Uint8Array([MX10_IMAGE_PRINT_PROFILE.endSpeed])));
-  parts.push(command(0xa1, new Uint8Array([0x00, 0x30])));
+  // Clear the tear edge on continuous stock without searching for a sticker gap.
+  const feedDots = paperMode === 'gapped' ? 48 : tearFeedMm * PRINTER.dotsPerMm;
+  if (feedDots > 0) parts.push(command(0xa1, new Uint8Array([feedDots & 0xff, (feedDots >> 8) & 0xff])));
   parts.push(command(0xa6, new Uint8Array([0xaa, 0x55, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17])));
   parts.push(command(0xa3, new Uint8Array([0x00])));
   const job = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -129,8 +130,7 @@ function positionLabelCommand() {
     }
   } catch { /* Keep the MX10/V5G default when storage is unavailable. */ }
   const sensorPayload = new Uint8Array([(threshold >> 8) & 0xff, threshold & 0xff, 0x20]);
-  // Fun Print's V5G driver sends only the CRC byte in this firmware positioning command.
-  return new Uint8Array([0x51, 0x78, 0xf0, 0x00, 0x03, 0x00, crc8(sensorPayload), 0xff]);
+  return command(0xf0, sensorPayload);
 }
 
 const SENSOR_SEARCH_STEP = appendBytes(
@@ -138,7 +138,7 @@ const SENSOR_SEARCH_STEP = appendBytes(
   command(0xa3, new Uint8Array([0x00])),
 );
 
-const PRINT_COMPLETE_FRAME = new Uint8Array([0x51, 0x78, 0xae, 0x01, 0x01, 0x00, 0x00, 0x00, 0xff]);
+const FLOW_CONTROL_TIMEOUT_MS = 15000;
 
 function loadImage(svg, width, height) {
   return new Promise((resolve, reject) => {
@@ -155,26 +155,46 @@ function loadImage(svg, width, height) {
   });
 }
 
-function paintQrMatrix(context, qrMatrix, qrGeometry, width, height) {
-  const size=Number(qrMatrix?.size),data=qrMatrix?.data,margin=Number(qrMatrix?.margin??4);
-  const x=Number(qrGeometry?.x),y=Number(qrGeometry?.y),boxSize=Number(qrGeometry?.size);
-  if(!Number.isInteger(size)||size<1||!data||data.length!==size*size||!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(boxSize)||boxSize<=0||!Number.isInteger(margin)||margin<0)return false;
-  const scaleX=width/500,scaleY=height/300,left=x*scaleX,top=y*scaleY,qrSize=boxSize*scaleX,moduleCount=size+margin*2,moduleSize=qrSize/moduleCount;
-  context.fillStyle='#fff';context.fillRect(left,top,qrSize,qrSize);
-  context.fillStyle='#000';
-  for(let row=0;row<size;row++)for(let column=0;column<size;column++){
-    if(Number(data[row*size+column])!==1)continue;
-    const leftDot=Math.round(left+(column+margin)*moduleSize),rightDot=Math.round(left+(column+margin+1)*moduleSize);
-    const topDot=Math.round(top+(row+margin)*moduleSize),bottomDot=Math.round(top+(row+margin+1)*moduleSize);
-    context.fillRect(leftDot,topDot,rightDot-leftDot,bottomDot-topDot);
+export function paintQrMatrix(context, qrMatrix, qrGeometry, width, height) {
+  const size = Number(qrMatrix?.size), data = qrMatrix?.data, margin = Number(qrMatrix?.margin ?? 4);
+  const x = Number(qrGeometry?.x), y = Number(qrGeometry?.y), boxSize = Number(qrGeometry?.size);
+  if (!Number.isInteger(size) || size < 1 || !data || data.length !== size * size || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(boxSize) || boxSize <= 0 || !Number.isInteger(margin) || margin < 4) return false;
+  const scaleX = width / 500, scaleY = height / 300;
+  const left = Math.floor(x * scaleX), top = Math.floor(y * scaleY);
+  const boxWidth = Math.ceil((x + boxSize) * scaleX) - left, boxHeight = Math.ceil((y + boxSize) * scaleY) - top;
+  const moduleCount = size + margin * 2, moduleSize = Math.floor(Math.min(boxWidth, boxHeight) / moduleCount);
+  if (moduleSize < 1) throw new Error('This QR code is too detailed for the label.');
+  const qrLeft = left + Math.floor((boxWidth - moduleCount * moduleSize) / 2);
+  const qrTop = top + (qrGeometry.alignY === 'start' ? 0 : Math.floor((boxHeight - moduleCount * moduleSize) / 2));
+  context.fillStyle = '#fff'; context.fillRect(left, top, boxWidth, boxHeight);
+  context.fillStyle = '#000';
+  for (let row = 0; row < size; row++) for (let column = 0; column < size; column++) {
+    if (Number(data[row * size + column]) !== 1) continue;
+    context.fillRect(qrLeft + (column + margin) * moduleSize, qrTop + (row + margin) * moduleSize, moduleSize, moduleSize);
   }
   return true;
 }
 
+export function normalizeMx10LabelCalibration(calibration = {}, printImage = {}) {
+  const finite = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+  let offsetX = finite(calibration.offsetX), offsetY = finite(calibration.offsetY);
+  const { x, y, size } = printImage.qrGeometry || {};
+  if ([x, y, size].every(Number.isFinite) && size > 0) {
+    // Bound the complete QR box, including its quiet zone. Saved negative
+    // offsets must never clip its first rows in preview, PNG, or direct print.
+    const left = Math.floor(x * PRINTER.width / 500), right = Math.ceil((x + size) * PRINTER.width / 500);
+    const top = Math.floor(y * 240 / 300), bottom = Math.ceil((y + size) * 240 / 300);
+    const bounded = (value, lower, upper) => Math.max(Math.ceil(lower * 2) / 2, Math.min(Math.floor(upper * 2) / 2, value));
+    offsetX = bounded(offsetX, -left / PRINTER.dotsPerMm, (PRINTER.width - right) / PRINTER.dotsPerMm);
+    offsetY = bounded(offsetY, -top / PRINTER.dotsPerMm, (240 - bottom) / PRINTER.dotsPerMm);
+  }
+  return { ...calibration, offsetX: offsetX || 0, offsetY: offsetY || 0 };
+}
+
 async function rasterizeLabel(svg, calibration, printImage = {}) {
+  calibration = normalizeMx10LabelCalibration(calibration, printImage);
   const width = PRINTER.width;
-  const artworkScale = width / 50;
-  const height = Math.round(30 * artworkScale);
+  const height = 30 * PRINTER.dotsPerMm;
   const image = await loadImage(svg, width, height);
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -259,9 +279,11 @@ export function createMx10Printer() {
   let sensorProgress = 0;
   let paperOut = null;
   let printerWarning = '';
+  let headHot = false;
   let sensorScan = null;
   let sensorCalibrationValid = false;
   let activePrintJob = null;
+  let flowPaused = false;
   let pendingStatusQuery = null;
   let rxBuffer = [];
   let advertisementListener = null;
@@ -355,6 +377,8 @@ export function createMx10Printer() {
       return false;
     }
     txCharacteristic = found.characteristic;
+    flowPaused = false;
+    headHot = false;
     try {
       rxCharacteristic = await found.service.getCharacteristic(PRINTER.rxCharacteristic);
       if (rxCharacteristic.properties.notify || rxCharacteristic.properties.indicate) {
@@ -424,6 +448,7 @@ export function createMx10Printer() {
     txCharacteristic = null;
     rxCharacteristic = null;
     rxBuffer = [];
+    flowPaused = false;
     clearSavedDeviceId();
     notify();
     return { disconnected: wasConnected, permissionForgotten: false };
@@ -466,20 +491,31 @@ export function createMx10Printer() {
     }
   }
 
-  async function writeBytes(bytes, onProgress, packetDelayMs = 7) {
+  async function writeBytes(bytes, onProgress, { isStatusQuery = false } = {}) {
     if (!connected()) throw new Error('Connect your MX10 before sending printer commands.');
     const characteristic = txCharacteristic;
     const withResponse = characteristic.properties.write && typeof characteristic.writeValueWithResponse === 'function';
     const withoutResponse = characteristic.properties.writeWithoutResponse && typeof characteristic.writeValueWithoutResponse === 'function';
     if (!withoutResponse && !withResponse) throw new Error('The MX10 print channel is not writable in this browser. Try current Chrome on Android.');
+    const hasFlowControl = Boolean(rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate);
     const totalChunks = Math.ceil(bytes.length / PRINTER.chunkSize);
     for (let index = 0, offset = 0; offset < bytes.length; index += 1, offset += PRINTER.chunkSize) {
+      if (printing && !isStatusQuery && paperOut) throw new Error('The MX10 reports that it ran out of paper. Reload the roll before retrying.');
+      if (printing && !isStatusQuery && headHot) throw new Error(printerWarning);
+      const pauseStarted = Date.now();
+      while (printing && !isStatusQuery && flowPaused) {
+        if (!connected()) throw new Error('Bluetooth disconnected while the printer was busy.');
+        if (paperOut) throw new Error('The MX10 reports that it ran out of paper. Reload the roll before retrying.');
+        if (headHot) throw new Error(printerWarning);
+        if (Date.now() - pauseStarted >= FLOW_CONTROL_TIMEOUT_MS) throw new Error('The printer stayed busy for too long. Check the paper and try again.');
+        await delay(20);
+      }
       const packet = bytes.slice(offset, Math.min(offset + PRINTER.chunkSize, bytes.length));
-      // The older working Rent & Play printer used paced write-without-response transfers.
-      // MX10 image jobs contain many row commands; keep this path when the device supports it.
+      // Await each BLE write; the printer's AE notifications provide backpressure.
+      // A fixed sleep after every packet starves the raster buffer and makes the motor stop.
       if (withoutResponse) await characteristic.writeValueWithoutResponse(packet);
       else await characteristic.writeValueWithResponse(packet);
-      if (withoutResponse) await delay(packetDelayMs);
+      if (withoutResponse && !hasFlowControl) await delay(MX10_IMAGE_PRINT_PROFILE.fallbackPacketDelayMs);
       onProgress?.(Math.floor(((index + 1) / totalChunks) * 100));
       if (!connected()) throw new Error('Bluetooth disconnected before the printer command finished.');
     }
@@ -575,9 +611,9 @@ export function createMx10Printer() {
   }
 
   function applyPrinterStatus(code) {
-    if (code === 0x00) { paperOut = false; printerWarning = ''; }
+    if (code === 0x00) { paperOut = false; headHot = false; printerWarning = ''; }
     else if (code === 0x01 || code === 0x09) { paperOut = true; printerWarning = 'The MX10 reports that it is out of paper.'; }
-    else if (code === 0x04 || code === 0xd2) { printerWarning = 'The MX10 reports that its print head is too hot.'; }
+    else if (code === 0x04 || code === 0xd2) { headHot = true; printerWarning = 'The MX10 reports that its print head is too hot. Let it cool before printing again.'; }
     else if (code === 0x08) { printerWarning = 'The MX10 reports low power.'; }
     if (pendingStatusQuery) settleStatusQuery({ code, paperOut, warning: printerWarning });
     if (paperOut && sensorScan) failSensorScan(new Error('The MX10 reports that it is out of paper. Reload the label roll, then calibrate again.'));
@@ -592,9 +628,8 @@ export function createMx10Printer() {
     if (frame.length < 9) return;
     const opcode = frame[2];
     if (opcode === 0xa3) applyPrinterStatus(frame[6]);
-    if (activePrintJob?.dataSent && frame.length === PRINT_COMPLETE_FRAME.length && frame.every((value, index) => value === PRINT_COMPLETE_FRAME[index])) {
-      triggerPrintAlignment(activePrintJob).catch(() => {});
-    }
+    // AE is buffer flow control. A resume notification does not mean the paper is finished.
+    if (opcode === 0xae) flowPaused = frame[6] === 0x10;
   }
 
   function handleNotification(event) {
@@ -623,9 +658,10 @@ export function createMx10Printer() {
     txCharacteristic = null;
     rxCharacteristic = null;
     rxBuffer = [];
+    flowPaused = false;
     if (sensorScan) failSensorScan(new Error('Bluetooth disconnected during label calibration.'));
     if (pendingStatusQuery) settleStatusQuery(null);
-    if (activePrintJob?.rejectAlignment) activePrintJob.rejectAlignment(new Error('Bluetooth disconnected before the MX10 aligned the next label.'));
+    if (activePrintJob?.rejectAlignment) activePrintJob.rejectAlignment(new Error('Bluetooth disconnected before printing finished.'));
     reconnecting = Boolean(reconnectWanted && device);
     if (reconnecting) scheduleReconnect();
     notify();
@@ -640,7 +676,7 @@ export function createMx10Printer() {
       }, timeoutMs);
       pendingStatusQuery = { resolve, timer };
     });
-    try { await writeBytes(command(0xa3, new Uint8Array([0x00]))); }
+    try { await writeBytes(command(0xa3, new Uint8Array([0x00])), undefined, { isStatusQuery: true }); }
     catch (error) { settleStatusQuery(null); throw error; }
     return response;
   }
@@ -732,36 +768,41 @@ export function createMx10Printer() {
 
   void restoreSavedDevice();
 
-  async function printLabel(svg, calibration = {}, printImage = {}) {
+  async function printLabel(svg, calibration = {}, printImage = {}, settings = {}) {
     if (!connected()) throw new Error('Connect your MX10 before printing.');
     if (printing || sensorSearching) throw new Error('Wait for the current printer operation to finish.');
-    if (rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate) await refreshPrinterStatus();
-    if (paperOut) throw new Error('The MX10 reports that it is out of paper. Reload the label roll before printing.');
-    const raster = await rasterizeLabel(svg, calibration, printImage);
-    const rows = raster.rows;
-    const job = buildPrintJob(rows);
-    const totalChunks = Math.ceil(job.length / PRINTER.chunkSize);
+    const { paperMode, darkness, startFeedMm, tearFeedMm } = normalizeMx10PrintSettings(settings);
+    const profile = IMAGE_DARKNESS[darkness];
     printing = true;
     progress = 0;
     const printJob = { dataSent: false, timer: null, alignmentPromise: null, resolveAlignment: null, rejectAlignment: null };
     activePrintJob = printJob;
     notify();
     try {
-      for (let index = 0, offset = 0; offset < job.length; index += 1, offset += PRINTER.chunkSize) {
-        if (paperOut) throw new Error('The MX10 reports that it ran out of paper while printing. Reload the label roll before retrying.');
-        const packet = job.slice(offset, Math.min(offset + PRINTER.chunkSize, job.length));
-        await writeBytes(packet, undefined, MX10_IMAGE_PRINT_PROFILE.packetDelayMs);
-        progress = Math.floor(((index + 1) / totalChunks) * 100);
-        if (progress === 100 || progress % 5 === 0) notify();
-      }
+      if (rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate) await refreshPrinterStatus();
+      if (paperOut) throw new Error('The MX10 reports that it is out of paper. Reload the label roll before printing.');
+      if (headHot) throw new Error(printerWarning);
+      const raster = await rasterizeLabel(svg, calibration, printImage);
+      const job = buildMx10PrintJob(raster.rows, { paperMode, darkness, startFeedMm, tearFeedMm });
+      await writeBytes(job, sent => {
+        const changed = sent !== progress;
+        progress = sent;
+        if (changed && (progress === 100 || progress % 5 === 0)) notify();
+      });
       printJob.dataSent = true;
       notify();
       const alignment = await new Promise((resolve, reject) => {
         printJob.resolveAlignment = resolve;
         printJob.rejectAlignment = reject;
-        printJob.timer = window.setTimeout(() => triggerPrintAlignment(printJob).catch(() => {}), LABEL_POSITION_FALLBACK_MS);
+        printJob.timer = window.setTimeout(() => {
+          if (paperMode === 'continuous') resolve({ method: 'continuous' });
+          else triggerPrintAlignment(printJob).catch(() => {});
+        }, LABEL_POSITION_FALLBACK_MS);
       });
-      return { height: raster.height, labelGapMm: Number(calibration.gap ?? 10), energy: MX10_IMAGE_PRINT_PROFILE.energy, density: MX10_IMAGE_PRINT_PROFILE.density, aligned: true, alignmentMethod: alignment?.method || printJob.alignmentMethod || 'sensor' };
+      if (!connected()) throw new Error('Bluetooth disconnected before printing finished.');
+      if (paperOut) throw new Error('The MX10 reports that it ran out of paper while printing. Reload the roll before retrying.');
+      if (headHot) throw new Error(printerWarning);
+      return { height: raster.height, lengthMm: raster.height / PRINTER.dotsPerMm, paperMode, darkness, startFeedMm: paperMode === 'continuous' ? startFeedMm : 0, tearFeedMm: paperMode === 'continuous' ? tearFeedMm : 0, totalLengthMm: paperMode === 'continuous' ? startFeedMm + raster.height / PRINTER.dotsPerMm + tearFeedMm : null, labelGapMm: paperMode === 'continuous' ? 0 : Number(calibration.gap ?? 10), energy: profile.energy, density: profile.density, aligned: paperMode === 'gapped', alignmentMethod: alignment.method };
     } finally {
       if (printJob.timer) window.clearTimeout(printJob.timer);
       if (activePrintJob === printJob) activePrintJob = null;

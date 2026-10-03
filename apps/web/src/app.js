@@ -43,6 +43,8 @@ try {
 const pageLabels = { Inventory: 'Equipment', 'ESP32 terminal': 'ESP32 / Verification' };
 const pageRoutes = { Dashboard: '/', Inventory: '/equipment', Customers: '/customers', 'Rates & Fees': '/rates', Rentals: '/rentals', Returns: '/returns', 'Transaction History': '/transactions', Maintenance: '/maintenance', 'ESP32 terminal': '/verification', Reports: '/reports', Settings: '/settings', Profile: '/profile' };
 const routePages = Object.fromEntries(Object.entries(pageRoutes).map(([key, value]) => [value, key]));
+const workspacePages = new Set(['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings']);
+const dashboardSnapshot = value => value ? JSON.stringify(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'refreshedAt'))) : '';
 let user = null, data = null, page = routePages[location.pathname] || 'Dashboard', filter = 'All rentals', query = '', period = 'This week', category = '', connectionError = '', toastTimer, refreshing = false, rentalPage = 0, verificationPage = 0;
 let profileEditing = false;
 let theme = document.documentElement.dataset.theme || 'light';
@@ -113,8 +115,8 @@ function toast(message) {
   const el = document.querySelector('#toast'); el.textContent = message; el.classList.add('visible');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('visible'), 4000);
 }
-function goTo(next, replace = false, nextFilter = 'All rentals') {
-  page = next; profileEditing = false; category = ''; filter = nextFilter; query = ''; rentalPage = 0; verificationPage = 0;
+function goTo(next, replace = false, nextFilter = 'All rentals', nextCategory = '') {
+  page = next; profileEditing = false; category = nextCategory; filter = nextFilter; query = ''; rentalPage = 0; verificationPage = 0;
   const route = pageRoutes[next] || '/'; if (location.pathname !== route) history[replace ? 'replaceState' : 'pushState']({ page: next }, '', route);
   render(); window.scrollTo(0, 0);
 }
@@ -129,12 +131,38 @@ function notificationFingerprint() {
   if (!data) return '';
   return [...data.rentals.filter(r => r.displayStatus === 'Overdue').map(r => `r:${r.id}:${r.due_at}`), ...data.pending.map(r => `v:${r.id}:${r.requested_at}`)].sort().join('|');
 }
+function notificationRows() {
+  const overdue = data?.rentals.filter(r => r.displayStatus === 'Overdue') || [], pending = data?.pending || [];
+  return `${overdue.map(r => `<button type="button" data-notification-page="Rentals"><span class="notification-mark overdue-mark">!</span><span><strong>Overdue rental · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · Due ${escape(formatDate(r.due_at))}</small></span>${icon('arrow')}</button>`).join('')}${pending.map(r => `<button type="button" data-notification-page="ESP32 terminal"><span class="notification-mark pending-mark">•</span><span><strong>Verification waiting · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · ${escape(r.transaction_type)}</small></span>${icon('arrow')}</button>`).join('')}${!overdue.length && !pending.length ? '<div class="workspace-empty"><h3>You’re all caught up</h3><p>No overdue rentals or pending verifications.</p></div>' : ''}`;
+}
+function notificationsMenu(showDot) {
+  return `<div class="notification-menu"><button type="button" class="icon-button notification" id="notifications" aria-label="View notifications" aria-expanded="false" aria-controls="notification-dropdown">${icon('bell')}${showDot ? '<i></i>' : ''}</button><section class="notification-dropdown" id="notification-dropdown" aria-label="Notifications" hidden><header class="notification-dropdown-heading"><h2>Notifications</h2><span id="notification-count"></span></header><div class="notification-list"></div></section></div>`;
+}
+function closeNotifications(restoreFocus = false) {
+  const dropdown = document.querySelector('#notification-dropdown'), button = document.querySelector('#notifications');
+  if (dropdown) dropdown.hidden = true;
+  button?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) button?.focus();
+}
+function syncNotifications() {
+  const dropdown = document.querySelector('#notification-dropdown'), list = dropdown?.querySelector('.notification-list');
+  if (!list) return;
+  const snapshot = JSON.stringify([data?.rentals.filter(r => r.displayStatus === 'Overdue') || [], data?.pending || []]);
+  // Keep a focused notification in place until the user leaves it.
+  if (list.dataset.snapshot !== snapshot && !list.contains(document.activeElement)) {
+    list.innerHTML = notificationRows(); list.dataset.snapshot = snapshot;
+  }
+  const count = (data?.rentals.filter(r => r.displayStatus === 'Overdue').length || 0) + (data?.pending.length || 0);
+  dropdown.querySelector('#notification-count').textContent = count ? `${count} alert${count === 1 ? '' : 's'}` : 'All caught up';
+}
 function openNotifications() {
-  const overdue = data?.rentals.filter(r => r.displayStatus === 'Overdue') || [], pending = data?.pending || [], fingerprint = notificationFingerprint();
-  try { localStorage.setItem('rent-play-notifications-seen', fingerprint); } catch { }
+  const dropdown = document.querySelector('#notification-dropdown');
+  if (!dropdown) return;
+  if (!dropdown.hidden) { closeNotifications(); return; }
+  syncNotifications(); dropdown.hidden = false;
+  document.querySelector('#notifications').setAttribute('aria-expanded', 'true');
+  try { localStorage.setItem('rent-play-notifications-seen', notificationFingerprint()); } catch { }
   document.querySelector('.notification i')?.remove();
-  showModal('Notifications', `<div class="notification-list">${overdue.map(r => `<button data-notification-page="Rentals"><span class="notification-mark overdue-mark">!</span><span><strong>Overdue rental · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · Due ${escape(formatDate(r.due_at))}</small></span>${icon('arrow')}</button>`).join('')}${pending.map(r => `<button data-notification-page="ESP32 terminal"><span class="notification-mark pending-mark">•</span><span><strong>Verification waiting · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · ${escape(r.transaction_type)}</small></span>${icon('arrow')}</button>`).join('')}${!overdue.length && !pending.length ? '<div class="workspace-empty"><h3>You’re all caught up</h3><p>No overdue rentals or pending verifications.</p></div>' : ''}</div>`);
-  modal.querySelectorAll('[data-notification-page]').forEach(button => button.onclick = () => { modal.close(); goTo(button.dataset.notificationPage); });
 }
 modal.addEventListener('click', e => {
   if (e.target !== modal) return;
@@ -169,12 +197,52 @@ function login(message = '') {
 }
 async function refresh() {
   if (!user || refreshing) return;
+  const sessionUser = user;
   refreshing = true;
-  try { data = await api('/dashboard'); connectionError = ''; render(); }
+  try {
+    const nextData = await api('/dashboard'), changed = dashboardSnapshot(data) !== dashboardSnapshot(nextData);
+    if (user !== sessionUser) return;
+    data = nextData; connectionError = '';
+    // Decide after the request completes: navigation can happen while the dashboard is loading.
+    // If Equipment is now visible, keep its mounted UI and update just its data.
+    const preserveInventory = page === 'Inventory' && !!document.querySelector('#inventory-root');
+    if (preserveInventory) {
+      syncLiveWorkspaceChrome();
+      await inventoryController.refresh();
+      syncLiveWorkspaceChrome();
+    } else if (!document.querySelector('.workspace') || (changed && ['Dashboard', 'ESP32 terminal'].includes(page))) render();
+    else syncLiveWorkspaceChrome();
+  }
   catch (error) {
-    if (error.status === 401) { user = null; data = null; login('Your session ended. Please sign in again.'); }
-    else { connectionError = error.message; render(); }
+    if (error.status === 401) { user = null; data = null; inventoryController.reset(); workspaceUI.reset(); modal.close(); login('Your session ended. Please sign in again.'); }
+    else {
+      connectionError = error.message;
+      if (document.querySelector('.workspace')) syncLiveWorkspaceChrome();
+      else render();
+    }
   } finally { refreshing = false; }
+}
+function syncLiveWorkspaceChrome() {
+  const content = document.querySelector('.content');
+  if (!content) return;
+  let banner = content.querySelector('.connection-banner');
+  if (connectionError) {
+    if (!banner) { banner = document.createElement('div'); banner.className = 'connection-banner'; banner.setAttribute('role', 'alert'); content.prepend(banner); }
+    banner.textContent = `${connectionError}${data ? ' Showing the last successfully loaded records.' : ''}`;
+  } else banner?.remove();
+  const updated = content.querySelector('.content-footer span:last-child');
+  if (updated) updated.textContent = data ? `Updated ${new Intl.DateTimeFormat('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(data.refreshedAt))}` : 'Waiting for database';
+  const status = document.querySelector('.demo-status');
+  if (status) { status.querySelector('strong').textContent = connectionError ? 'Connection interrupted' : 'Connected workspace'; status.querySelector('small').textContent = data ? 'Cloud Firestore records' : 'Waiting for database'; }
+  const rentalCount = document.querySelector('.nav-count');
+  if (rentalCount) rentalCount.textContent = data?.stats.active ?? '–';
+  const notifications = document.querySelector('#notifications'), seen = (() => { try { return localStorage.getItem('rent-play-notifications-seen') || ''; } catch { return ''; } })();
+  if (notifications) {
+    const shouldShow = !!notificationFingerprint() && notificationFingerprint() !== seen, dot = notifications.querySelector('i');
+    if (shouldShow && !dot) notifications.insertAdjacentHTML('beforeend', '<i></i>');
+    else if (!shouldShow) dot?.remove();
+  }
+  syncNotifications();
 }
 const empty = (heading, message, glyph = 'box') => `<div class="empty-state">${icon(glyph)}<h3>${heading}</h3><p>${message}</p></div>`;
 function stat(label, value, note, glyph, color, page, target = '', filter = '') {
@@ -199,7 +267,16 @@ function dashboard() {
   return `<section class="hero"><div><span class="eyebrow">YOUR DAILY GAME PLAN</span><h2>More play. Less paperwork.</h2><p>A clear view of your rentals, so you can focus on the fun.</p><button class="primary" id="rental-workflow">${icon('arrow')} Rental workflow</button></div>${sportArt}</section><div class="stats">${stat('Active rentals', s.active, 'Confirmed rentals currently out', 'clock', 'blue', 'Rentals')}${stat('Available items', s.available, 'Ready for their next adventure', 'box', 'green', 'Inventory')}${stat('Due today', s.dueToday, `${s.overdue} overdue rental(s) need attention`, 'bell', 'amber', 'Dashboard', 'rental-panel', 'Due today')}${stat('Rental fees', money(s.fees), 'From current active rentals', 'money', 'purple', 'Rentals')}</div><div class="dashboard-grid"><div class="main-column">${rentalsTable()}${chart()}</div><aside class="right-column">${terminal()}<section class="panel category-panel"><h3>A little of everything</h3><p>Your equipment at a glance.</p>${data.categories.map((c, i) => `<button data-category="${i}"><span class="category-symbol">${symbol(c.name)}</span><span>${escape(c.name)}<small>${c.count} items in inventory</small></span>${icon('arrow')}</button>`).join('') || '<p>No categories recorded.</p>'}</section><div class="counter-tip"><span>✦</span><div><strong>A small counter tip</strong><p>Check item condition before confirming a return.</p></div></div></aside></div>`;
 }
 function inventory() {
-  return '<div id="inventory-root" aria-live="polite"><section class="panel"><p>Loading your inventory…</p></section></div>';
+  return `<div id="inventory-root" class="inv-loading-shell" aria-live="polite" aria-busy="true">
+    <div class="inv-loading-copy"><span class="inv-loading-spinner" aria-hidden="true"></span><div><strong>Loading your equipment</strong><small>Getting your collection and availability ready…</small></div></div>
+    <div class="inv-loading-stats" aria-hidden="true">${Array.from({length:4},()=>`<div class="panel inv-stat inv-skeleton-stat"><span class="inv-skeleton-block inv-skeleton-icon"></span><div><i class="inv-skeleton-block inv-skeleton-label"></i><i class="inv-skeleton-block inv-skeleton-value"></i></div></div>`).join('')}</div>
+    <section class="panel inv-collection inv-loading-collection" aria-hidden="true">
+      <div class="inv-loading-toolbar"><i class="inv-skeleton-block inv-skeleton-search"></i><div><i class="inv-skeleton-block inv-skeleton-button"></i><i class="inv-skeleton-block inv-skeleton-button short"></i><i class="inv-skeleton-block inv-skeleton-add"></i></div></div>
+      <div class="inv-loading-filters"><i class="inv-skeleton-block inv-skeleton-filter"></i><i class="inv-skeleton-block inv-skeleton-filter"></i><i class="inv-skeleton-block inv-skeleton-filter sort"></i><i class="inv-skeleton-block inv-skeleton-reset"></i><i class="inv-skeleton-block inv-skeleton-count"></i></div>
+      <div class="inv-loading-table"><div class="inv-loading-table-head"><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i></div>${Array.from({length:5},()=>`<div class="inv-loading-row"><div class="inv-loading-equipment"><i class="inv-skeleton-block inv-skeleton-thumb"></i><div><i class="inv-skeleton-block inv-skeleton-name"></i><i class="inv-skeleton-block inv-skeleton-code"></i></div></div><div><i class="inv-skeleton-block inv-skeleton-status"></i><i class="inv-skeleton-block inv-skeleton-condition"></i></div><i class="inv-skeleton-block inv-skeleton-price"></i><i class="inv-skeleton-block inv-skeleton-deposit"></i></div>`).join('')}</div>
+      <div class="inv-loading-footer"><i class="inv-skeleton-block"></i><div><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i></div></div>
+    </section>
+  </div>`;
 }
 function profile() {
   const details = profileEditing ? `<section class="panel profile-form-card"><span class="eyebrow">EDIT PROFILE</span><h2>Update your details</h2><p>Your name appears throughout the workspace. Your email is also your Firebase login.</p><form id="profile-form" class="profile-form"><label>Full name<input name="fullName" value="${escape(user.name)}" minlength="2" maxlength="150" autocomplete="name" required/></label><label>Login email<input name="email" type="email" value="${escape(user.email)}" maxlength="191" autocomplete="email" required/></label><label>Role<input value="${escape(user.role)}" disabled/><small>Account roles are managed separately for security.</small></label><p class="profile-error" role="alert"></p><div class="profile-actions"><button class="secondary" id="profile-cancel" type="button">Cancel</button><button class="primary" type="submit">Save changes</button></div></form></section>` : `<section class="panel profile-overview"><div class="profile-overview-heading"><button class="primary" id="profile-edit" type="button">Edit profile</button></div><dl class="profile-details"><div><dt>Full name</dt><dd>${escape(user.name)}</dd></div><div><dt>Login email</dt><dd>${escape(user.email)}</dd></div><div><dt>Account role</dt><dd>${escape(user.role)}</dd></div><div><dt>Account status</dt><dd><span class="profile-active">Active</span></dd></div></dl><div class="profile-note"><strong>Login details</strong><p>If you change the email address, use the new email the next time you sign in.</p></div></section>`;
@@ -211,8 +288,13 @@ function verification() {
 }
 function render() {
   if (!user) return;
-  const workspacePages = ['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings'];
-  const body = !data ? `<section class="panel">${empty('Waiting for your database', 'Check the backend connection, then select Refresh.')}</section>` : page === 'Dashboard' ? dashboard() : page === 'Inventory' ? inventory() : page === 'ESP32 terminal' ? verification() : page === 'Profile' ? profile() : workspacePages.includes(page) ? workspaceUI.render(page, user, appearanceSettings()) : `<section class="panel">${empty('Page unavailable', 'Choose another workspace section.')}</section>`;
+  const existingInventory = page === 'Inventory' ? document.querySelector('#inventory-root') : null;
+  const previousFocus = app.contains(document.activeElement) ? document.activeElement : null;
+  const focusId = previousFocus?.id || '';
+  const scrollX = window.scrollX, scrollY = window.scrollY, sidebarScroll = document.querySelector('.sidebar')?.scrollTop;
+  let selection = null;
+  try { if (previousFocus && typeof previousFocus.selectionStart === 'number') selection = [previousFocus.selectionStart, previousFocus.selectionEnd]; } catch { }
+  const body = !data ? `<section class="panel">${empty('Waiting for your database', 'Check the backend connection, then select Refresh.')}</section>` : page === 'Dashboard' ? dashboard() : page === 'Inventory' ? inventory() : page === 'ESP32 terminal' ? verification() : page === 'Profile' ? profile() : workspacePages.has(page) ? workspaceUI.render(page, user, appearanceSettings()) : `<section class="panel">${empty('Page unavailable', 'Choose another workspace section.')}</section>`;
   const groupedNav = navGroups.map(group => {
     const expanded = navGroupExpanded[group.id];
     return `<section class="nav-section"><button type="button" id="nav-group-toggle-${group.id}" class="nav-section-title" data-nav-group="${group.id}" aria-expanded="${expanded}" aria-controls="nav-group-${group.id}"><span class="nav-emoji" aria-hidden="true">${group.emoji}</span><span class="sidebar-label">${group.label}</span><span class="nav-group-chevron">${icon('chevron')}</span></button><div class="nav-section-items" id="nav-group-${group.id}" ${expanded ? '' : 'hidden'}>${group.items.map(([label, target]) => `<button data-page="${target}" class="nav-child ${page === target ? 'active' : ''}"><span class="sidebar-label">${label}</span>${target === 'Rentals' ? `<span class="nav-count">${data?.stats.active ?? '–'}</span>` : ''}</button>`).join('')}</div></section>`;
@@ -220,7 +302,8 @@ function render() {
   const displayPage = pageLabels[page] || page;
   let notificationsSeen = ''; try { notificationsSeen = localStorage.getItem('rent-play-notifications-seen') || ''; } catch { }
   const showNotificationDot = !!notificationFingerprint() && notificationFingerprint() !== notificationsSeen;
-  app.innerHTML = `<div class="workspace"><aside class="sidebar"><a class="brand" href="#">${brand}</a><div class="store"><span class="store-icon">${icon('box')}</span><div><strong>Rent & Play</strong><small>Los Baños, Laguna</small></div></div><nav><button data-page="Dashboard" class="nav-root ${page === 'Dashboard' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">🏠</span><span class="sidebar-label">Dashboard</span></button>${groupedNav}<button data-page="Reports" class="nav-root ${page === 'Reports' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">📊</span><span class="sidebar-label">Reports</span></button></nav><div class="sidebar-bottom"><button data-page="Settings"><span class="nav-emoji" aria-hidden="true">⚙️</span> Settings</button><button id="logout"><span class="nav-emoji" aria-hidden="true">🚪</span> Logout</button><div class="demo-status"><span></span><div><strong>${connectionError ? 'Connection interrupted' : 'Connected workspace'}</strong><small>${data ? 'Cloud Firestore records' : 'Waiting for database'}</small></div></div><div class="operator"><span class="avatar">${escape(initials(user.name))}</span><div><strong>${escape(user.name)}</strong><small>${escape(user.role)}</small></div></div></div></aside><div class="workspace-body"><header class="topbar"><button class="icon-button menu-toggle" id="mobile-menu" aria-label="Toggle navigation">${icon('menu')}</button><div class="breadcrumb"><h1 class="breadcrumb-current">${escape(displayPage)}</h1></div><div class="top-actions"><button class="text-button" id="refresh">Refresh</button><button class="icon-button notification" id="notifications" aria-label="View notifications">${icon('bell')}${showNotificationDot ? '<i></i>' : ''}</button><div class="profile-menu"><button class="profile-menu-toggle" id="profile-menu-toggle" type="button" aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false"><span class="avatar small">${escape(initials(user.name))}</span><span class="profile-menu-chevron" aria-hidden="true">▾</span></button><div class="profile-dropdown" id="profile-dropdown" role="menu" hidden><div class="profile-dropdown-user"><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></div><button data-page="Profile" role="menuitem">${icon('users')} View profile</button><button data-page="Settings" role="menuitem">${icon('settings')} Settings</button><button data-action="logout" class="profile-dropdown-logout" role="menuitem">${icon('out')} Logout</button></div></div></div></header><main class="content">${connectionError ? `<div class="connection-banner" role="alert">${escape(connectionError)}${data ? ' Showing the last successfully loaded records.' : ''}</div>` : ''}${body}<footer class="content-footer"><span>© ${new Date().getFullYear()} Rent & Play</span><span>${data ? `Updated ${new Intl.DateTimeFormat('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(data.refreshedAt))}` : 'Waiting for database'}</span></footer></main></div></div>`;
+  app.innerHTML = `<div class="workspace"><aside class="sidebar"><a class="brand" href="#">${brand}</a><div class="store"><span class="store-icon">${icon('box')}</span><div><strong>Rent & Play</strong><small>Los Baños, Laguna</small></div></div><nav><button data-page="Dashboard" class="nav-root ${page === 'Dashboard' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">🏠</span><span class="sidebar-label">Dashboard</span></button>${groupedNav}<button data-page="Reports" class="nav-root ${page === 'Reports' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">📊</span><span class="sidebar-label">Reports</span></button></nav><div class="sidebar-bottom"><button data-page="Settings"><span class="nav-emoji" aria-hidden="true">⚙️</span> Settings</button><button id="logout"><span class="nav-emoji" aria-hidden="true">🚪</span> Logout</button><div class="demo-status"><span></span><div><strong>${connectionError ? 'Connection interrupted' : 'Connected workspace'}</strong><small>${data ? 'Cloud Firestore records' : 'Waiting for database'}</small></div></div><div class="operator"><span class="avatar">${escape(initials(user.name))}</span><div><strong>${escape(user.name)}</strong><small>${escape(user.role)}</small></div></div></div></aside><div class="workspace-body"><header class="topbar"><button class="icon-button menu-toggle" id="mobile-menu" aria-label="Toggle navigation">${icon('menu')}</button><div class="breadcrumb"><h1 class="breadcrumb-current">${escape(displayPage)}</h1></div><div class="top-actions"><button class="text-button" id="refresh">Refresh</button>${notificationsMenu(showNotificationDot)}<div class="profile-menu"><button class="profile-menu-toggle" id="profile-menu-toggle" type="button" aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false"><span class="avatar small">${escape(initials(user.name))}</span><span class="profile-menu-chevron" aria-hidden="true">▾</span></button><div class="profile-dropdown" id="profile-dropdown" role="menu" hidden><div class="profile-dropdown-user"><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></div><button data-page="Profile" role="menuitem">${icon('users')} View profile</button><button data-page="Settings" role="menuitem">${icon('settings')} Settings</button><button data-action="logout" class="profile-dropdown-logout" role="menuitem">${icon('out')} Logout</button></div></div></div></header><main class="content">${connectionError ? `<div class="connection-banner" role="alert">${escape(connectionError)}${data ? ' Showing the last successfully loaded records.' : ''}</div>` : ''}${body}<footer class="content-footer"><span>© ${new Date().getFullYear()} Rent & Play</span><span>${data ? `Updated ${new Intl.DateTimeFormat('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(data.refreshedAt))}` : 'Waiting for database'}</span></footer></main></div></div>`;
+  if (existingInventory) document.querySelector('#inventory-root')?.replaceWith(existingInventory);
   const business = workspaceUI.business();
   if (business.business_name) document.querySelector('.store strong').textContent = business.business_name;
   if (business.location) document.querySelector('.store small').textContent = business.location;
@@ -228,6 +311,13 @@ function render() {
   if (operatorCard) { operatorCard.dataset.page = 'Profile'; operatorCard.tabIndex = 0; operatorCard.setAttribute('role', 'button'); operatorCard.setAttribute('aria-label', 'Open profile'); }
   const helpPanel = document.querySelector('.help-panel');
   bind(); updateThemeControls();
+  const restoredFocus = focusId ? document.getElementById(focusId) : null;
+  if (restoredFocus && app.contains(restoredFocus)) {
+    restoredFocus.focus({ preventScroll: true });
+    if (selection && restoredFocus.setSelectionRange) restoredFocus.setSelectionRange(...selection);
+  }
+  if (sidebarScroll !== undefined) { const sidebar = document.querySelector('.sidebar'); if (sidebar) sidebar.scrollTop = sidebarScroll; }
+  if (window.scrollX !== scrollX || window.scrollY !== scrollY) window.scrollTo(scrollX, scrollY);
 }
 function bind() {
   if (page === 'Inventory' && data) inventoryController.mount(document.querySelector('#inventory-root'), category);
@@ -243,22 +333,38 @@ function bind() {
     const nextSidebar = document.querySelector('.sidebar'); if (nextSidebar) nextSidebar.scrollTop = scrollTop;
     document.getElementById(`nav-group-toggle-${id}`)?.focus();
   });
-  document.querySelectorAll('[data-category]').forEach(el => el.onclick = () => { category = data.categories[Number(el.dataset.category)].name; goTo('Inventory'); });
-  document.querySelector('#refresh').onclick = async () => { await refresh(); if (['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings'].includes(page)) { await workspaceUI.refresh(); render(); } };
+  document.querySelectorAll('[data-category]').forEach(el => el.onclick = () => { goTo('Inventory', false, 'All rentals', data.categories[Number(el.dataset.category)].name); });
+  document.querySelector('#refresh').onclick = async () => {
+    await refresh();
+    const refreshedPage = page;
+    if (workspacePages.has(refreshedPage) && await workspaceUI.refresh() && page === refreshedPage && user && !modal.open) render();
+  };
   const accountMenu = document.querySelector('.profile-menu'), accountToggle = document.querySelector('#profile-menu-toggle'), accountDropdown = document.querySelector('#profile-dropdown');
   const closeAccountMenu = () => { accountDropdown.hidden = true; accountToggle.setAttribute('aria-expanded', 'false'); };
-  accountToggle.onclick = event => { event.stopPropagation(); const opening = accountDropdown.hidden; accountDropdown.hidden = !opening; accountToggle.setAttribute('aria-expanded', String(opening)); if (opening) accountDropdown.querySelector('[role="menuitem"]')?.focus(); };
+  accountToggle.onclick = event => { event.stopPropagation(); closeNotifications(); const opening = accountDropdown.hidden; accountDropdown.hidden = !opening; accountToggle.setAttribute('aria-expanded', String(opening)); if (opening) accountDropdown.querySelector('[role="menuitem"]')?.focus(); };
   accountMenu.onclick = event => event.stopPropagation();
-  document.onclick = closeAccountMenu;
+  document.onclick = () => { closeAccountMenu(); closeNotifications(); };
   accountMenu.onkeydown = event => { if (event.key === 'Escape') { closeAccountMenu(); accountToggle.focus(); } };
   const logout = async () => {
-    try { await api('/auth/logout', { method: 'POST' }); user = null; data = null; connectionError = ''; workspaceUI.reset(); history.replaceState({}, '', pageRoutes.Dashboard); modal.close(); login(); }
+    try { await api('/auth/logout', { method: 'POST' }); user = null; data = null; connectionError = ''; inventoryController.reset(); workspaceUI.reset(); history.replaceState({}, '', pageRoutes.Dashboard); modal.close(); login(); }
     catch (error) { toast(error.message); }
   };
   document.querySelector('#logout').onclick = logout;
   document.querySelector('[data-action="logout"]').onclick = logout;
   configureSidebar();
-  document.querySelector('#notifications').onclick = openNotifications;
+  const notificationMenu = document.querySelector('.notification-menu'), notificationDropdown = document.querySelector('#notification-dropdown');
+  notificationMenu.onclick = event => {
+    event.stopPropagation();
+    const target = event.target.closest('[data-notification-page]');
+    if (target) { closeNotifications(); goTo(target.dataset.notificationPage); }
+  };
+  document.querySelector('#notifications').onclick = () => { closeAccountMenu(); openNotifications(); };
+  notificationMenu.onkeydown = event => {
+    if (event.key === 'Escape') { event.preventDefault(); closeNotifications(true); }
+    if (event.key === 'ArrowDown' && event.target.id === 'notifications') { event.preventDefault(); if (notificationDropdown.hidden) openNotifications(); notificationDropdown.querySelector('button')?.focus(); }
+  };
+  notificationMenu.onfocusout = event => { if (!notificationMenu.contains(event.relatedTarget)) { closeNotifications(); syncNotifications(); } };
+  syncNotifications();
   document.querySelectorAll('[data-filter]').forEach(el => el.onclick = () => { filter = el.dataset.filter; rentalPage = 0; render(); });
   const search = document.querySelector('#rental-search');
   if (search) search.oninput = e => { const pos = e.target.selectionStart; query = e.target.value; rentalPage = 0; render(); const next = document.querySelector('#rental-search'); next.focus(); next.setSelectionRange(pos, pos); };
@@ -280,7 +386,8 @@ function bind() {
     try { const values = Object.fromEntries(new FormData(profileForm)); const result = await api('/profile', { method: 'PATCH', body: JSON.stringify(values) }); user = result.user; profileEditing = false; render(); toast('Profile updated.'); }
     catch (problem) { error.textContent = problem.message; button.disabled = false; }
   };
-  workspaceUI.bind(page, user, render);
+  const boundPage = page;
+  workspaceUI.bind(page, user, () => { if (user && page === boundPage) render(); });
 }
 function exportCsv() {
   const cell = value => { const v = String(value ?? ''); return '"' + (/^[=+@\-\t\r]/.test(v) ? "'" + v : v).replaceAll('"', '""') + '"'; };
@@ -301,8 +408,17 @@ async function boot() {
     }
   }
 }
-const inventoryController = createInventory({ api, escape, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, refresh });
+const inventoryController = createInventory({ api, escape, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast });
 const workspaceUI = createWorkspaceUI({ api, escape, icon, showModal, modal, toast, money, formatDate });
 window.addEventListener('popstate', () => { page = routePages[location.pathname] || 'Dashboard'; if (user) render(); });
-setInterval(async () => { if (user && workspaceUI.autoRefreshEnabled() && page !== 'Settings' && !modal.open && document.visibilityState === 'visible' && !document.querySelector('#rental-search:focus,#inv-search:focus,#module-search:focus,.admin-form input:focus,.admin-form textarea:focus,.admin-form select:focus,.analytics-filters input:focus,.analytics-filters select:focus,#analytics-sort:focus,.sidebar.open')) { try { await refresh(); if (['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports'].includes(page)) { await workspaceUI.refresh(); render(); } } catch (problem) { toast(problem.message); } } }, 30000);
+setInterval(async () => {
+  if (!user || !workspaceUI.autoRefreshEnabled() || page === 'Settings' || document.visibilityState !== 'visible') return;
+  if (page !== 'Inventory' && modal.open) return;
+  if (document.querySelector('#rental-search:focus,#module-search:focus,.admin-form input:focus,.admin-form textarea:focus,.admin-form select:focus,.analytics-filters input:focus,.analytics-filters select:focus,#analytics-sort:focus,.sidebar.open,#profile-dropdown:not([hidden]),#notification-dropdown:not([hidden])')) return;
+  try {
+    await refresh();
+    const refreshedPage = page;
+    if (workspacePages.has(refreshedPage) && refreshedPage !== 'Settings' && await workspaceUI.refresh() && page === refreshedPage && user && !modal.open) render();
+  } catch (problem) { toast(problem.message); }
+}, 30000);
 boot();

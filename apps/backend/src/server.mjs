@@ -5,7 +5,7 @@ import nodePath from 'node:path';
 import { FirebaseSessions, publicUser } from './auth.mjs';
 import { firebaseAuth, firestore, requireFirebaseConfig } from './firebase.mjs';
 import { loadDashboard } from './dashboard.mjs';
-import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, itemAction } from './inventory.mjs';
+import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
 import { updateProfile } from './profile.mjs';
 import { loadWorkspace, createCustomer, updateCustomer, saveRate, savePricing, saveSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
@@ -38,7 +38,7 @@ const defaultServices = {
   updateProfile: (id, input) => updateProfile(firebaseAuth, firestore, id, input),
   dashboard: () => loadDashboard(firestore),
   inventoryList: () => inventoryList(firestore), inventoryDetail: id => inventoryDetail(firestore, id), inventoryQr: id => inventoryQr(firestore, id), inventoryQrLabels: () => inventoryQrLabels(firestore),
-  createItem: (actor, input) => createItem(firestore, actor, input), updateItem: (actor, id, input) => updateItem(firestore, actor, id, input), itemAction: (actor, id, input) => itemAction(firestore, actor, id, input),
+  createItem: (actor, input) => createItem(firestore, actor, input), updateItem: (actor, id, input) => updateItem(firestore, actor, id, input), itemAction: (actor, id, input) => itemAction(firestore, actor, id, input), createItemCategory: (actor, input) => createItemCategory(firestore, actor, input), deleteItemCategory: (actor, id) => deleteItemCategory(firestore, actor, id), deleteArchivedItem: (actor, id, input) => deleteArchivedItem(firestore, actor, id, input),
   workspace: role => loadWorkspace(firestore, role), pricing: () => loadPricing(firestore, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
   pricingQuote: async input => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('Rental quote details are required.'), { status: 400 });
@@ -65,9 +65,9 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
   const origins = new Set([process.env.WEB_ORIGIN || 'http://127.0.0.1:5173', 'http://localhost:5173']);
   function send(res, status, value, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers }); res.end(JSON.stringify(value)); }
   function cookie(value, seconds, persistent = false) { return `rent_play_session=${value}; HttpOnly; SameSite=Strict; Path=/${persistent ? `; Max-Age=${seconds}` : ''}${process.env.COOKIE_SECURE === 'true' ? '; Secure' : ''}`; }
-  async function body(req) {
+  async function body(req, maxBytes = 8192) {
     if (!(req.headers['content-type'] || '').startsWith('application/json')) throw Object.assign(new Error('JSON body required.'), { status: 415 });
-    let value = ''; for await (const chunk of req) { value += chunk; if (Buffer.byteLength(value) > 8192) throw Object.assign(new Error('Request is too large.'), { status: 413 }); }
+    let value = ''; for await (const chunk of req) { value += chunk; if (Buffer.byteLength(value) > maxBytes) throw Object.assign(new Error('Request is too large.'), { status: 413 }); }
     try { return JSON.parse(value); } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
   }
   return http.createServer(async (req, res) => {
@@ -105,14 +105,16 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
       const inventoryRoute = path.match(/^\/api\/inventory(?:\/([A-Za-z0-9_-]{1,128})(?:\/(qr|actions))?)?$/);
       const inventoryQrLabelsRoute = path === '/api/inventory/qr-labels';
+      const itemCategoriesRoute = path.match(/^\/api\/item-categories(?:\/([A-Za-z0-9_-]{1,128}))?$/);
       const customerRoute = path.match(/^\/api\/customers(?:\/([A-Za-z0-9_-]{1,128}))?$/), userRoute = path.match(/^\/api\/users(?:\/([A-Za-z0-9_-]{1,128}))?$/);
-      const workspaceRoute = path === '/api/workspace' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || customerRoute || userRoute;
+      const workspaceRoute = path === '/api/workspace' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || customerRoute || userRoute || itemCategoriesRoute;
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || inventoryQrLabelsRoute || workspaceRoute) {
         const claims = await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
         const user = await services.getUser(claims.uid); if (!user?.is_active || user.role !== 'ADMIN') return send(res, 401, { error: 'Please sign in.' });
         if (path === '/api/auth/me') return send(res, 200, { user: publicUser(user) });
         if (path === '/api/profile') return send(res, 200, { user: publicUser(await services.updateProfile(user.id, await body(req))) });
         if (path === '/api/workspace' && req.method === 'GET') return send(res, 200, await services.workspace(user.role));
+        if (itemCategoriesRoute) { const [, id] = itemCategoriesRoute; if (req.method === 'POST' && !id) return send(res, 201, { category: await services.createItemCategory(user.id, await body(req)) }); if (req.method === 'DELETE' && id) return send(res, 200, { category: await services.deleteItemCategory(user.id, id) }); return send(res, 405, { error: 'Method not allowed.' }); }
         if (inventoryQrLabelsRoute && req.method === 'GET') return send(res, 200, await services.inventoryQrLabels());
         if (path === '/api/pricing' && req.method === 'GET') return send(res, 200, await services.pricing());
         if (path === '/api/pricing' && req.method === 'PUT') return send(res, 200, { pricing: await services.savePricing(user.id, await body(req)) });
@@ -126,8 +128,9 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
           if (req.method === 'GET' && !id) return send(res, 200, await services.inventoryList());
           if (req.method === 'GET' && id && action === 'qr') return send(res, 200, await services.inventoryQr(id));
           if (req.method === 'GET' && id && !action) return send(res, 200, await services.inventoryDetail(id));
-          if (req.method === 'POST' && !id) return send(res, 201, await services.createItem(user.id, await body(req)));
-          if (req.method === 'PATCH' && id && !action) return send(res, 200, await services.updateItem(user.id, id, await body(req)));
+          if (req.method === 'POST' && !id) return send(res, 201, await services.createItem(user.id, await body(req, 300000)));
+          if (req.method === 'PATCH' && id && !action) return send(res, 200, await services.updateItem(user.id, id, await body(req, 300000)));
+          if (req.method === 'DELETE' && id && !action) return send(res, 200, await services.deleteArchivedItem(user.id, id, await body(req)));
           if (req.method === 'POST' && id && action === 'actions') return send(res, 200, await services.itemAction(user.id, id, await body(req)));
           return send(res, 405, { error: 'Method not allowed.' });
         }

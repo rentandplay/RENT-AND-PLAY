@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import QRCode from 'qrcode';
 import {asDate,dateFields,docData,localDateTime} from './firebase.mjs';
 import {DEFAULT_PRICING} from './pricing.mjs';
@@ -11,6 +11,18 @@ const dateKeys=['created_at','updated_at','effective_from','effective_to','chang
 const serialize=record=>dateFields(record,dateKeys);
 const rows=snapshot=>snapshot.docs.map(docData);
 const newest=(records,key)=>records.sort((a,b)=>(asDate(b[key])?.getTime()||0)-(asDate(a[key])?.getTime()||0));
+function validateImageData(value) {
+  if(value===undefined)return undefined;
+  if(value===null||value==='')return null;
+  if(typeof value!=='string'||value.length>250000)fail(400,'Equipment image is too large. Choose a smaller JPG, PNG, or WebP photo.');
+  const match=value.match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/);
+  if(!match)fail(400,'Choose a valid JPG, PNG, or WebP image.');
+  const bytes=Buffer.from(match[2],'base64');
+  if(bytes.toString('base64')!==match[2])fail(400,'Choose a valid JPG, PNG, or WebP image.');
+  const valid=match[1]==='png'?bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):match[1]==='jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP';
+  if(!valid)fail(400,'The selected image does not match its file type. Choose a JPG, PNG, or WebP photo.');
+  return value;
+}
 
 export function validateItem(input,{codeRequired=true}={}) {
   if(!input||typeof input!=='object')fail(400,'Equipment details are required.');
@@ -25,7 +37,7 @@ export function validateItem(input,{codeRequired=true}={}) {
   const pricingProductId=input.pricingProductId==null||input.pricingProductId===''?null:String(input.pricingProductId);
   if(pricingProductId&&!/^[a-z0-9-]{1,80}$/.test(pricingProductId))fail(400,'Choose a valid client rate sheet product.');
   if(pricingProductId&&!DEFAULT_PRICING.products.some(product=>product.id===pricingProductId))fail(400,'Choose a product from the client rate sheet.');
-  return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,rateType:input.rateType,rentalRate:amount(input.rentalRate,'Rental rate'),deposit:amount(input.deposit,'Deposit'),latePenalty:amount(input.latePenalty,'Late penalty'),pricingProductId};
+  return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,rateType:input.rateType,rentalRate:amount(input.rentalRate,'Rental rate'),deposit:amount(input.deposit,'Deposit'),latePenalty:amount(input.latePenalty,'Late penalty'),pricingProductId,imageData:validateImageData(input.imageData)};
 }
 export function itemCodePrefix(categoryName) {
   const words=String(categoryName||'').toUpperCase().match(/[A-Z0-9]+/g)||[];
@@ -50,6 +62,45 @@ export async function inventoryList(db) {
   const items=rows(itemSnap),categories=rows(categorySnap),rates=rows(rateSnap),rentals=rows(rentalSnap),maintenance=rows(maintenanceSnap);
   const byId=new Map(categories.map(category=>[category.id,category]));
   return {items:items.map(item=>mapItem(item,byId.get(String(item.category_id)),rates.filter(r=>String(r.item_id)===item.id),rentals.filter(r=>String(r.item_id)===item.id),maintenance.filter(r=>String(r.item_id)===item.id))).sort((a,b)=>a.name.localeCompare(b.name)),categories:categories.sort((a,b)=>a.name.localeCompare(b.name))};
+}
+
+const categoryKey=name=>String(name||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('en-US');
+export async function createItemCategory(db,actor,input) {
+  if(!input||typeof input!=='object'||typeof input.name!=='string')fail(400,'Category name is required.');
+  const name=input.name.trim().normalize('NFKC').replace(/\s+/g,' ');
+  if(!name||name.length>60)fail(400,'Category name is required (maximum 60 characters).');
+  if(!/^[\p{L}\p{N}](?:[\p{L}\p{N} &'’()./-]*[\p{L}\p{N}])?$/u.test(name))fail(400,'Use letters, numbers, spaces, or simple punctuation for the category name.');
+  const normalized=categoryKey(name),existing=await db.collection('item_categories').get();
+  if(existing.docs.some(doc=>categoryKey(doc.data().name||'')===normalized))fail(409,'A category with this name already exists.');
+  const id='category_'+createHash('sha256').update(normalized).digest('hex').slice(0,32);
+  const categoryRef=db.collection('item_categories').doc(id),auditRef=db.collection('audit_logs').doc();
+  await db.runTransaction(async tx=>{
+    const current=await tx.get(categoryRef);
+    if(current.exists)fail(409,'A category with this name already exists.');
+    const now=new Date();
+    tx.create(categoryRef,{name,created_at:now,created_by:String(actor)});
+    tx.create(auditRef,{user_id:String(actor),actor_type:'USER',action:'ITEM_CATEGORY_CREATED',entity_type:'ITEM_CATEGORY',entity_id:id,old_values:null,new_values:{name},created_at:now});
+  });
+  return {id,name};
+}
+
+export async function deleteItemCategory(db,actor,id) {
+  id=idValue(id);
+  const categoryRef=db.collection('item_categories').doc(id),auditRef=db.collection('audit_logs').doc();
+  await db.runTransaction(async tx=>{
+    const [categoryDoc,itemSnapshot,categorySnapshot]=await Promise.all([
+      tx.get(categoryRef),
+      tx.get(db.collection('items').where('category_id','==',id)),
+      tx.get(db.collection('item_categories'))
+    ]);
+    if(!categoryDoc.exists)fail(404,'Category not found. Refresh and try again.');
+    if(categorySnapshot.size<=1)fail(409,'Keep at least one equipment category. Add another category before removing this one.');
+    if(!itemSnapshot.empty)fail(409,`Cannot remove this category while ${itemSnapshot.size} equipment item${itemSnapshot.size===1?'':'s'} use it. Move them to another category first.`);
+    const category=categoryDoc.data(),now=new Date();
+    tx.delete(categoryRef);
+    tx.create(auditRef,{user_id:String(actor),actor_type:'USER',action:'ITEM_CATEGORY_DELETED',entity_type:'ITEM_CATEGORY',entity_id:id,old_values:{name:category.name},new_values:{deleted:true},created_at:now});
+  });
+  return {id,deleted:true};
 }
 
 async function itemParts(db,id) {
@@ -112,9 +163,9 @@ export async function createItem(db,actor,input) {
     const now=new Date(),id=itemRef.id;
     tx.create(codeRef,{item_id:id,created_at:now});
     tx.set(counterRef,{next_sequence:chosen.sequence+1,updated_at:now},{merge:true});
-    tx.create(itemRef,{item_code:generatedCode,category_id:item.categoryId,name:item.name,description:item.description,pricing_product_id:item.pricingProductId,qr_token:'RENTPLAY:'+randomUUID(),condition_status:item.condition,status:'AVAILABLE',is_active:true,created_at:now,updated_at:now});
+    tx.create(itemRef,{item_code:generatedCode,category_id:item.categoryId,name:item.name,description:item.description,pricing_product_id:item.pricingProductId,...(item.imageData?{image_data:item.imageData}:{}),qr_token:'RENTPLAY:'+randomUUID(),condition_status:item.condition,status:'AVAILABLE',is_active:true,created_at:now,updated_at:now});
     tx.create(rateRef,rateRecord(actor,id,item,now));
-    const history=statusRecord(db,actor,id,null,'AVAILABLE','CREATED',now),log=audit(db,actor,id,'ITEM_CREATED',null,{...item,code:generatedCode},now);
+    const {imageData,...auditItem}=item,history=statusRecord(db,actor,id,null,'AVAILABLE','CREATED',now),log=audit(db,actor,id,'ITEM_CREATED',null,{...auditItem,code:generatedCode,imageAdded:!!imageData},now);
     tx.create(history.ref,history.data);tx.create(log.ref,log.data);
   });
   return {id:itemRef.id,code:generatedCode};
@@ -137,8 +188,11 @@ export async function updateItem(db,actor,id,input) {
     const now=new Date(),rate=currentRate(rows(ratesSnap));
     const rateChanged=!rate||rate.rate_type!==next.rateType||Number(rate.rental_rate)!==next.rentalRate||Number(rate.deposit_amount)!==next.deposit||Number(rate.late_penalty_rate)!==next.latePenalty;
     if(rateChanged){for(const old of rows(ratesSnap).filter(r=>r.is_active!==false))tx.update(db.collection('item_rates').doc(old.id),{is_active:false,effective_to:now});tx.create(db.collection('item_rates').doc(),rateRecord(actor,id,next,now));}
-    tx.update(itemRef,{category_id:next.categoryId,name:next.name,description:next.description,pricing_product_id:next.pricingProductId,condition_status:next.condition,updated_at:now});
-    const log=audit(db,actor,id,'ITEM_UPDATED',current,{...next,code:current.item_code,rateChanged},now);tx.create(log.ref,log.data);
+    const changes={category_id:next.categoryId,name:next.name,description:next.description,pricing_product_id:next.pricingProductId,condition_status:next.condition,updated_at:now};
+    if(next.imageData!==undefined)changes.image_data=next.imageData;
+    tx.update(itemRef,changes);
+    const {image_data:currentImage,...auditCurrent}=current,{imageData,...auditNext}=next,imageChanged=imageData!==undefined&&(imageData||null)!==(currentImage||null);
+    const log=audit(db,actor,id,'ITEM_UPDATED',auditCurrent,{...auditNext,code:current.item_code,rateChanged,imageChanged},now);tx.create(log.ref,log.data);
   });
   return {id};
 }
@@ -169,8 +223,29 @@ export async function itemAction(db,actor,id,input) {
     if(input.action==='archive'){if(!active)fail(409,'Equipment is already archived.');if(status==='UNDER_MAINTENANCE'||maintenance.length)fail(409,'Complete maintenance before archiving equipment.');active=false;status='INACTIVE';}
     if(input.action==='restore'){if(active)fail(409,'Equipment is already active.');if(maintenance.length||!['GOOD','FAIR'].includes(condition))fail(409,'Equipment needs inspection before it can be restored.');active=true;status='AVAILABLE';}
     tx.update(itemRef,{status,is_active:active,condition_status:condition,updated_at:now});
-    const history=statusRecord(db,actor,id,item.status,status,input.action.toUpperCase(),now),log=audit(db,actor,id,'ITEM_'+input.action.replaceAll('-','_').toUpperCase(),item,{status,is_active:active,condition_status:condition,reason:input.reason||null},now);
+    const {image_data,...auditItem}=item,history=statusRecord(db,actor,id,item.status,status,input.action.toUpperCase(),now),log=audit(db,actor,id,'ITEM_'+input.action.replaceAll('-','_').toUpperCase(),auditItem,{status,is_active:active,condition_status:condition,reason:input.reason||null},now);
     if(history)tx.create(history.ref,history.data);tx.create(log.ref,log.data);
   });
   return {id};
+}
+
+export async function deleteArchivedItem(db,actor,id,input) {
+  id=idValue(id);
+  if(!input||typeof input.version!=='string'||!input.version)fail(400,'Refresh the equipment details before deleting this item.');
+  const itemRef=db.collection('items').doc(id);
+  await db.runTransaction(async tx=>{
+    const itemDoc=await tx.get(itemRef);
+    if(!itemDoc.exists)fail(404,'Equipment not found.');
+    const item={id,...itemDoc.data()};
+    const [rentalsSnap,maintenanceSnap]=await Promise.all([tx.get(db.collection('rentals').where('item_id','==',id)),tx.get(db.collection('maintenance_records').where('item_id','==',id))]);
+    if(input.version!==localDateTime(item.updated_at))fail(409,'This equipment changed since you opened it. Refresh and try again.');
+    if(item.is_active!==false)fail(409,'Archive this equipment before permanently deleting it.');
+    if(openRentals(rows(rentalsSnap)).length)fail(409,'Equipment with an active or pending rental cannot be deleted.');
+    if(openMaintenance(rows(maintenanceSnap)).length)fail(409,'Complete maintenance before deleting this equipment.');
+    const auditRef=db.collection('audit_logs').doc(),now=new Date();
+    tx.delete(itemRef);
+    const {image_data,...auditItem}=item;
+    tx.create(auditRef,{user_id:String(actor),actor_type:'USER',action:'ITEM_DELETED',entity_type:'ITEM',entity_id:id,old_values:auditItem,new_values:{deleted:true,item_code:item.item_code,name:item.name},created_at:now});
+  });
+  return {id,deleted:true};
 }

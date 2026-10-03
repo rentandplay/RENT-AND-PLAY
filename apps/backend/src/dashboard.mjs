@@ -38,8 +38,9 @@ export async function loadDashboard(db,now=new Date()) {
   const open=source.rentals.filter(rental=>['PENDING_VERIFICATION','ACTIVE'].includes(rental.status)).sort((a,b)=>asDate(a.due_at)-asDate(b.due_at));
   const reserved=new Set(open.filter(rental=>rental.status==='PENDING_VERIFICATION').map(rental=>String(rental.item_id)));
   const items=source.items.filter(item=>item.is_active!==false).map(item=>{
+    const {image_data,...itemFields}=item;
     const rate=currentRate(item.id)||{};
-    return {...item,category:categoriesById.get(String(item.category_id))?.name||'Uncategorized',rental_rate:rate.rental_rate??null,rate_type:rate.rate_type??null,status:item.status==='AVAILABLE'&&reserved.has(item.id)?'RESERVED_PENDING':item.status};
+    return {...itemFields,category:categoriesById.get(String(item.category_id))?.name||'Uncategorized',rental_rate:rate.rental_rate??null,rate_type:rate.rate_type??null,status:item.status==='AVAILABLE'&&reserved.has(item.id)?'RESERVED_PENDING':item.status};
   }).sort((a,b)=>a.name.localeCompare(b.name));
   const rentals=open.map(rental=>{
     const item=itemsById.get(String(rental.item_id))||{};
@@ -60,7 +61,7 @@ export async function loadDashboard(db,now=new Date()) {
   return {
     items:items.map(serialize),customers:source.customers.filter(c=>c.is_active!==false).sort((a,b)=>a.full_name.localeCompare(b.full_name)).map(serialize),categories,
     rentals:rentals.map(serialize),pending:pending.map(serialize),terminals:terminals.map(serialize),revenue:revenueWeeks(source.rentals,now),
-    stats:{active:active.length,available:items.filter(item=>item.status==='AVAILABLE'&&!reserved.has(item.id)).length,dueToday:active.filter(r=>dateKey(asDate(r.due_at))===dateKey(now)).length,overdue:rentals.filter(r=>r.displayStatus==='Overdue').length,fees:active.reduce((total,r)=>total+Number(r.rental_fee||0),0)},
+    stats:{active:active.length,available:items.filter(item=>item.status==='AVAILABLE'&&!reserved.has(item.id)).length,dueToday:active.filter(r=>rentalStatus(r,now)==='Due today').length,overdue:rentals.filter(r=>r.displayStatus==='Overdue').length,fees:active.reduce((total,r)=>total+Number(r.rental_fee||0),0)},
     refreshedAt:now.toISOString()
   };
 }

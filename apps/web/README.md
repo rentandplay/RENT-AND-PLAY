@@ -8,12 +8,12 @@ Configure and start the backend first; see `../backend/README.md` for database s
 
 Sign in with an active Firebase Authentication account that has a matching active `users/{uid}` Firestore profile with the `ADMIN` role. Other account roles cannot access the website. There are no default passwords or demo access.
 
-`npm run check` checks JavaScript syntax. `npm test` checks analytics calculations.
+`npm run check` checks JavaScript syntax. `npm test` checks analytics calculations, settings and MX10 printer commands/transfer behavior.
 
 ## Included
 
 - Working Firestore inventory: add/edit equipment, per-item QR labels created automatically with each new item, current pricing with rate history, maintenance and inspection records, reversible archive/restore, and status history.
-- MX10 QR-label printing directly from the web page over Bluetooth LE, with a 50 × 30 mm preview, 10 mm physical sticker gap, sensor-based label positioning/calibration, paper-out reporting when the MX10 sends status notifications, and downloadable individual SVG/all-label sheet. Web Bluetooth needs a supported browser and secure HTTPS; the existing MX10 flow supports Android Chrome.
+- MX10 QR/barcode printing over Bluetooth LE with a 50 × 30 mm design and a native 384 × 240-dot monochrome raster. Continuous sticker paper is the default: adjustable start allowance (2 mm), 30 mm artwork, then adjustable tear allowance (3 mm), without sensor gap search. Precut stock can still use sensor positioning/calibration. Light/Medium/Dark image presets match the supplied Fun Print APK; Dark (100%) is the default. QR modules occupy uniform whole printer dots; offsets preserve the complete QR box and white border. A small monochrome Rent & Play logo is centered under the equipment text. Transfers stream ordered writes with printer pause/resume; devices without notifications retain conservative pacing. Paper-out and overheat reports stop transfer. Download an individual PNG for Fun Print or a sheet respecting the selected paper mode and allowances. Web Bluetooth needs HTTPS and a supported browser such as Android Chrome.
 - Customer directory with search, add/edit, and reversible archive/restore controls.
 - Dedicated rental, return, and complete transaction-history views backed by Firestore records.
 - Pricing workspace with compact pricing settings and a quote preview. Admins can manage hourly and package prices, card sale prices, deposits, overtime, service hours, and rental rules. Physical equipment can be linked to a pricing product by its QR inventory record; legacy per-item rates keep their history.

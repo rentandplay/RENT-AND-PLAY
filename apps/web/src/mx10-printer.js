@@ -259,7 +259,7 @@ async function getWritableCharacteristic(server) {
       if (characteristic.properties.writeWithoutResponse || characteristic.properties.write) return { service, characteristic };
     } catch { /* Try the MX10 sibling service UUID. */ }
   }
-  throw new Error('The selected device did not expose the MX10 print service. Choose MX10 in the Bluetooth picker.');
+  throw new Error('The selected device did not expose a supported print service. Choose a compatible Bluetooth printer.');
 }
 
 export function createMx10Printer() {
@@ -290,8 +290,8 @@ export function createMx10Printer() {
   const listeners = new Set();
 
   const status = () => ({
-    connected: Boolean(device?.gatt?.connected && txCharacteristic),
-    name: device?.name || 'MX10',
+    connected: connected(),
+    name: connected() ? device.name?.trim() || 'Printer' : 'Printer',
     connecting,
     reconnecting,
     printing,
@@ -300,6 +300,7 @@ export function createMx10Printer() {
     aligning,
     progress,
     paperOut,
+    headHot,
     printerWarning,
     canCalibrate: Boolean(rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate),
     sensorCalibrated: sensorCalibrationValid && hasSavedSensorThreshold(),
@@ -409,7 +410,7 @@ export function createMx10Printer() {
       txCharacteristic = null;
       rxCharacteristic = null;
       if (device !== selected || !reconnectWanted) return;
-      if (error?.message?.includes('did not expose the MX10 print service')) {
+      if (error?.message?.includes('did not expose a supported print service')) {
         reconnectWanted = false;
         reconnecting = false;
         clearSavedDeviceId();
@@ -492,20 +493,20 @@ export function createMx10Printer() {
   }
 
   async function writeBytes(bytes, onProgress, { isStatusQuery = false } = {}) {
-    if (!connected()) throw new Error('Connect your MX10 before sending printer commands.');
+    if (!connected()) throw new Error('Connect your printer before sending printer commands.');
     const characteristic = txCharacteristic;
     const withResponse = characteristic.properties.write && typeof characteristic.writeValueWithResponse === 'function';
     const withoutResponse = characteristic.properties.writeWithoutResponse && typeof characteristic.writeValueWithoutResponse === 'function';
-    if (!withoutResponse && !withResponse) throw new Error('The MX10 print channel is not writable in this browser. Try current Chrome on Android.');
+    if (!withoutResponse && !withResponse) throw new Error('The printer channel is not writable in this browser. Try current Chrome on Android.');
     const hasFlowControl = Boolean(rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate);
     const totalChunks = Math.ceil(bytes.length / PRINTER.chunkSize);
     for (let index = 0, offset = 0; offset < bytes.length; index += 1, offset += PRINTER.chunkSize) {
-      if (printing && !isStatusQuery && paperOut) throw new Error('The MX10 reports that it ran out of paper. Reload the roll before retrying.');
+      if (printing && !isStatusQuery && paperOut) throw new Error('The printer reports that it ran out of paper. Reload the roll before retrying.');
       if (printing && !isStatusQuery && headHot) throw new Error(printerWarning);
       const pauseStarted = Date.now();
       while (printing && !isStatusQuery && flowPaused) {
         if (!connected()) throw new Error('Bluetooth disconnected while the printer was busy.');
-        if (paperOut) throw new Error('The MX10 reports that it ran out of paper. Reload the roll before retrying.');
+        if (paperOut) throw new Error('The printer reports that it ran out of paper. Reload the roll before retrying.');
         if (headHot) throw new Error(printerWarning);
         if (Date.now() - pauseStarted >= FLOW_CONTROL_TIMEOUT_MS) throw new Error('The printer stayed busy for too long. Check the paper and try again.');
         await delay(20);
@@ -550,7 +551,7 @@ export function createMx10Printer() {
   function triggerPrintAlignment(job) {
     if (!job?.dataSent || job.alignmentPromise) return job?.alignmentPromise || Promise.resolve(false);
     if (paperOut) {
-      const error = new Error('The MX10 reports that it is out of paper, so it cannot align the next label.');
+      const error = new Error('The printer reports that it is out of paper, so it cannot align the next label.');
       job.rejectAlignment?.(error);
       return Promise.reject(error);
     }
@@ -599,7 +600,7 @@ export function createMx10Printer() {
     if (scan.distance >= SENSOR_SEARCH_LIMIT) {
       const minimum = Math.min(...scan.samples);
       const maximum = Math.max(...scan.samples);
-      failSensorScan(new Error(`The MX10 did not detect a sticker gap after ${scan.samples.length} sensor readings (range ${minimum}–${maximum}). Check that the labels are loaded straight, then try calibration again.`));
+      failSensorScan(new Error(`The printer did not detect a sticker gap after ${scan.samples.length} sensor readings (range ${minimum}–${maximum}). Check that the labels are loaded straight, then try calibration again.`));
       return;
     }
 
@@ -612,11 +613,11 @@ export function createMx10Printer() {
 
   function applyPrinterStatus(code) {
     if (code === 0x00) { paperOut = false; headHot = false; printerWarning = ''; }
-    else if (code === 0x01 || code === 0x09) { paperOut = true; printerWarning = 'The MX10 reports that it is out of paper.'; }
-    else if (code === 0x04 || code === 0xd2) { headHot = true; printerWarning = 'The MX10 reports that its print head is too hot. Let it cool before printing again.'; }
-    else if (code === 0x08) { printerWarning = 'The MX10 reports low power.'; }
+    else if (code === 0x01 || code === 0x09) { paperOut = true; printerWarning = 'The printer is out of paper. Reload the roll before printing.'; }
+    else if (code === 0x04 || code === 0xd2) { headHot = true; printerWarning = 'The print head is too hot. Let the printer cool before printing again.'; }
+    else if (code === 0x08) { printerWarning = 'The printer reports low power.'; }
     if (pendingStatusQuery) settleStatusQuery({ code, paperOut, warning: printerWarning });
-    if (paperOut && sensorScan) failSensorScan(new Error('The MX10 reports that it is out of paper. Reload the label roll, then calibrate again.'));
+    if (paperOut && sensorScan) failSensorScan(new Error('The printer is out of paper. Reload the label roll, then calibrate again.'));
     notify();
   }
 
@@ -682,11 +683,11 @@ export function createMx10Printer() {
   }
 
   async function calibrateLabel() {
-    if (!connected()) throw new Error('Connect your MX10 before calibrating labels.');
-    if (!(rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate)) throw new Error('This MX10 connection does not expose label-sensor notifications, so automatic calibration is unavailable.');
+    if (!connected()) throw new Error('Connect your printer before calibrating labels.');
+    if (!(rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate)) throw new Error('Label-sensor notifications are unavailable for this printer, so automatic calibration is unavailable.');
     if (printing || sensorScan) throw new Error('Wait for the current printer operation to finish.');
     await refreshPrinterStatus();
-    if (paperOut) throw new Error('The MX10 reports that it is out of paper. Reload the label roll before calibrating.');
+    if (paperOut) throw new Error('The printer is out of paper. Reload the label roll before calibrating.');
     paperOut = null;
     printerWarning = '';
     sensorCalibrationValid = false;
@@ -737,7 +738,7 @@ export function createMx10Printer() {
         if (generation !== connectionGeneration || !reconnectWanted || device !== selected) return { cancelled: true };
         txCharacteristic = null;
         rxCharacteristic = null;
-        if (error?.message?.includes('did not expose the MX10 print service')) {
+        if (error?.message?.includes('did not expose a supported print service')) {
           reconnectWanted = false;
           reconnecting = false;
           clearReconnectTimer();
@@ -754,9 +755,9 @@ export function createMx10Printer() {
       }
     } catch (error) {
       if (generation !== connectionGeneration) return { cancelled: true };
-      if (error?.name === 'NotFoundError') throw new Error('No printer was selected. Turn on the MX10, then choose it in the browser picker.');
+      if (error?.name === 'NotFoundError') throw new Error('No printer was selected. Turn on your printer, then choose it in the Bluetooth picker.');
       if (error?.name === 'SecurityError') throw new Error('Bluetooth access was blocked. Open this page in Edge or Chrome over HTTPS and allow the device request.');
-      if (error?.name !== 'AbortError' && error?.message) throw new Error(`${error.message} If the MX10 app is connected, close it and try again.`);
+      if (error?.name !== 'AbortError' && error?.message) throw new Error(`${error.message} If another printer app is connected, close it and try again.`);
       throw error;
     } finally {
       if (generation === connectionGeneration) {
@@ -769,7 +770,7 @@ export function createMx10Printer() {
   void restoreSavedDevice();
 
   async function printLabel(svg, calibration = {}, printImage = {}, settings = {}) {
-    if (!connected()) throw new Error('Connect your MX10 before printing.');
+    if (!connected()) throw new Error('Connect your printer before printing.');
     if (printing || sensorSearching) throw new Error('Wait for the current printer operation to finish.');
     const { paperMode, darkness, startFeedMm, tearFeedMm } = normalizeMx10PrintSettings(settings);
     const profile = IMAGE_DARKNESS[darkness];
@@ -780,7 +781,7 @@ export function createMx10Printer() {
     notify();
     try {
       if (rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate) await refreshPrinterStatus();
-      if (paperOut) throw new Error('The MX10 reports that it is out of paper. Reload the label roll before printing.');
+      if (paperOut) throw new Error('The printer is out of paper. Reload the label roll before printing.');
       if (headHot) throw new Error(printerWarning);
       const raster = await rasterizeLabel(svg, calibration, printImage);
       const job = buildMx10PrintJob(raster.rows, { paperMode, darkness, startFeedMm, tearFeedMm });
@@ -800,7 +801,7 @@ export function createMx10Printer() {
         }, LABEL_POSITION_FALLBACK_MS);
       });
       if (!connected()) throw new Error('Bluetooth disconnected before printing finished.');
-      if (paperOut) throw new Error('The MX10 reports that it ran out of paper while printing. Reload the roll before retrying.');
+      if (paperOut) throw new Error('The printer ran out of paper while printing. Reload the roll before retrying.');
       if (headHot) throw new Error(printerWarning);
       return { height: raster.height, lengthMm: raster.height / PRINTER.dotsPerMm, paperMode, darkness, startFeedMm: paperMode === 'continuous' ? startFeedMm : 0, tearFeedMm: paperMode === 'continuous' ? tearFeedMm : 0, totalLengthMm: paperMode === 'continuous' ? startFeedMm + raster.height / PRINTER.dotsPerMm + tearFeedMm : null, labelGapMm: paperMode === 'continuous' ? 0 : Number(calibration.gap ?? 10), energy: profile.energy, density: profile.density, aligned: paperMode === 'gapped', alignmentMethod: alignment.method };
     } finally {

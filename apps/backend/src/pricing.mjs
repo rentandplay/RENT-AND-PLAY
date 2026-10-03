@@ -117,20 +117,22 @@ function timedAmount(product,durationMinutes) {
   for(const rate of rates){
     if(rate.kind==='HOURLY'||rate.kind==='BLOCK'){
       const blocks=Math.ceil(durationMinutes/rate.duration_minutes);
-      candidates.push({amount:blocks*rate.amount,billed_minutes:blocks*rate.duration_minutes,rate_label:rate.label});
+      candidates.push({amount:blocks*rate.amount,billed_minutes:blocks*rate.duration_minutes,rate_label:rate.label,rate_id:rate.id,rate_kind:rate.kind,rate_components:[component(rate,blocks)]});
     }else if(rate.kind==='SHORT'&&durationMinutes<=rate.duration_minutes){
-      candidates.push({amount:rate.amount,billed_minutes:rate.duration_minutes,rate_label:rate.label});
+      candidates.push({amount:rate.amount,billed_minutes:rate.duration_minutes,rate_label:rate.label,rate_id:rate.id,rate_kind:rate.kind,rate_components:[component(rate,1)]});
     }else if(rate.kind==='PACKAGE'&&hourly){
       const standardBlocks=Math.ceil(durationMinutes/hourly.duration_minutes),packageBlocks=Math.ceil(rate.duration_minutes/hourly.duration_minutes);
       if(standardBlocks>=packageBlocks){
         const extraBlocks=standardBlocks-packageBlocks;
-        candidates.push({amount:rate.amount+extraBlocks*hourly.amount,billed_minutes:(packageBlocks+extraBlocks)*hourly.duration_minutes,rate_label:rate.label+(extraBlocks?` + ${extraBlocks} extra hour(s)`:'' )});
+        candidates.push({amount:rate.amount+extraBlocks*hourly.amount,billed_minutes:(packageBlocks+extraBlocks)*hourly.duration_minutes,rate_label:rate.label+(extraBlocks?` + ${extraBlocks} extra hour(s)`:'' ),rate_id:rate.id,rate_kind:rate.kind,rate_components:[component(rate,1),...(extraBlocks?[component(hourly,extraBlocks)]:[])]});
       }
     }
   }
   candidates.sort((a,b)=>a.amount-b.amount||a.billed_minutes-b.billed_minutes);
   return candidates[0]||null;
 }
+
+const component=(rate,units)=>({rate_id:rate.id,label:rate.label,kind:rate.kind,units,unit_amount:rate.amount,duration_minutes:rate.duration_minutes||null,total_amount:Math.round(rate.amount*units*100)/100});
 
 export function quoteRental(pricing,input={},now=new Date()) {
   if(!input||typeof input!=='object'||Array.isArray(input))fail(400,'Rental quote details are required.');
@@ -139,19 +141,19 @@ export function quoteRental(pricing,input={},now=new Date()) {
   if(!item)fail(404,'Choose a product from the Rent & Play rate sheet.');
   const startAt=input.startAt?new Date(input.startAt):now;
   if(!Number.isFinite(startAt.getTime()))fail(400,'Enter a valid rental start time.');
-  let amount,billedMinutes,dueAt,rateLabel;
+  let amount,billedMinutes,dueAt,rateLabel,rateId,rateKind,rateComponents;
   if(input.mode==='WHOLE_STAY'){
     const plan=item.rate_options.find(rate=>rate.kind==='WHOLE_STAY');
     const checkoutAt=new Date(input.resortCheckoutAt);
     if(!plan)fail(400,`${item.name} does not have a whole-stay rate.`);
     if(!Number.isFinite(checkoutAt.getTime())||checkoutAt<=startAt)fail(400,'Enter the guest’s resort checkout time after the rental starts.');
-    amount=plan.amount;billedMinutes=Math.ceil((checkoutAt-startAt)/60000);dueAt=checkoutAt;rateLabel=plan.label;
+    amount=plan.amount;billedMinutes=Math.ceil((checkoutAt-startAt)/60000);dueAt=checkoutAt;rateLabel=plan.label;rateId=plan.id;rateKind=plan.kind;rateComponents=[component(plan,1)];
   }else{
     const durationMinutes=Number(input.durationMinutes);
     if(!Number.isInteger(durationMinutes)||durationMinutes<1||durationMinutes>10080)fail(400,'Rental duration must be between 1 minute and 7 days.');
     const timed=timedAmount(item,durationMinutes);
     if(!timed)fail(400,`No timed rental rate is configured for ${item.name}.`);
-    amount=timed.amount;billedMinutes=timed.billed_minutes;dueAt=new Date(startAt.getTime()+billedMinutes*60000);rateLabel=timed.rate_label;
+    amount=timed.amount;billedMinutes=timed.billed_minutes;dueAt=new Date(startAt.getTime()+billedMinutes*60000);rateLabel=timed.rate_label;rateId=timed.rate_id;rateKind=timed.rate_kind;rateComponents=timed.rate_components;
   }
   const actualReturnAt=input.actualReturnAt?new Date(input.actualReturnAt):null;
   if(actualReturnAt&&!Number.isFinite(actualReturnAt.getTime()))fail(400,'Enter a valid actual return time.');
@@ -165,7 +167,7 @@ export function quoteRental(pricing,input={},now=new Date()) {
   if(dueTime<opensAt||dueTime>closesAt)warnings.push(`Due time falls outside daily service hours (${opensAt}–${closesAt}); after-hours return follows the saved overtime rule.`);
   if(item.high_value&&pricing.rules.high_value_deposit_required&&item.deposit_amount===0)warnings.push('Set the high-value item deposit before confirming this rental.');
   return {
-    product_id:item.id,product_name:item.name,rate_label:rateLabel,
+    product_id:item.id,product_name:item.name,rate_label:rateLabel,rate_id:rateId,rate_kind:rateKind,rate_components:rateComponents,start_at:startAt.toISOString(),requested_minutes:input.mode==='WHOLE_STAY'?billedMinutes:Number(input.durationMinutes),
     rental_fee:Math.round(amount*100)/100,overtime_blocks:overtimeBlocks,
     overtime_rate_per_hour:item.overtime_rate_per_hour,overtime_fee:Math.round(overtimeAmount*100)/100,
     rental_charge_total:Math.round((amount+overtimeAmount)*100)/100,

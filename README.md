@@ -54,6 +54,8 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 3. Edit `apps/backend/.env` with your Firebase project ID, Web API key, and local Admin SDK credentials. Follow [apps/backend/README.md](apps/backend/README.md) for Firebase setup.
-4. In VS Code, choose **Rent & Play: Start App** in Run and Debug, then press **F5**. After this laptop is set up, use that same Run button each time.
+4. In VS Code, choose **Rent & Play: Start App** in Run and Debug, then press **F5**. This starts the backend on port 3000 and opens the website at http://127.0.0.1:5173. After this laptop is set up, use that same Run button each time.
+
+If a previous run is still active, stop it with **Shift+F5** before starting again. Restart both servers after changing their server code so the running processes load the updates. Selecting **Rent & Play: Backend** alone starts only the API; use **Rent & Play: Start App** to launch the complete app.
 
 Run `npm.cmd ci` again after backend dependencies change in `package-lock.json` or if `node_modules` is removed. The `.env` file and service-account key must stay local and must not be committed to GitHub. No demo access or default accounts are enabled.

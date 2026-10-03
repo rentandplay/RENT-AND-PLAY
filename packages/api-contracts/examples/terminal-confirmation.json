@@ -1,6 +1,7 @@
 {
-  "transactionId": 45,
+  "requestId": "verification-45",
+  "verificationCode": "123456",
   "action": "CONFIRM",
   "button": "OK",
-  "confirmedAt": "2026-09-04T20:01:10"
+  "inspectionRevision": 1
 }

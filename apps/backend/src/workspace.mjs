@@ -1,10 +1,11 @@
-import { asDate, dateFields, docData } from './firebase.mjs';
+import { asDate, docData } from './firebase.mjs';
 import { loadPricing, savePricing as persistPricing } from './pricing.mjs';
+import { publicTerminal, serializeTransaction } from './transactions.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const rows = snapshot => snapshot.docs.map(docData);
 const clean = (value, max = 255) => typeof value === 'string' ? value.trim().slice(0, max) : '';
-const serial = (record) => dateFields(record, ['created_at', 'updated_at', 'last_login_at', 'started_at', 'completed_at', 'effective_from', 'effective_to', 'requested_at', 'confirmed_at', 'changed_at', 'confirmed_rental_at', 'confirmed_return_at', 'due_at', 'cancelled_at']);
+const serial = serializeTransaction;
 
 export function validateCustomer(input = {}) {
   const full_name = clean(input.fullName, 150), customer_code = clean(input.code, 50).toUpperCase(), email = clean(input.email, 191).toLowerCase(), phone = clean(input.phone, 40), address = clean(input.address, 500);
@@ -15,7 +16,7 @@ export function validateCustomer(input = {}) {
 }
 
 export async function loadWorkspace(db, role = 'ADMIN', now = new Date()) {
-  const names = ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history'];
+  const names = ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history', 'item_condition_records'];
   const snapshots = await Promise.all(names.map(name => db.collection(name).get()));
   const source = Object.fromEntries(names.map((name, index) => [name, rows(snapshots[index])]));
   const itemMap = new Map(source.items.map(item => [item.id, item]));
@@ -28,7 +29,7 @@ export async function loadWorkspace(db, role = 'ADMIN', now = new Date()) {
   let users = [];
   if (role === 'ADMIN') users = rows(await db.collection('users').get()).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial);
   const statusHistory = source.item_status_history.map(({ id, item_id, old_status, new_status, changed_at }) => serial({ id, item_id, old_status, new_status, changed_at }));
-  return { customers: source.customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(serial), verification: source.verification_requests.map(serial), statusHistory, settings, pricing, users, refreshedAt: now.toISOString() };
+  return { customers: source.customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, settings: serial(settings), pricing, users, refreshedAt: now.toISOString() };
 }
 
 export async function createCustomer(db, actor, input, now = new Date()) {

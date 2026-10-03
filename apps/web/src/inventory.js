@@ -399,21 +399,50 @@ export function createInventory(h) {
     try {
       const q = await api('/inventory/' + i.id + '/qr');
       showModal('Equipment label preview', `<section class="inv-print-settings">
-        <div class="inv-print-preview-heading"><div><strong>${e(i.name)}</strong><small id="inv-qr-stock-summary">${e(i.item_code)} · 50 × 30 mm · continuous sticker</small></div><label class="inv-print-format">Label type<select id="inv-qr-format" aria-label="Label type"><option value="qr">QR code</option><option value="barcode">Barcode · Code 128</option></select></label></div>
-        <div class="inv-print-preview-frame"><div class="inv-print-preview-label"><div class="inv-print-preview-art" id="inv-print-preview-art"><img id="inv-print-label-image" src="data:image/svg+xml,${encodeURIComponent(q.svg)}" alt="QR code label preview"></div></div></div>
-        <p class="inv-print-measurement" id="inv-print-measurement"></p>
-        <div class="inv-print-calibration"><label>Paper type<select id="inv-qr-paper"><option value="continuous">Continuous · no gaps</option><option value="gapped">Precut · with gaps</option></select></label><label>Print darkness<select id="inv-qr-darkness"><option value="light">Light · 75%</option><option value="medium">Medium · 90%</option><option value="dark">Dark · 100%</option></select></label><label class="inv-print-tear-setting" id="inv-qr-start-setting">Start allowance (mm)<input id="inv-qr-start-feed" type="number" min="0" max="5" step="0.5" value="${qrPrintSettings.startFeedMm}"></label><label class="inv-print-tear-setting" id="inv-qr-tear-setting">Tear allowance (mm)<input id="inv-qr-tear-feed" type="number" min="0" max="10" step="0.5" value="${qrPrintSettings.tearFeedMm}"></label><label>Horizontal offset (mm)<input id="inv-qr-offset-x" type="number" min="-5" max="5" step="0.5" value="${qrCalibration.offsetX}"></label><label>Vertical offset (mm)<input id="inv-qr-offset-y" type="number" min="-5" max="5" step="0.5" value="${qrCalibration.offsetY}"></label><button class="text-button" id="inv-qr-reset" type="button">Reset visual offsets</button></div>
-        <div class="inv-printer-panel"><div><span class="inv-printer-state-dot" id="inv-qr-printer-dot"></span><strong id="inv-qr-printer-state" role="status" aria-live="polite"></strong><small>MX10 Bluetooth · direct from this web page</small></div><div class="inv-printer-actions"><button class="secondary" id="inv-qr-connect" type="button"></button><button class="secondary" id="inv-qr-calibrate" type="button">${icon('settings')} Calibrate labels</button></div></div>
-        <div class="inv-printer-progress" id="inv-qr-printer-progress" hidden><progress id="inv-qr-progress" max="100" value="0"></progress><span id="inv-qr-progress-label">Preparing label…</span></div>
-        <p class="inv-print-note" id="inv-qr-printer-message"></p>
-      </section><div class="inv-form-actions"><button class="secondary" id="inv-qr-back">Back</button><button class="secondary" id="inv-qr-download">${icon('download')} Download PNG for Fun Print</button><button class="primary" id="inv-qr-print">${icon('print')} Print label</button></div>`);
-      const paperNote = () => qrPrintSettings.paperMode === 'continuous' ? `Continuous sticker: ${qrPrintSettings.startFeedMm} mm of blank paper before printing, 30 mm artwork, then ${qrPrintSettings.tearFeedMm} mm for tearing. Adjust Start allowance if the first rows are cut off. The QR keeps a white border for reliable scanning.` : 'Precut labels: align the first label at the print head. After printing, the sensor positions the next label. Recalibrate after changing rolls.';
-      modal.querySelector('#inv-qr-printer-message').textContent = paperNote();
-      const preview = modal.querySelector('#inv-print-preview-art'), previewImage = modal.querySelector('#inv-print-label-image'), measurement = modal.querySelector('#inv-print-measurement'), formatSelect = modal.querySelector('#inv-qr-format'), downloadButton = modal.querySelector('#inv-qr-download');
+        <section class="inv-print-preview" aria-label="Label preview">
+          <div class="inv-print-preview-heading"><div><strong>${e(i.name)}</strong><small>${e(i.item_code)}</small></div><span class="inv-print-size">50 × 30 mm</span></div>
+          <div class="inv-print-preview-frame"><div class="inv-print-preview-label"><div class="inv-print-preview-art" id="inv-print-preview-art"><img id="inv-print-label-image" alt="QR code label preview"></div></div></div>
+          <div class="inv-print-preview-meta"><span id="inv-qr-stock-summary"></span><span id="inv-print-measurement">Preview is enlarged · 50 × 30 mm artwork</span></div>
+        </section>
+        <div class="inv-print-controls">
+          <section class="inv-printer-panel" id="inv-qr-printer-panel" aria-label="Printer connection">
+            <div class="inv-printer-heading"><span class="inv-printer-symbol">${icon('bluetooth')}</span><div class="inv-printer-copy"><strong id="inv-qr-printer-state" role="status" aria-live="polite">Connect your printer</strong><small id="inv-qr-printer-description">Choose a Bluetooth printer to print this label.</small></div></div>
+            <span class="inv-printer-status"><span class="inv-printer-state-dot" id="inv-qr-printer-dot" aria-hidden="true"></span><span id="inv-qr-printer-status-label">Not connected</span></span>
+            <div class="inv-printer-actions"><button class="primary" id="inv-qr-connect" type="button">${icon('bluetooth')} Connect printer</button></div>
+          </section>
+          <section class="inv-print-options" aria-labelledby="inv-print-options-title">
+            <h3 id="inv-print-options-title">Print settings</h3>
+            <div class="inv-print-basic-settings"><label>Label type<select id="inv-qr-format"><option value="qr">QR code</option><option value="barcode">Barcode · Code 128</option></select></label><label>Paper type<select id="inv-qr-paper"><option value="continuous">Continuous · no gaps</option><option value="gapped">Precut · with gaps</option></select></label><label class="inv-print-darkness-setting">Print darkness<select id="inv-qr-darkness"><option value="light">Light · 75%</option><option value="medium">Medium · 90%</option><option value="dark">Dark · 100%</option></select></label></div>
+            <p class="inv-print-help" id="inv-qr-paper-note"></p>
+          </section>
+          <details class="inv-print-advanced"><summary><span>${icon('settings')} Advanced settings</span>${icon('chevron')}</summary><div class="inv-print-calibration">
+            <label id="inv-qr-start-setting">Start allowance (mm)<input id="inv-qr-start-feed" type="number" min="0" max="5" step="0.5" value="${qrPrintSettings.startFeedMm}" aria-describedby="inv-qr-feed-help"></label><label id="inv-qr-tear-setting">Tear allowance (mm)<input id="inv-qr-tear-feed" type="number" min="0" max="10" step="0.5" value="${qrPrintSettings.tearFeedMm}" aria-describedby="inv-qr-feed-help"></label>
+            <p class="inv-print-help" id="inv-qr-feed-help">Blank paper before the artwork and extra paper for tearing.</p>
+            <label>Horizontal offset (mm)<input id="inv-qr-offset-x" type="number" min="-5" max="5" step="0.5" value="${qrCalibration.offsetX}" aria-describedby="inv-qr-offset-help"></label><label>Vertical offset (mm)<input id="inv-qr-offset-y" type="number" min="-5" max="5" step="0.5" value="${qrCalibration.offsetY}" aria-describedby="inv-qr-offset-help"></label>
+            <p class="inv-print-help" id="inv-qr-offset-help">Move the artwork within the label. QR offsets keep its white border intact.</p><button class="text-button" id="inv-qr-reset" type="button">Reset offsets</button>
+            <div class="inv-print-sensor-setting" id="inv-qr-sensor-setting" hidden><button class="secondary" id="inv-qr-calibrate" type="button">${icon('settings')} Calibrate labels</button><small id="inv-qr-calibrate-help">Recalibrate after changing precut rolls.</small></div>
+          </div></details>
+          <div class="inv-printer-progress" id="inv-qr-printer-progress" hidden><progress id="inv-qr-progress" max="100" value="0" aria-label="Printer operation progress"></progress><span id="inv-qr-progress-label" role="status" aria-live="polite">Preparing label…</span></div>
+          <p class="inv-print-note" id="inv-qr-printer-message" role="status" aria-live="polite" hidden></p>
+        </div>
+      </section><div class="inv-form-actions inv-print-actions"><p id="inv-qr-print-hint">Connect a printer, or download a PNG for Fun Print.</p><div class="inv-print-footer-buttons"><button class="secondary" id="inv-qr-back" type="button">Back</button><button class="secondary" id="inv-qr-download" type="button">${icon('download')} Download QR PNG</button><button class="primary" id="inv-qr-print" type="button" aria-describedby="inv-qr-print-hint" disabled>${icon('print')} Print label</button></div></div>`);
+      const settings = modal.querySelector('.inv-print-settings'), message = modal.querySelector('#inv-qr-printer-message');
+      const preview = modal.querySelector('#inv-print-preview-art'), previewImage = modal.querySelector('#inv-print-label-image'), formatSelect = modal.querySelector('#inv-qr-format'), downloadButton = modal.querySelector('#inv-qr-download');
       const paperSelect = modal.querySelector('#inv-qr-paper'), darknessSelect = modal.querySelector('#inv-qr-darkness'), startInput = modal.querySelector('#inv-qr-start-feed'), startSetting = modal.querySelector('#inv-qr-start-setting'), tearInput = modal.querySelector('#inv-qr-tear-feed'), tearSetting = modal.querySelector('#inv-qr-tear-setting');
+      const panel = modal.querySelector('#inv-qr-printer-panel'), status = modal.querySelector('#inv-qr-printer-state'), description = modal.querySelector('#inv-qr-printer-description'), statusLabel = modal.querySelector('#inv-qr-printer-status-label');
+      const connect = modal.querySelector('#inv-qr-connect'), calibrate = modal.querySelector('#inv-qr-calibrate'), print = modal.querySelector('#inv-qr-print'), printHint = modal.querySelector('#inv-qr-print-hint'), progressBox = modal.querySelector('#inv-qr-printer-progress');
+      const fields = [['offsetX', '#inv-qr-offset-x'], ['offsetY', '#inv-qr-offset-y']];
+      const controls = [paperSelect, darknessSelect, startInput, tearInput, formatSelect, ...fields.map(([, selector]) => modal.querySelector(selector)), modal.querySelector('#inv-qr-reset')];
+      const bluetoothSupported = Boolean(window.isSecureContext && navigator.bluetooth);
+      let unsubscribe = () => {};
+      const cleanup = () => { unsubscribe(); modal.removeEventListener('close', cleanup); };
+      const setMessage = (text = '', tone = 'info', source = 'action') => {
+        if (!settings.isConnected) return;
+        message.textContent = text; message.hidden = !text; message.dataset.tone = tone; message.dataset.source = source;
+      };
       paperSelect.value = qrPrintSettings.paperMode; darknessSelect.value = qrPrintSettings.darkness;
-      const syncPreview = () => {
-        const format = formatSelect.value, formatLabel = format === 'barcode' ? 'Code 128 barcode' : 'QR code', content = format === 'barcode' ? i.item_code : q.token, stock = qrPrintSettings.paperMode === 'continuous' ? `continuous · ${qrPrintSettings.startFeedMm} mm start / ${qrPrintSettings.tearFeedMm} mm tear allowance` : 'precut labels · sensor alignment';
+      const syncPreview = ({ syncFields = true } = {}) => {
+        const format = formatSelect.value, formatLabel = format === 'barcode' ? 'Code 128 barcode' : 'QR code', continuous = qrPrintSettings.paperMode === 'continuous';
         const printImage = format === 'qr' ? { qrGeometry: qrLabelGeometry } : {};
         qrCalibration = normalizeMx10LabelCalibration(qrCalibration, printImage);
         persistQrCalibration();
@@ -421,48 +450,99 @@ export function createInventory(h) {
           const input = modal.querySelector(selector);
           input.min = normalizeMx10LabelCalibration({ [key]: -15 }, printImage)[key];
           input.max = normalizeMx10LabelCalibration({ [key]: 15 }, printImage)[key];
-          input.value = qrCalibration[key];
+          if (syncFields) input.value = qrCalibration[key];
         }
         previewImage.src = `data:image/svg+xml,${encodeURIComponent(labelSvg(i, q, format))}`;
         previewImage.alt = `${formatLabel} label for ${i.item_code}`;
         preview.style.setProperty('--offset-x', `${qrCalibration.offsetX * 2}%`);
         preview.style.setProperty('--offset-y', `${qrCalibration.offsetY * 100 / 30}%`);
-        modal.querySelector('#inv-qr-stock-summary').textContent = `${i.item_code} · 50 × 30 mm · ${stock}`;
-        measurement.textContent = `${format === 'barcode' ? 'Barcode data' : 'QR data'}: ${content} · 50 × 30 mm · ${stock} · offsets ${qrCalibration.offsetX} / ${qrCalibration.offsetY} mm`;
-        downloadButton.innerHTML = `${icon('download')} Download ${format === 'barcode' ? 'barcode' : 'QR'} PNG for Fun Print`;
+        settings.querySelector('#inv-qr-stock-summary').textContent = continuous ? `Continuous roll · ${qrPrintSettings.startFeedMm + 30 + qrPrintSettings.tearFeedMm} mm total feed` : 'Precut labels · automatic gap alignment';
+        settings.querySelector('#inv-qr-paper-note').textContent = continuous ? `${qrPrintSettings.startFeedMm} mm before the artwork · ${qrPrintSettings.tearFeedMm} mm after it for tearing. Adjust these in Advanced settings.` : 'Align the first label at the print head. Calibrate in Advanced settings after changing rolls.';
+        settings.querySelector('#inv-qr-offset-help').textContent = format === 'qr' ? 'Move the artwork within the label. QR offsets keep its white border intact.' : 'Move the artwork within the label. Check that the barcode stays inside the paper edges.';
+        downloadButton.innerHTML = `${icon('download')} Download ${format === 'barcode' ? 'barcode' : 'QR'} PNG`;
       };
-      formatSelect.onchange = syncPreview;
-      const fields = [['offsetX', '#inv-qr-offset-x', -15, 15], ['offsetY', '#inv-qr-offset-y', -15, 15]];
-      for (const [key, selector, min, max] of fields) { const input = modal.querySelector(selector); input.min = String(min); input.max = String(max); input.onchange = () => { const value = Number(input.value); if (!Number.isFinite(value)) return; qrCalibration = cleanCalibration({ ...qrCalibration, [key]: value }); input.value = qrCalibration[key]; persistQrCalibration(); syncPreview(); }; }
-      modal.querySelector('#inv-qr-reset').onclick = () => { qrCalibration = { ...qrCalibrationDefaults }; persistQrCalibration(); for (const [key, selector] of fields) modal.querySelector(selector).value = qrCalibration[key]; syncPreview(); }; syncPreview();
-      modal.querySelector('#inv-qr-back').onclick = () => details(i.id); modal.querySelector('#inv-qr-download').onclick = async () => { const format = formatSelect.value, printImage = format === 'qr' ? { qrMatrix: q.matrix, qrGeometry: qrLabelGeometry } : {}; try { const png = await renderLabelPng(labelSvg(i, q, format), qrCalibration, printImage); download(png, 'image/png', `${i.item_code}-${format === 'barcode' ? 'barcode' : 'qr'}-label.png`); toast(`${format === 'barcode' ? 'Barcode' : 'QR'} PNG downloaded for Fun Print.`); } catch (err) { showModal('PNG label unavailable', errorBody(err)); } };
       const updatePrinterUi = state => {
-        const status = modal.querySelector('#inv-qr-printer-state'), dot = modal.querySelector('#inv-qr-printer-dot'), connect = modal.querySelector('#inv-qr-connect'), calibrate = modal.querySelector('#inv-qr-calibrate'), print = modal.querySelector('#inv-qr-print'), progressBox = modal.querySelector('#inv-qr-printer-progress');
-        if (!status) return;
-        const continuous = qrPrintSettings.paperMode === 'continuous', busy = state.printing || state.sensorSearching || state.aligning;
-        status.textContent = state.paperOut ? `${state.name} out of paper` : state.connected ? `${state.name} connected` : state.reconnecting ? 'MX10 offline · retrying…' : state.connecting ? 'Connecting to MX10…' : 'MX10 not connected';
-        dot.classList.toggle('is-connected', state.connected && !state.paperOut); dot.classList.toggle('is-error', Boolean(state.paperOut || state.printerWarning));
-        connect.disabled = state.connecting || busy;
+        if (!settings.isConnected) { cleanup(); return; }
+        const continuous = qrPrintSettings.paperMode === 'continuous', busy = state.printing || state.sensorSearching || state.aligning, blocked = state.connected && Boolean(state.paperOut || state.headHot);
+        const connection = state.connected ? blocked ? 'warning' : 'connected' : state.reconnecting ? 'reconnecting' : state.connecting ? 'connecting' : 'disconnected';
+        panel.dataset.connection = connection;
+        status.textContent = state.connected ? state.name : state.reconnecting ? 'Reconnecting to printer…' : state.connecting ? 'Connecting to printer…' : 'Connect your printer';
+        statusLabel.textContent = state.connected ? state.paperOut ? 'Out of paper' : state.headHot ? 'Cooling down' : 'Connected' : state.reconnecting ? 'Offline · retrying' : state.connecting ? 'Connecting' : 'Not connected';
+        description.textContent = state.connected ? state.paperOut ? 'Load a label roll to continue printing.' : state.headHot ? 'Let the print head cool before trying again.' : busy ? 'Working on your label. Keep the printer on.' : 'Bluetooth connected. Ready to print your label.' : state.reconnecting ? 'Turn on your printer. This page will retry automatically.' : state.connecting ? 'Choose your printer in the Bluetooth picker.' : bluetoothSupported ? 'Choose a Bluetooth printer to print this label.' : 'Bluetooth printing needs Chrome or Edge over HTTPS.';
+        connect.disabled = state.connecting || busy || (!bluetoothSupported && !state.connected && !state.reconnecting);
+        connect.className = state.connected || state.reconnecting ? 'secondary' : 'primary';
         connect.innerHTML = `${icon('bluetooth')} ${state.connected ? 'Disconnect printer' : state.reconnecting ? 'Cancel reconnect' : state.connecting ? 'Connecting…' : 'Connect printer'}`;
-        calibrate.hidden = continuous;
         startSetting.hidden = !continuous;
         tearSetting.hidden = !continuous;
-        calibrate.disabled = continuous || !state.connected || !state.canCalibrate || busy;
+        settings.querySelector('#inv-qr-feed-help').hidden = !continuous;
+        settings.querySelector('#inv-qr-sensor-setting').hidden = continuous;
+        calibrate.disabled = continuous || !state.connected || !state.canCalibrate || busy || blocked;
         calibrate.innerHTML = `${icon('settings')} ${state.sensorSearching ? 'Calibrating…' : state.sensorCalibrated ? 'Recalibrate labels' : 'Calibrate labels'}`;
-        print.disabled = !state.connected || busy || Boolean(state.paperOut);
+        settings.querySelector('#inv-qr-calibrate-help').textContent = !state.connected ? 'Connect a printer to calibrate precut labels.' : !state.canCalibrate ? 'Automatic calibration is unavailable for this printer.' : 'Recalibrate after changing precut rolls.';
+        print.disabled = !state.connected || busy || blocked;
+        print.setAttribute('aria-busy', String(state.printing || state.aligning));
         print.innerHTML = `${icon('print')} ${state.aligning ? 'Positioning…' : state.printing ? (state.progress >= 100 ? continuous ? 'Finishing print…' : 'Positioning label…' : 'Sending… ' + state.progress + '%') : 'Print label'}`;
-        for (const control of [paperSelect, darknessSelect, startInput, tearInput, formatSelect, ...fields.map(([, selector]) => modal.querySelector(selector)), modal.querySelector('#inv-qr-reset')]) control.disabled = busy;
+        printHint.textContent = blocked ? state.paperOut ? 'Load paper to enable printing.' : 'Printing will be available when the printer cools down.' : busy ? 'Keep the printer on until this operation finishes.' : state.connected ? 'Ready to print. Your printer stays connected for the next label.' : state.reconnecting ? 'Waiting for your printer. You can still download the PNG.' : !bluetoothSupported ? 'Download the PNG for Fun Print, or open this page in Chrome or Edge.' : 'Connect a printer, or download a PNG for Fun Print.';
+        for (const control of controls) control.disabled = busy;
         progressBox.hidden = !busy;
-        modal.querySelector('#inv-qr-progress').value = state.sensorSearching ? state.sensorProgress : state.progress;
-        modal.querySelector('#inv-qr-progress-label').textContent = state.sensorSearching ? `Finding label position · ${state.sensorProgress}%` : state.printing && state.progress >= 100 && continuous ? 'Finishing the continuous sticker…' : state.aligning || state.printing && state.progress >= 100 ? 'Moving roll to the next label…' : state.printing ? `Sending print data · ${state.progress}%` : 'Preparing label…';
-        if (state.reconnecting) modal.querySelector('#inv-qr-printer-message').textContent = 'MX10 is offline. This web page will keep retrying while it remains open. Turn the printer on to reconnect, or choose Cancel reconnect to stop.';
-        else if (state.paperOut || state.printerWarning) modal.querySelector('#inv-qr-printer-message').textContent = state.printerWarning;
+        settings.querySelector('#inv-qr-progress').value = state.sensorSearching ? state.sensorProgress : state.progress;
+        settings.querySelector('#inv-qr-progress-label').textContent = state.sensorSearching ? `Finding label position · ${state.sensorProgress}%` : state.printing && state.progress >= 100 && continuous ? 'Finishing your label…' : state.aligning || state.printing && state.progress >= 100 ? 'Moving roll to the next label…' : state.printing ? `Sending print data · ${state.progress}%` : 'Preparing label…';
+        if (!state.connected && message.dataset.tone === 'success') setMessage();
+        if (state.connected && state.printerWarning) setMessage(state.printerWarning, 'warning', 'printer');
+        else if (message.dataset.source === 'printer') setMessage();
       };
-      paperSelect.onchange = darknessSelect.onchange = startInput.onchange = tearInput.onchange = () => { qrPrintSettings = normalizeMx10PrintSettings({ paperMode: paperSelect.value, darkness: darknessSelect.value, startFeedMm: startInput.valueAsNumber, tearFeedMm: tearInput.valueAsNumber }); startInput.value = qrPrintSettings.startFeedMm; tearInput.value = qrPrintSettings.tearFeedMm; persistQrPrintSettings(); syncPreview(); updatePrinterUi(printer.status()); if (!printer.status().printerWarning && !printer.status().reconnecting) modal.querySelector('#inv-qr-printer-message').textContent = paperNote(); };
-      const unsubscribe = printer.subscribe(updatePrinterUi); modal.addEventListener('close', () => { unsubscribe(); }, { once: true });
-      modal.querySelector('#inv-qr-connect').onclick = async () => { const message = modal.querySelector('#inv-qr-printer-message'); message.textContent = ''; try { const result = await printer.connect(), state = printer.status(); message.textContent = state.connected ? 'MX10 is connected and ready.' : state.reconnecting || result?.reconnecting ? 'MX10 is temporarily offline. This page will retry automatically while it remains open.' : 'Printer disconnected. Browser access for this site remains saved.'; } catch (err) { message.textContent = err.message; } };
-      modal.querySelector('#inv-qr-calibrate').onclick = async () => { const message = modal.querySelector('#inv-qr-printer-message'); message.textContent = 'Reading label position to calibrate the sensor…'; try { const result = await printer.calibrateLabel(); message.textContent = `Label sensor calibrated; the current print position is unchanged. Sensor threshold: ${result.threshold.toString(16).padStart(4, '0').toUpperCase()}.`; } catch (err) { message.textContent = err.message; } finally { updatePrinterUi(printer.status()); } };
-      modal.querySelector('#inv-qr-print').onclick = async () => { const message = modal.querySelector('#inv-qr-printer-message'), button = modal.querySelector('#inv-qr-print'), printerName = printer.status().name, format = formatSelect.value; button.disabled = true; modal.querySelector('#inv-qr-connect').disabled = true; message.textContent = `Checking paper and preparing the ${format === 'barcode' ? 'barcode' : 'QR'} label…`; try { const printImage = format === 'qr' ? { qrMatrix: q.matrix, qrGeometry: qrLabelGeometry } : {}, result = await printer.printLabel(labelSvg(i, q, format), qrCalibration, printImage, qrPrintSettings); message.textContent = `${format === 'barcode' ? 'Barcode' : 'QR'} label sent to ${printerName} at ${result.darkness} darkness. ${result.paperMode === 'continuous' ? `${result.startFeedMm} mm start + ${result.lengthMm} mm artwork + ${result.tearFeedMm} mm tear allowance (${result.totalLengthMm} mm total); tear at the printer edge.` : 'The MX10 positioned the next sticker.'} Printer remains connected.`; toast(`${format === 'barcode' ? 'Barcode' : 'QR'} label sent; printer remains connected.`); } catch (err) { message.textContent = err.message; } finally { updatePrinterUi(printer.status()); } };
+      const refreshPreview = (syncFields = true) => { syncPreview({ syncFields }); setMessage(); updatePrinterUi(printer.status()); };
+      formatSelect.onchange = () => refreshPreview();
+      for (const [key, selector] of fields) {
+        const input = modal.querySelector(selector);
+        const updateOffset = syncFields => {
+          const value = input.valueAsNumber;
+          if (Number.isFinite(value)) qrCalibration = cleanCalibration({ ...qrCalibration, [key]: value });
+          refreshPreview(syncFields);
+        };
+        input.oninput = () => updateOffset(false);
+        input.onchange = () => updateOffset(true);
+      }
+      modal.querySelector('#inv-qr-reset').onclick = () => { qrCalibration = { ...qrCalibrationDefaults }; refreshPreview(); };
+      const updatePrintSettings = (syncFields = true) => {
+        qrPrintSettings = normalizeMx10PrintSettings({ paperMode: paperSelect.value, darkness: darknessSelect.value, startFeedMm: Number.isFinite(startInput.valueAsNumber) ? startInput.valueAsNumber : qrPrintSettings.startFeedMm, tearFeedMm: Number.isFinite(tearInput.valueAsNumber) ? tearInput.valueAsNumber : qrPrintSettings.tearFeedMm });
+        if (syncFields) { startInput.value = qrPrintSettings.startFeedMm; tearInput.value = qrPrintSettings.tearFeedMm; }
+        persistQrPrintSettings(); refreshPreview(syncFields);
+      };
+      paperSelect.onchange = darknessSelect.onchange = () => updatePrintSettings();
+      for (const input of [startInput, tearInput]) { input.oninput = () => updatePrintSettings(false); input.onchange = () => updatePrintSettings(); }
+      syncPreview();
+      unsubscribe = printer.subscribe(updatePrinterUi);
+      modal.addEventListener('close', cleanup, { once: true });
+      modal.querySelector('#inv-qr-back').onclick = () => { cleanup(); void details(i.id); };
+      downloadButton.onclick = async () => {
+        const format = formatSelect.value, printImage = format === 'qr' ? { qrMatrix: q.matrix, qrGeometry: qrLabelGeometry } : {};
+        downloadButton.disabled = true;
+        try { const png = await renderLabelPng(labelSvg(i, q, format), qrCalibration, printImage); download(png, 'image/png', `${i.item_code}-${format === 'barcode' ? 'barcode' : 'qr'}-label.png`); toast(`${format === 'barcode' ? 'Barcode' : 'QR'} PNG downloaded for Fun Print.`); }
+        catch (err) { setMessage(err.message, 'error'); }
+        finally { downloadButton.disabled = false; }
+      };
+      connect.onclick = async () => {
+        setMessage();
+        try { await printer.connect(); const state = printer.status(); if (state.connected) setMessage(`${state.name} is connected and ready.`, 'success'); else if (!state.reconnecting && !state.connecting) setMessage('Printer disconnected.'); }
+        catch (err) { setMessage(err.message, 'error'); }
+      };
+      calibrate.onclick = async () => {
+        setMessage('Finding the next label gap…');
+        try { await printer.calibrateLabel(); setMessage('Label sensor calibrated. The current print position is unchanged.', 'success'); }
+        catch (err) { setMessage(err.message, 'error'); }
+        finally { updatePrinterUi(printer.status()); }
+      };
+      print.onclick = async () => {
+        const printerName = printer.status().name, format = formatSelect.value;
+        setMessage(`Checking paper and preparing the ${format === 'barcode' ? 'barcode' : 'QR'} label…`);
+        try {
+          const printImage = format === 'qr' ? { qrMatrix: q.matrix, qrGeometry: qrLabelGeometry } : {}, result = await printer.printLabel(labelSvg(i, q, format), qrCalibration, printImage, qrPrintSettings);
+          setMessage(`${format === 'barcode' ? 'Barcode' : 'QR'} label sent to ${printerName}. ${result.paperMode === 'continuous' ? 'Tear the label at the printer edge.' : 'The next label is positioned.'}`, 'success');
+          toast(`${format === 'barcode' ? 'Barcode' : 'QR'} label sent; printer remains connected.`);
+        } catch (err) { setMessage(err.message, 'error'); }
+        finally { updatePrinterUi(printer.status()); }
+      };
     } catch (err) { showModal('Equipment label unavailable', errorBody(err)); }
   }
   async function saveQrSheet(items) { if (!items.length) return; try { const result = await api('/inventory/qr-labels'), labels = new Map(result.items.map(item => [String(item.id), item])); download(qrSheet(items, labels, { ...qrCalibration, ...qrPrintSettings }), 'text/html;charset=utf-8', `rent-play-qr-labels-${new Date().toISOString().slice(0, 10)}.html`); toast(`Printable QR sheet saved for ${items.length} equipment item${items.length === 1 ? '' : 's'}. Open it and choose Print labels.`); } catch (err) { showModal('QR sheet unavailable', errorBody(err)); } }

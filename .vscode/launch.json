@@ -9,6 +9,10 @@
       "runtimeArgs": ["--env-file-if-exists=.env"],
       "program": "${workspaceFolder}/apps/backend/src/server.mjs",
       "cwd": "${workspaceFolder}/apps/backend",
+      "env": {
+        "NODE_ENV": "development",
+        "PORT": "3000"
+      },
       "console": "internalConsole",
       "skipFiles": ["<node_internals>/**"]
     },
@@ -19,6 +23,12 @@
       "runtimeExecutable": "node",
       "program": "${workspaceFolder}/apps/web/server.mjs",
       "cwd": "${workspaceFolder}/apps/web",
+      "env": {
+        "NODE_ENV": "development",
+        "HOST": "127.0.0.1",
+        "PORT": "5173",
+        "API_PORT": "3000"
+      },
       "console": "internalConsole",
       "skipFiles": ["<node_internals>/**"],
       "serverReadyAction": {

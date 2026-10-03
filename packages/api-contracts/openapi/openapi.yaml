@@ -1,6 +1,134 @@
 openapi: 3.0.3
 info:
   title: Rent & Play API
-  version: 0.1.0
-paths: {}
-# TODO: Add endpoints as backend development starts.
+  version: 0.2.0
+paths:
+  /api/workspace:
+    get:
+      summary: Full administration history including every verification attempt
+      security: [{adminSession: []}]
+      responses:
+        '200': {description: Workspace records with saved inspections and fees}
+        '401': {description: Active administrator session required}
+  /api/rentals:
+    post:
+      summary: Save a quote and reserve equipment for terminal verification
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RentalRequest'}
+      responses:
+        '201': {description: Saved rental and pending verification request}
+        '400': {description: Invalid pricing or request details}
+        '401': {description: Administrator authentication required}
+        '409': {description: Equipment unavailable or terminal unconfigured}
+  /api/returns:
+    post:
+      summary: Prepare a return while equipment remains Rented
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReturnRequest'}
+      responses:
+        '201': {description: Pending return request and fee preview}
+        '400': {description: Invalid inspection, penalty, or return time}
+        '401': {description: Administrator authentication required}
+        '409': {description: Rental inactive or another return pending}
+  /api/verification-requests/{requestId}/inspection:
+    parameters:
+      - {name: requestId, in: path, required: true, schema: {type: string}}
+    put:
+      summary: Record the authenticated inspector without finalizing the handoff
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/Inspection'}
+                - type: object
+                  required: [revision]
+                  properties:
+                    revision: {type: integer, minimum: 0}
+                    penaltyAmount: {type: number, nullable: true, minimum: 0, multipleOf: 0.01}
+                    penaltyReason: {type: string, maxLength: 1000}
+      responses:
+        '200': {description: Pending request with incremented inspection revision}
+        '400': {description: Invalid inspection}
+        '401': {description: Administrator authentication required}
+        '409': {description: Closed request or stale inspection revision}
+  /api/terminals/{terminalId}/pending:
+    parameters:
+      - {name: terminalId, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Poll pending requests and record device heartbeat
+      security: [{terminalDeviceKey: []}]
+      responses:
+        '200': {description: Requests with saved fees, inspection revisions, and deadlines}
+        '401': {description: Invalid or inactive device credential}
+  /api/terminals/{terminalId}/confirm:
+    parameters:
+      - {name: terminalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Atomically confirm or reject an assigned handoff from the terminal
+      security: [{terminalDeviceKey: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [requestId, verificationCode]
+              properties:
+                requestId: {type: string}
+                verificationCode: {type: string, pattern: '^[0-9]{6}$'}
+                action: {type: string, enum: [CONFIRM, REJECT], default: CONFIRM}
+                button: {type: string, enum: [OK], description: Required when confirming}
+                inspectionRevision: {type: integer, minimum: 1, description: Displayed revision required when confirming}
+                reason: {type: string, maxLength: 1000, description: Required when rejecting}
+      responses:
+        '200': {description: Final request status; duplicate retransmissions have duplicate true}
+        '400': {description: Invalid button action or missing rejection reason}
+        '401': {description: Device authentication required; web cookies never substitute}
+        '409': {description: Incorrect terminal/code/revision, missing inspection/penalty, or inconsistent lifecycle}
+        '410': {description: Deadline elapsed; expiry has been persisted}
+components:
+  securitySchemes:
+    adminSession: {type: apiKey, in: cookie, name: rent_play_session}
+    mobileAdminToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active ADMIN user profile}
+    terminalDeviceKey: {type: http, scheme: bearer, description: Separately provisioned terminal key; never a Firebase token or web cookie}
+  schemas:
+    Inspection:
+      type: object
+      required: [condition, notes]
+      properties:
+        condition: {type: string, enum: [GOOD, FAIR, DAMAGED, NEEDS_INSPECTION]}
+        notes: {type: string, minLength: 1, maxLength: 2000}
+        result: {type: string, enum: [AVAILABLE, UNDER_MAINTENANCE], description: Damaged returns require maintenance; release must be available}
+    RentalRequest:
+      type: object
+      required: [itemId, customerId, terminalId]
+      properties:
+        itemId: {type: string}
+        customerId: {type: string}
+        terminalId: {type: string}
+        mode: {type: string, enum: [TIMED, WHOLE_STAY], default: TIMED}
+        durationMinutes: {type: integer, minimum: 1, maximum: 10080, description: Required for timed rentals}
+        resortCheckoutAt: {type: string, format: date-time, description: Required for whole-stay rentals}
+        startAt: {type: string, format: date-time, description: Defaults to server time; must be within five minutes of now}
+        inspection: {$ref: '#/components/schemas/Inspection'}
+    ReturnRequest:
+      type: object
+      required: [rentalId, terminalId]
+      properties:
+        rentalId: {type: string}
+        terminalId: {type: string}
+        returnedAt: {type: string, format: date-time, description: Defaults to server receipt time; cannot precede release or be in the future}
+        inspection: {$ref: '#/components/schemas/Inspection'}
+        penaltyAmount: {type: number, nullable: true, minimum: 0, multipleOf: 0.01, description: Missing is unknown; explicit amount including zero required before confirmation}
+        penaltyReason: {type: string, maxLength: 1000, description: Required for a positive penalty}

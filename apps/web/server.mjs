@@ -8,7 +8,9 @@ const root = process.env.NODE_ENV === 'production' ? path.join(appRoot, 'dist') 
 const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml' };
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
-http.createServer(async (req, res) => {
+const appRoutes = new Set(['/', '/equipment', '/customers', '/rates', '/rentals', '/returns', '/transactions', '/maintenance', '/verification', '/reports', '/settings', '/profile']);
+const browserHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host;
+const server = http.createServer(async (req, res) => {
   if (req.url.startsWith('/api/')) {
     const headers = { ...req.headers };
     delete headers.host;
@@ -24,11 +26,17 @@ http.createServer(async (req, res) => {
   }
   try {
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-    const appRoutes = new Set(['/', '/equipment', '/customers', '/rates', '/rentals', '/returns', '/transactions', '/maintenance', '/verification', '/reports', '/settings', '/profile']);
     const target = path.resolve(root, '.' + (appRoutes.has(pathname) ? '/index.html' : pathname));
     if (!target.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
-    if (!(appRoutes.has(pathname) || pathname === '/index.html' || pathname === '/src/app.js' || pathname === '/src/inventory.js' || pathname === '/src/equipment-label.js' || pathname === '/src/label-logo.js' || pathname === '/src/mx10-printer.js' || pathname === '/src/workspace-ui.js' || pathname === '/src/settings-ui.js' || pathname === '/src/preferences.js' || pathname === '/src/analytics.js' || pathname === '/src/analytics-report.js' || pathname === '/src/styles.css' || pathname.startsWith('/public/')) || pathname.split('/').some(part => part.startsWith('.'))) { res.writeHead(404).end(); return; }
+    const browserModule = /^\/src\/[A-Za-z0-9_-]+\.js$/.test(pathname);
+    if (!(appRoutes.has(pathname) || pathname === '/index.html' || browserModule || pathname === '/src/styles.css' || pathname.startsWith('/public/')) || pathname.split('/').some(part => part.startsWith('.'))) { res.writeHead(404).end(); return; }
     const body = await readFile(target);
     res.writeHead(200, { 'Content-Type': types[path.extname(target)] || 'application/octet-stream', 'Cache-Control': 'no-store' }).end(body);
   } catch { res.writeHead(404).end('Not found'); }
-}).listen(port, host, () => console.log(`Rent & Play: listening on ${host}:${port}`));
+});
+server.on('error', error => {
+  if (error.code === 'EADDRINUSE') console.error(`Rent & Play: port ${port} is already in use. Stop the previous web server before starting again. Current web address: http://${browserHost}:${port}`);
+  else console.error(`Rent & Play web server failed: ${error.message}`);
+  process.exitCode = 1;
+});
+server.listen(port, host, () => console.log(`Rent & Play: http://${browserHost}:${server.address().port}`));

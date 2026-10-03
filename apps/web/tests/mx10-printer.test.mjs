@@ -131,7 +131,7 @@ test('saved QR offsets cannot clip the first rows or four-module border', () => 
   assert.deepEqual(normalizeMx10LabelCalibration({ offsetX: -5, offsetY: -5 }), { offsetX: -5, offsetY: -5 }, 'barcode offsets retain their behavior');
 });
 
-function mockBrowser(t, onPacket, { notifications = true } = {}) {
+function mockBrowser(t, onPacket, { notifications = true, deviceName = 'MX10' } = {}) {
   const originals = new Map(['window', 'navigator', 'document', 'Image', 'localStorage'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   t.after(() => { for (const [key, descriptor] of originals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; } });
   const listeners = new Map(), packets = [], timers = [], requestedDelays = [];
@@ -153,16 +153,55 @@ function mockBrowser(t, onPacket, { notifications = true } = {}) {
   } };
   const rx = { properties: { notify: true }, addEventListener(name, handler) { listeners.set(name, handler); }, removeEventListener() {}, async startNotifications() {} };
   const service = { async getCharacteristic(uuid) { if (uuid.includes('ae01')) return tx; if (!notifications) throw new Error('Notifications unavailable'); return rx; } };
-  const device = { name: 'MX10', id: 'test-printer', addEventListener() {}, removeEventListener() {}, gatt: { connected: false, async connect() { this.connected = true; return { async getPrimaryService() { return service; } }; }, disconnect() { this.connected = false; } } };
+  const device = { name: deviceName, id: 'test-printer', addEventListener() {}, removeEventListener() {}, gatt: { connected: false, async connect() { this.connected = true; return { async getPrimaryService() { return service; } }; }, disconnect() { this.connected = false; } } };
   const window = { isSecureContext: true, setTimeout(callback, ms) { requestedDelays.push(ms); const timer = setTimeout(callback, ms >= 6000 ? 5 : 0); timers.push(timer); return timer; }, clearTimeout };
   t.after(() => timers.forEach(clearTimeout));
   class MockImage { set src(value) { this.value = value; queueMicrotask(() => this.onload()); } }
   const document = { createElement() { const canvas = { width: 0, height: 0 }; canvas.getContext = () => ({ fillRect() {}, save() {}, beginPath() {}, rect() {}, clip() {}, translate() {}, drawImage() {}, restore() {}, getImageData() { return { data: new Uint8ClampedArray(canvas.width * canvas.height * 4).fill(255) }; } }); return canvas; } };
   for (const [key, value] of Object.entries({ window, document, navigator: { bluetooth: { async requestDevice() { return device; } } }, Image: MockImage, localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} } })) Object.defineProperty(globalThis, key, { configurable: true, value });
-  return { packets, receive, requestedDelays, get writesWhilePaused() { return writesWhilePaused; }, get maximumWrites() { return maximumWrites; } };
+  return { device, packets, receive, requestedDelays, get writesWhilePaused() { return writesWhilePaused; }, get maximumWrites() { return maximumWrites; } };
 }
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 300"><rect width="500" height="300" fill="white"/></svg>';
+
+test('printer identity appears only after connection and follows the Bluetooth device name', async t => {
+  const browser = mockBrowser(t, undefined, { deviceName: 'Label Printer 42' });
+  const printer = createMx10Printer();
+  assert.equal(printer.status().name, 'Printer');
+  assert.equal(printer.status().connected, false);
+  const pending = printer.connect();
+  assert.equal(printer.status().connecting, true);
+  assert.equal(printer.status().name, 'Printer', 'do not assume a name while choosing or connecting');
+  await pending;
+  assert.equal(printer.status().connected, true);
+  assert.equal(printer.status().name, 'Label Printer 42');
+  browser.device.gatt.disconnect();
+  assert.equal(printer.status().name, 'Printer', 'a dropped connection hides the retained device name');
+  await printer.disconnect();
+  assert.equal(printer.status().name, 'Printer');
+});
+
+test('an offline selected printer keeps a generic name while waiting to reconnect', async t => {
+  const browser = mockBrowser(t, undefined, { deviceName: 'Saved Printer' });
+  browser.device.gatt.connect = async () => { throw new Error('Device is offline'); };
+  const printer = createMx10Printer();
+  const result = await printer.connect();
+  assert.equal(result.reconnecting, true);
+  assert.equal(printer.status().reconnecting, true);
+  assert.equal(printer.status().connected, false);
+  assert.equal(printer.status().name, 'Printer');
+  await printer.disconnect();
+  assert.equal(printer.status().reconnecting, false);
+});
+
+test('a connected Bluetooth device without a name uses Printer as its fallback', async t => {
+  mockBrowser(t, undefined, { deviceName: '' });
+  const printer = createMx10Printer();
+  await printer.connect();
+  assert.equal(printer.status().connected, true);
+  assert.equal(printer.status().name, 'Printer');
+  await printer.disconnect();
+});
 
 test('continuous Bluetooth job respects pause/resume and never performs sensor alignment', async t => {
   let pausedOnce = false;
@@ -228,7 +267,9 @@ test('overheat notification stops raster transfer and releases printing state', 
   await assert.rejects(printer.printLabel(svg), /too hot/);
   assert.equal(browser.packets.length, 9, 'no more data after an overheat report');
   assert.equal(printer.status().printing, false);
+  assert.equal(printer.status().headHot, true, 'the UI can explain why printing is unavailable');
   await printer.printLabel(svg); // A status query can clear the cooled print-head state.
+  assert.equal(printer.status().headHot, false);
   await printer.disconnect();
 });
 

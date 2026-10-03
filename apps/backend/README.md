@@ -64,7 +64,7 @@ The Firestore write integration test runs only against the Firebase emulator whe
 - `settings/pricing`: client rate products, timed packages, sale prices, deposits, overtime rates, service hours, and rental policy text. Missing configuration loads the versioned catalog defaults in the backend until an administrator saves it.
 - `customers`, `rentals`
 - `verification_requests`, `terminals`
-- `maintenance_records`, `item_status_history`, `audit_logs`
+- `maintenance_records`, `item_status_history`, `item_condition_records`, `audit_logs`
 
 References between collections are string document IDs such as `item_id`, `customer_id`, `rental_id`, and `terminal_id`. Date fields are Firestore timestamps. Rental fees and deposits are numeric PHP amounts.
 
@@ -80,6 +80,16 @@ The authenticated workspace response includes the records needed by Reports. Ana
 - `verification_requests`: `status: CONFIRMED`, `terminal_id`, `requested_at`, `confirmed_at`, and either `rental_id` or `item_id` for equipment filtering. When `confirmed_at` is absent, `rental_id` plus explicit `transaction_type: RENTAL` or `RETURN` allows fallback to the corresponding rental confirmation timestamp. Missing or inconsistent timing/terminal data is excluded and disclosed, not treated as zero seconds.
 - `terminals`: `name`, `terminal_code` for labels. Unregistered IDs remain grouped separately.
 
-All timestamps above are serialized for the web report, including `confirmed_at` and `changed_at`. The response includes `refreshedAt`. Capture terminal confirmation timestamps when the trusted mobile/ESP32 confirmation workflow completes; this report does not implement those separate write endpoints or prove that physical device confirmation is connected.
+All timestamps above are serialized, including nested inspection and fee-snapshot dates. The response includes `refreshedAt`. Trusted transaction endpoints now persist terminal confirmations, conditions, and fees; physical ESP32 connectivity still requires hardware integration and validation.
+
+## Rental / return audit workflow
+
+The website prepares rental/return requests and records inspections. Only the device-authenticated terminal endpoint finalizes a handoff. See [the API contract](../../docs/api/endpoints.md) and [data dictionary](../../docs/database/data-dictionary.md) for exact fields and legacy-data handling.
+
+Run `npm run terminal:register` to provision a new terminal or add a credential to an existing terminal without one. The command refuses to overwrite credentials, stores only a key digest, and displays the key once for ESP32 setup. Configure polling and physical confirmation according to the shared contract.
+
+Requests expire after 10 minutes by default (`VERIFICATION_TTL_SECONDS`). A startup/15-second worker and request-time sweeps persist EXPIRED status/reason. Firestore transactions coordinate confirmation, rejection, expiry, and reservations. Inspected returns requiring maintenance create linked records only after valid device confirmation. Original pricing and condition snapshots survive edits and repairs.
+
+New return confirmations require an explicit penalty (zero when none applies). Missing historical data remains labelled not recorded. Refundable deposits are separate from rental charges.
 
 The included Firestore rules deny direct client access because all web, mobile, and ESP32 traffic is expected to pass through the trusted REST API. Deploy them with the Firebase CLI when you are ready to connect the project.

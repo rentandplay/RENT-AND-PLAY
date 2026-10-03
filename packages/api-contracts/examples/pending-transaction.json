@@ -1,6 +1,12 @@
 {
-  "transactionId": 45,
-  "type": "RETURN",
-  "itemId": "PS4-01",
-  "displayStatus": "RETURN READY"
+  "id": "verification-45",
+  "rental_id": "rental-45",
+  "transaction_type": "RETURN",
+  "item_id": "PS4-01",
+  "status": "PENDING",
+  "terminal_id": "TERM-01",
+  "verification_code": "123456",
+  "inspection_revision": 1,
+  "requested_at": "2026-10-03T20:00:00+08:00",
+  "expires_at": "2026-10-03T20:10:00+08:00"
 }

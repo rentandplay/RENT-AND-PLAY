@@ -7,7 +7,7 @@
     "dev": "node server.mjs",
     "start": "node server.mjs",
     "build": "node build.mjs",
-    "check": "node --check src/app.js && node --check src/inventory.js && node --check src/equipment-label.js && node --check src/label-logo.js && node --check src/mx10-printer.js && node --check src/workspace-ui.js && node --check src/settings-ui.js && node --check src/preferences.js && node --check src/analytics.js && node --check src/analytics-report.js && node --check server.mjs",
+    "check": "node --check src/app.js && node --check src/inventory.js && node --check src/equipment-label.js && node --check src/label-logo.js && node --check src/mx10-printer.js && node --check src/workspace-ui.js && node --check src/transaction-records.js && node --check src/transaction-workflow.js && node --check src/settings-ui.js && node --check src/preferences.js && node --check src/analytics.js && node --check src/analytics-report.js && node --check server.mjs",
     "test": "node --test tests/*.test.mjs"
   }
 }

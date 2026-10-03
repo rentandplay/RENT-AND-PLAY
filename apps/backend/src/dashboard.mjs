@@ -1,4 +1,5 @@
-import {asDate,dateFields,docData} from './firebase.mjs';
+import {asDate,docData} from './firebase.mjs';
+import {publicTerminal,serializeTransaction} from './transactions.mjs';
 
 export function databaseDate(value) {return asDate(value);}
 export const dateKey = date => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
@@ -23,8 +24,6 @@ export function revenueWeeks(rows,now=new Date()) {
 }
 
 const rows=snapshot=>snapshot.docs.map(docData);
-const dates=['due_at','confirmed_rental_at','requested_at','expires_at','last_seen_at','created_at','updated_at'];
-
 export async function loadDashboard(db,now=new Date()) {
   const names=['items','item_categories','item_rates','customers','rentals','verification_requests','terminals'];
   const snapshots=await Promise.all(names.map(name=>db.collection(name).get()));
@@ -54,10 +53,10 @@ export async function loadDashboard(db,now=new Date()) {
     const terminal=terminalsById.get(String(request.terminal_id))||{};
     return {...request,terminal_code:terminal.terminal_code||'',item_code:item.item_code||'',item_name:item.name||'Unknown equipment',customer:customer.full_name||'Unknown customer'};
   }).sort((a,b)=>asDate(a.requested_at)-asDate(b.requested_at));
-  const terminals=source.terminals.filter(terminal=>terminal.is_active!==false).map(terminal=>({...terminal,online:terminal.status==='ONLINE'&&!!terminal.last_seen_at&&now-asDate(terminal.last_seen_at)<90000}));
+  const terminals=source.terminals.filter(terminal=>terminal.is_active!==false).map(terminal=>({...publicTerminal(terminal),online:terminal.status==='ONLINE'&&!!terminal.last_seen_at&&now-asDate(terminal.last_seen_at)<90000}));
   const active=rentals.filter(rental=>rental.status==='ACTIVE');
   const categories=source.item_categories.map(category=>({name:category.name,count:items.filter(item=>String(item.category_id)===category.id).length})).sort((a,b)=>a.name.localeCompare(b.name));
-  const serialize=record=>dateFields(record,dates);
+  const serialize=serializeTransaction;
   return {
     items:items.map(serialize),customers:source.customers.filter(c=>c.is_active!==false).sort((a,b)=>a.full_name.localeCompare(b.full_name)).map(serialize),categories,
     rentals:rentals.map(serialize),pending:pending.map(serialize),terminals:terminals.map(serialize),revenue:revenueWeeks(source.rentals,now),

@@ -22,3 +22,22 @@ Each physical `items/{id}` record may include `pricing_product_id`, which connec
 ## Existing operational records
 
 Other collections and fields are documented in [the backend README](../../apps/backend/README.md).
+
+## Saved rental inspections and charges
+
+- `rentals/{id}`: item/customer IDs, lifecycle status, rental/deposit amounts, due/confirmation/actual-return times; `rental_request_id`, `latest_return_request_id/status/reason`, confirming terminal IDs, and `final_reason`.
+- `fee_breakdown`: pricing snapshot saved at reservation. Includes version/source (`RATE_SHEET` or `ITEM_RATE`), product/rate IDs, package label and kind, component units/prices/totals, requested/billed minutes, start/due times, PHP base fee, refundable deposit, overtime unit/rate, saved grace period and lost-piece fee. A valid return appends actual return time, overtime units/amount, explicit penalty/reason, final rental charges, and finalization time. Pricing edits never replace the original snapshot.
+- `release_condition`, `return_condition`: condition, notes, inspector ID/name and time, result (`AVAILABLE` or `UNDER_MAINTENANCE`), terminal ID/code, confirmation time, and immutable record ID. Repair changes current inventory condition without rewriting these snapshots.
+- `item_condition_records/{id}`: append-only confirmation records with rental/item/request IDs, phase (`RELEASE` or `RETURN`), and inspection snapshot. Pending inspections remain drafts on their requests until trusted confirmation.
+- `maintenance_records/{id}`: damaged/inspection-required returns add `rental_id`, `verification_request_id`, `condition_record_id`, `inspection_notes`, and `inspected_by`. Repair notes remain in `details`; original inspection notes are retained.
+- `items/{id}.reserved_rental_id`: reservation pointer. Item state stays AVAILABLE while dashboard/inventory derive Pending from its open rental. Confirmation clears the pointer and sets RENTED; expiry/rejection releases it without changing another rental's state.
+
+Rate-sheet overtime bills each started hour. Per-item HOURLY and FLAT late rates bill each started hour; per-item DAILY late rates bill each started day. Refundable deposits are excluded from final rental charges. Rental requests do not accept final fee values from the client.
+
+Legacy data is shown without inventing history. Absent penalty, overtime, package, duration, or inspection fields are labelled not recorded. Returning a legacy rental saves its new inspection and explicit penalty while unprovable overtime/final charges remain unknown; current rates cannot backfill an old agreement.
+
+## Complete verification records
+
+`verification_requests/{id}` stores rental/item IDs, request type, assigned terminal ID/code snapshot, verification code, status, requested/deadline/confirmed/rejected/expired times, final/rejection reason, authenticated requested-by ID, pending inspection, and increasing inspection revision. Confirmed records store confirming terminal ID/code and condition-record ID; rejected records store resolving terminal ID/code. Expiry is audited as SYSTEM.
+
+`terminals/{id}.auth_token_hash` is the SHA-256 digest of a separately provisioned random credential. The web receives only `credentials_configured`; credential fields are excluded from workspace/dashboard responses. Device ID, active state, credential, verification code, deadline, lifecycle state, and displayed inspection revision are checked before finalizing a handoff.

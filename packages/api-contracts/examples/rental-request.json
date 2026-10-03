@@ -1,6 +1,7 @@
 {
-  "customerId": 10,
+  "customerId": "customer-10",
   "itemId": "PS4-01",
-  "dueDate": "2026-09-04T18:00:00",
-  "terminalId": "TERM-01"
+  "durationMinutes": 180,
+  "terminalId": "TERM-01",
+  "inspection": { "condition": "GOOD", "result": "AVAILABLE", "notes": "All controls and included accessories checked." }
 }

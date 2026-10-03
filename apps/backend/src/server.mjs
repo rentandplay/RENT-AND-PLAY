@@ -9,6 +9,7 @@ import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createI
 import { updateProfile } from './profile.mjs';
 import { loadWorkspace, createCustomer, updateCustomer, saveRate, savePricing, saveSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
+import { authenticateTerminal, createRentalRequest, createReturnRequest, expireVerificationRequests, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending } from './transactions.mjs';
 
 const webRoot = nodePath.resolve(fileURLToPath(new URL('../../web/dist/', import.meta.url)));
 const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
@@ -36,14 +37,22 @@ const defaultServices = {
   async getUser(id) { const doc = await firestore.collection('users').doc(String(id)).get(); return doc.exists ? { id: doc.id, ...doc.data() } : null; },
   async touchLogin(id) { await firestore.collection('users').doc(String(id)).update({ last_login_at: new Date() }); },
   updateProfile: (id, input) => updateProfile(firebaseAuth, firestore, id, input),
-  dashboard: () => loadDashboard(firestore),
+  dashboard: async () => { await expireVerificationRequests(firestore); return loadDashboard(firestore); },
   inventoryList: () => inventoryList(firestore), inventoryDetail: id => inventoryDetail(firestore, id), inventoryQr: id => inventoryQr(firestore, id), inventoryQrLabels: () => inventoryQrLabels(firestore),
   createItem: (actor, input) => createItem(firestore, actor, input), updateItem: (actor, id, input) => updateItem(firestore, actor, id, input), itemAction: (actor, id, input) => itemAction(firestore, actor, id, input), createItemCategory: (actor, input) => createItemCategory(firestore, actor, input), deleteItemCategory: (actor, id) => deleteItemCategory(firestore, actor, id), deleteArchivedItem: (actor, id, input) => deleteArchivedItem(firestore, actor, id, input),
-  workspace: role => loadWorkspace(firestore, role), pricing: () => loadPricing(firestore, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
+  workspace: async role => { await expireVerificationRequests(firestore); return loadWorkspace(firestore, role); }, pricing: () => loadPricing(firestore, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
+  authenticateTerminal: (id, key) => authenticateTerminal(firestore, id, key),
+  terminalPending: terminal => terminalPending(firestore, terminal),
+  terminalConfirm: (terminal, input) => resolveTerminalRequest(firestore, terminal, input),
+  createRentalRequest: async (actor, input) => { await expireVerificationRequests(firestore); return createRentalRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
+  createReturnRequest: async (actor, input) => { await expireVerificationRequests(firestore); return createReturnRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
+  saveRequestInspection: async (actor, id, input) => { await expireVerificationRequests(firestore); return saveRequestInspection(firestore, actor, id, input); },
+  verifyMobileToken: async token => { try { return await firebaseAuth.verifyIdToken(token, true); } catch { return null; } },
   pricingQuote: async input => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('Rental quote details are required.'), { status: 400 });
     const pricing = await loadPricing(firestore); let productId = input.productId;
     if (input.itemId) {
+      await expireVerificationRequests(firestore);
       const itemId = String(input.itemId);
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(itemId)) throw Object.assign(new Error('Invalid equipment ID.'), { status: 400 });
       const item = await firestore.collection('items').doc(itemId).get();
@@ -60,7 +69,7 @@ const defaultServices = {
   createCustomer: (actor, input) => createCustomer(firestore, actor, input), updateCustomer: (id, input) => updateCustomer(firestore, id, input), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: input => saveSettings(firestore, input), createUser: input => createWorkspaceUser(firebaseAuth, firestore, input), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input)
 };
 
-export function createApi({ services = defaultServices, sessions = new FirebaseSessions() } = {}) {
+export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices } = {}) {
   const attempts = new Map();
   const origins = new Set([process.env.WEB_ORIGIN || 'http://127.0.0.1:5173', 'http://localhost:5173']);
   function send(res, status, value, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers }); res.end(JSON.stringify(value)); }
@@ -70,7 +79,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     let value = ''; for await (const chunk of req) { value += chunk; if (Buffer.byteLength(value) > maxBytes) throw Object.assign(new Error('Request is too large.'), { status: 413 }); }
     try { return JSON.parse(value); } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
   }
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     const requestPath = new URL(req.url, 'http://127.0.0.1').pathname;
     if (!requestPath.startsWith('/api/')) return serveWeb(req, res, requestPath);
     const path = requestPath;
@@ -103,17 +112,33 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         await services.touchLogin(user.id); attempts.delete(ip);
         return send(res, 200, { user: publicUser(user) }, { 'Set-Cookie': cookie(session.cookie, session.seconds, input.remember === true) });
       }
+      const terminalRoute = path.match(/^\/api\/terminals\/([A-Za-z0-9_-]{1,128})\/(pending|confirm)$/);
+      if (terminalRoute) {
+        const [, terminalId, action] = terminalRoute;
+        const key = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
+        const terminal = await services.authenticateTerminal(terminalId, key);
+        if (action === 'pending' && req.method === 'GET') return send(res, 200, await services.terminalPending(terminal));
+        if (action === 'confirm' && req.method === 'POST') return send(res, 200, await services.terminalConfirm(terminal, await body(req)));
+        return send(res, 405, { error: 'Method not allowed.' });
+      }
+      const inspectionRoute = path.match(/^\/api\/verification-requests\/([A-Za-z0-9_-]{1,128})\/inspection$/);
+      const transactionRoute = path === '/api/rentals' || path === '/api/returns' || inspectionRoute;
       const inventoryRoute = path.match(/^\/api\/inventory(?:\/([A-Za-z0-9_-]{1,128})(?:\/(qr|actions))?)?$/);
       const inventoryQrLabelsRoute = path === '/api/inventory/qr-labels';
       const itemCategoriesRoute = path.match(/^\/api\/item-categories(?:\/([A-Za-z0-9_-]{1,128}))?$/);
       const customerRoute = path.match(/^\/api\/customers(?:\/([A-Za-z0-9_-]{1,128}))?$/), userRoute = path.match(/^\/api\/users(?:\/([A-Za-z0-9_-]{1,128}))?$/);
       const workspaceRoute = path === '/api/workspace' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || customerRoute || userRoute || itemCategoriesRoute;
-      if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || inventoryQrLabelsRoute || workspaceRoute) {
-        const claims = await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
+      if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute) {
+        const mobileToken = transactionRoute ? /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1] : null;
+        const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
         const user = await services.getUser(claims.uid); if (!user?.is_active || user.role !== 'ADMIN') return send(res, 401, { error: 'Please sign in.' });
         if (path === '/api/auth/me') return send(res, 200, { user: publicUser(user) });
         if (path === '/api/profile') return send(res, 200, { user: publicUser(await services.updateProfile(user.id, await body(req))) });
         if (path === '/api/workspace' && req.method === 'GET') return send(res, 200, await services.workspace(user.role));
+        if (path === '/api/rentals' && req.method === 'POST') return send(res, 201, await services.createRentalRequest(user, await body(req)));
+        if (path === '/api/returns' && req.method === 'POST') return send(res, 201, await services.createReturnRequest(user, await body(req)));
+        if (inspectionRoute && req.method === 'PUT') return send(res, 200, { request: await services.saveRequestInspection(user, inspectionRoute[1], await body(req)) });
+        if (transactionRoute) return send(res, 405, { error: 'Method not allowed.' });
         if (itemCategoriesRoute) { const [, id] = itemCategoriesRoute; if (req.method === 'POST' && !id) return send(res, 201, { category: await services.createItemCategory(user.id, await body(req)) }); if (req.method === 'DELETE' && id) return send(res, 200, { category: await services.deleteItemCategory(user.id, id) }); return send(res, 405, { error: 'Method not allowed.' }); }
         if (inventoryQrLabelsRoute && req.method === 'GET') return send(res, 200, await services.inventoryQrLabels());
         if (path === '/api/pricing' && req.method === 'GET') return send(res, 200, await services.pricing());
@@ -142,6 +167,11 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       else { console.error(`Backend request failed (${error.code || 'FIREBASE_ERROR'}).`); send(res, 503, { error: 'Firebase is unavailable. Check the backend Firebase configuration.' }); }
     }
   });
+  if (expiryWorker) {
+    const stop = startExpiryWorker(firestore);
+    server.once('close', stop);
+  }
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) createApi().listen(Number(process.env.PORT || 3000), '0.0.0.0', () => console.log('Rent & Play backend: listening on port ' + (process.env.PORT || 3000)));

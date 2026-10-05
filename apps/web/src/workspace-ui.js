@@ -4,6 +4,7 @@ import { renderSettings, settingsTabs } from './settings-ui.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
 import { actualReturnTime, chargeCell, enrichVerification, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderRequestHistory, savedCharges } from './transaction-records.js';
 import { createTransactionWorkflow } from './transaction-workflow.js';
+import { createCustomerUI } from './customer-ui.js';
 
 export function createWorkspaceUI(h) {
   const { api, escape: e, showModal, modal, toast, money, formatDate, icon } = h;
@@ -24,6 +25,7 @@ export function createWorkspaceUI(h) {
     return previous !== JSON.stringify(Object.fromEntries(Object.entries(next).filter(([key]) => key !== 'refreshedAt')));
   };
   const workflow = createTransactionWorkflow({ ...h, model: () => model, refresh, redraw: () => redraw() });
+  const customerUI = createCustomerUI({ ...h, model: () => model, refresh, transactionDetails });
   const empty = (title, text) => `<div class="workspace-empty">${icon('box')}<h3>${e(title)}</h3><p>${e(text)}</p></div>`;
   const table = (heads, rows) => `<div class="admin-table-scroll"><table class="admin-table"><thead><tr>${heads.map(v => `<th>${v}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
   const pageHeader = (eyebrow, title, text, action = '') => action ? `<div class="module-heading module-actions">${action}</div>` : '';
@@ -31,14 +33,7 @@ export function createWorkspaceUI(h) {
   const paged = (records, key) => { const total = Math.max(1, Math.ceil(records.length / pageSize)); pages[key] = Math.min(Math.max(0, pages[key] || 0), total - 1); const start = pages[key] * pageSize; return { rows: records.slice(start, start + pageSize), footer: `<div class="module-pagination"><span>${records.length ? `${start + 1}–${Math.min(start + pageSize, records.length)} of ${records.length}` : '0 records'} · Page ${records.length ? pages[key] + 1 : 0} of ${Math.ceil(records.length / pageSize)}</span><div><button class="secondary" data-pager-prev="${e(key)}" ${pages[key] ? '' : 'disabled'}>← Previous</button><button class="secondary" data-pager-next="${e(key)}" ${start + pageSize < records.length ? '' : 'disabled'}>Next →</button></div></div>` }; };
 
   function customers() {
-    const records = model.customers.filter(c => includes(c, ['full_name', 'customer_code', 'email', 'phone'])), view = paged(records, 'Customers');
-    return `<section class="panel admin-module"><div class="module-toolbar"><label class="module-search">${icon('search')}<input id="module-search" value="${e(search)}" placeholder="Search customers" aria-label="Search customers"/></label><div class="module-toolbar-actions"><span>${records.length} customer(s)</span><button class="primary" id="customer-add">+ Add customer</button></div></div>${records.length ? table(['CUSTOMER', 'CONTACT', 'ADDRESS', 'STATUS', ''], view.rows.map(c => `<tr><td><strong>${e(c.full_name)}</strong><small>${e(c.customer_code)}</small></td><td>${e(c.email || 'No email')}<small>${e(c.phone || 'No phone')}</small></td><td>${e(c.address || 'Not provided')}</td><td>${status(c.is_active === false ? 'Inactive' : 'Active')}</td><td><div class="row-actions"><button class="text-button" data-customer-edit="${e(c.id)}">Edit</button><button class="text-button" data-customer-action="${e(c.id)}">${c.is_active === false ? 'Restore' : 'Archive'}</button></div></td></tr>`).join('')) : empty('No customers found', 'Add a customer or adjust your search.')}${records.length ? view.footer : ''}</section>`;
-  }
-
-  function customerForm(customer = {}) {
-    showModal(customer.id ? 'Edit customer' : 'Add customer', `<form id="customer-form" class="admin-form"><div class="form-grid"><label>Full name<input name="fullName" value="${e(customer.full_name || '')}" maxlength="150" required/></label><label>Customer code<input name="code" value="${e(customer.customer_code || '')}" pattern="[A-Za-z0-9][A-Za-z0-9_-]+" maxlength="50" placeholder="CUST-001" required/></label><label>Email<input type="email" name="email" value="${e(customer.email || '')}" maxlength="191"/></label><label>Phone<input name="phone" value="${e(customer.phone || '')}" maxlength="40"/></label></div><label>Address<textarea name="address" maxlength="500" rows="3">${e(customer.address || '')}</textarea></label><p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Save customer</button></div></form>`);
-    modal.querySelector('[data-close]').onclick = () => modal.close();
-    modal.querySelector('form').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget, button = form.querySelector('[type="submit"]'), error = form.querySelector('.form-error'); button.disabled = true; try { await api(customer.id ? `/customers/${customer.id}` : '/customers', { method: customer.id ? 'PATCH' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); await refresh(); modal.close(); toast(customer.id ? 'Customer updated.' : 'Customer added.'); redraw(); } catch (problem) { error.textContent = problem.message; button.disabled = false; } };
+    return customerUI.render(search, { paged, table, status, empty });
   }
 
   const txState = { Rentals: { filter: "All open" }, Returns: { filter: "All returns" }, "Transaction History": { status: "All statuses", period: "All time" } };
@@ -204,8 +199,7 @@ export function createWorkspaceUI(h) {
     workflow.bind(page, rerender, pages);
     const searchBox = document.querySelector('#module-search'); if (searchBox) searchBox.oninput = event => { search = event.target.value; pages[page] = 0; if (page === 'ESP32 terminal') pages['Verification history'] = 0; rerender(); document.querySelector('#module-search')?.focus(); };
     document.querySelectorAll('[data-pager-prev]').forEach(button => button.onclick = () => { pages[button.dataset.pagerPrev] = Math.max(0, (pages[button.dataset.pagerPrev] || 0) - 1); rerender(); }); document.querySelectorAll('[data-pager-next]').forEach(button => button.onclick = () => { pages[button.dataset.pagerNext] = (pages[button.dataset.pagerNext] || 0) + 1; rerender(); });
-    document.querySelector('#customer-add')?.addEventListener('click', () => customerForm()); document.querySelectorAll('[data-customer-edit]').forEach(button => button.onclick = () => customerForm(model.customers.find(c => c.id === button.dataset.customerEdit)));
-    document.querySelectorAll('[data-customer-action]').forEach(button => button.onclick = async () => { const c = model.customers.find(v => v.id === button.dataset.customerAction); await api(`/customers/${c.id}`, { method: 'PATCH', body: JSON.stringify({ action: c.is_active === false ? 'restore' : 'archive' }) }); await refresh(); toast(c.is_active === false ? 'Customer restored.' : 'Customer archived.'); rerender(); });
+    if (page === 'Customers') customerUI.bind(rerender, () => { search = ''; }, () => { pages.Customers = 0; });
     document.querySelector('#rate-add')?.addEventListener('click', rateForm);
     document.querySelector('#rate-catalog-edit')?.addEventListener('click', rateSheetForm);
     document.querySelector('#rate-preview')?.addEventListener('click', quoteForm);
@@ -279,5 +273,5 @@ export function createWorkspaceUI(h) {
       link.href = url; link.download = 'rent-and-play-analytics-' + result.range.from + '-to-' + result.range.to + '.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast('Complete filtered analytics exported.');
     });
   }
-  return { load, refresh, render, bind, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { model = null; loading = null; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; settingsTab = 'business'; pages = {}; search = ''; searchPage = ''; pageSearches = {}; } };
+  return { load, refresh, render, bind, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { model = null; loading = null; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; settingsTab = 'business'; pages = {}; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); } };
 }

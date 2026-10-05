@@ -11,6 +11,7 @@ const sourceFiles = [
     'label-logo.js',
     'mx10-printer.js',
     'workspace-ui.js',
+    'customer-ui.js',
     'transaction-records.js',
     'transaction-workflow.js',
     'settings-ui.js',

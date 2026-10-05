@@ -7,7 +7,7 @@ test('API protects dashboard, uses Firebase session cookies, checks profiles, an
   const signedIn = [];
   const revoked = new Set();
   const sessions = { signIn: async (email, password) => { signedIn.push({ email, password }); return password === 'test-password-with-length' ? { uid: row.id, cookie: 'signed-cookie', seconds: 28800 } : null; }, verify: async token => token === 'signed-cookie' && !revoked.has(token) ? { uid: row.id } : null, revoke: token => revoked.add(token) };
-  const services = { health: async () => { }, getUser: async id => id === row.id ? row : null, touchLogin: async () => { }, dashboard: async () => ({ stats: { active: 0 } }), inventoryList: async () => ({ items: [], categories: [] }), workspace: async role => ({ role, customers: [] }), createCustomer: async (actor, input) => ({ id: 'customer-1', actor, ...input }), saveSettings: async input => input };
+  const services = { health: async () => { }, getUser: async id => id === row.id ? row : null, touchLogin: async () => { }, dashboard: async () => ({ stats: { active: 0 } }), inventoryList: async () => ({ items: [], categories: [] }), workspace: async role => ({ role, customers: [] }), createCustomer: async (actor, input) => ({ id: 'customer-1', actor, ...input }), saveSettings: async (actor, input) => input };
   const server = createApi({ services, sessions });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;

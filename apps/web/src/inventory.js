@@ -4,7 +4,7 @@ import { createEquipmentQrLabel as qrLabelSvg, QR_LABEL_GEOMETRY as qrLabelGeome
 const printer = createMx10Printer();
 
 export function createInventory(h) {
-  const { api, escape: e, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast } = h;
+  const { api, escape: e, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, confirmAction, confirmSubmit } = h;
   const cash = n => n == null ? 'Not configured' : new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2 }).format(Number(n));
   const unit = t => ({ DAILY: 'per day', HOURLY: 'per hour', FLAT: 'flat fee' })[t] || '';
   const label = s => String(s || 'Not recorded').toLowerCase().replaceAll('_', ' ').replace(/^./, c => c.toUpperCase());
@@ -204,19 +204,13 @@ export function createInventory(h) {
             <label for="inv-form-category">Category<select id="inv-form-category" name="categoryId" required>${categories.map(c => `<option value="${e(c.id)}" ${String(c.id) === (item?.category_id || cat) ? 'selected' : ''}>${e(c.name)}</option>`).join('')}</select></label>
             <div class="inv-category-actions">
               <button type="button" class="secondary inv-add-category-button" id="inv-add-category" aria-expanded="false" aria-controls="inv-category-popover">＋ Add category</button>
-              <button type="button" class="inv-category-remove-button" id="inv-remove-category" aria-expanded="false" aria-controls="inv-category-popover" title="Remove the selected category">Remove</button>
+              <button type="button" class="inv-category-remove-button" id="inv-remove-category" title="Remove the selected category">Remove</button>
             </div>
             <div class="inv-category-popover" id="inv-category-popover" role="group" aria-label="Manage equipment categories" hidden>
               <div id="inv-category-add-panel">
                 <label for="inv-new-category-name">Category name<input id="inv-new-category-name" type="text" maxlength="60" pattern="[^<>]{1,60}" placeholder="e.g. Camping equipment"/></label>
                 <p id="inv-category-error" class="inv-error" role="alert"></p>
                 <div class="inv-category-popover-actions"><button type="button" class="primary" id="inv-category-save">Save</button><button type="button" class="secondary" id="inv-category-discard">Discard</button></div>
-              </div>
-              <div id="inv-category-remove-panel" hidden>
-                <strong>Remove selected category?</strong>
-                <p id="inv-category-remove-copy"></p>
-                <p id="inv-category-remove-error" class="inv-error" role="alert"></p>
-                <div class="inv-category-popover-actions"><button type="button" class="inv-danger" id="inv-category-remove-confirm">Remove category</button><button type="button" class="secondary" id="inv-category-remove-discard">Cancel</button></div>
               </div>
             </div>
           </div>
@@ -258,26 +252,19 @@ export function createInventory(h) {
     pricingSelect.onchange = () => { const product = pricingProducts.find(p => p.id === pricingSelect.value); if (!product || item) return; const rate = product.rate_options.find(row => row.kind === 'HOURLY') || product.rate_options.find(row => row.kind !== 'WHOLE_STAY'); if (rate) { formEl.elements.rateType.value = rate.kind === 'HOURLY' ? 'HOURLY' : rate.kind === 'BLOCK' ? 'FLAT' : 'HOURLY'; formEl.elements.rentalRate.value = rate.amount; } formEl.elements.deposit.value = product.deposit_amount; formEl.elements.latePenalty.value = product.overtime_rate_per_hour; };
     if (item) { if (!Array.from(conditionSelect.options).some(o => o.value === item.condition_status)) conditionSelect.add(new Option(label(item.condition_status), item.condition_status)); conditionSelect.value = item.condition_status; conditionSelect.disabled = Number(item.open_rentals) > 0 || ['RENTED', 'RESERVED_PENDING'].includes(item.status); }
     const categoryPopover = modal.querySelector('#inv-category-popover'), categoryButton = modal.querySelector('#inv-add-category'), categoryRemoveButton = modal.querySelector('#inv-remove-category'), categoryInput = modal.querySelector('#inv-new-category-name'), categoryError = modal.querySelector('#inv-category-error'), categorySave = modal.querySelector('#inv-category-save'), categoryDiscard = modal.querySelector('#inv-category-discard'), categorySelect = formEl.elements.categoryId;
-    const categoryAddPanel = modal.querySelector('#inv-category-add-panel'), categoryRemovePanel = modal.querySelector('#inv-category-remove-panel'), categoryRemoveCopy = modal.querySelector('#inv-category-remove-copy'), categoryRemoveError = modal.querySelector('#inv-category-remove-error'), categoryRemoveConfirm = modal.querySelector('#inv-category-remove-confirm'), categoryRemoveDiscard = modal.querySelector('#inv-category-remove-discard');
     const equipmentSave = formEl.querySelector('[type="submit"]');
     const syncCategoryRemoveButton = () => { categoryRemoveButton.disabled = categories.length <= 1; categoryRemoveButton.title = categories.length <= 1 ? 'Keep at least one equipment category.' : 'Remove the selected category'; };
-    const closeCategoryPopover = focusTarget => { categoryPopover.hidden = true; categoryAddPanel.hidden = false; categoryRemovePanel.hidden = true; categoryButton.setAttribute('aria-expanded', 'false'); categoryRemoveButton.setAttribute('aria-expanded', 'false'); categoryInput.value = ''; categoryInput.disabled = false; categoryInput.setCustomValidity(''); categoryError.textContent = ''; categoryRemoveError.textContent = ''; equipmentSave.disabled = false; focusTarget?.focus(); };
-    categoryButton.onclick = () => { categoryPopover.hidden = false; categoryAddPanel.hidden = false; categoryRemovePanel.hidden = true; categoryButton.setAttribute('aria-expanded', 'true'); categoryRemoveButton.setAttribute('aria-expanded', 'false'); equipmentSave.disabled = true; categoryInput.disabled = false; categoryInput.focus(); };
-    categoryRemoveButton.onclick = () => {
-      const selected = categorySelect.selectedOptions[0], categoryId = categorySelect.value, usedCount = records.filter(record => String(record.category_id) === String(categoryId)).length;
-      if (!selected || !categoryId || categories.length <= 1) return;
-      categoryRemoveCopy.textContent = usedCount ? `“${selected.textContent}” is used by ${usedCount} equipment item${usedCount === 1 ? '' : 's'}. Move them to another category before removing it.` : `Remove “${selected.textContent}”? This category can only be removed while no equipment uses it.`;
-      categoryRemoveError.textContent = ''; categoryRemoveConfirm.disabled = usedCount > 0;
-      categoryPopover.hidden = false; categoryAddPanel.hidden = true; categoryRemovePanel.hidden = false; categoryButton.setAttribute('aria-expanded', 'false'); categoryRemoveButton.setAttribute('aria-expanded', 'true'); equipmentSave.disabled = true; categoryRemoveDiscard.focus();
-    };
+    const closeCategoryPopover = focusTarget => { categoryPopover.hidden = true; categoryButton.setAttribute('aria-expanded', 'false'); categoryInput.value = ''; categoryInput.disabled = false; categoryInput.setCustomValidity(''); categoryError.textContent = ''; equipmentSave.disabled = false; focusTarget?.focus(); };
+    categoryButton.onclick = () => { categoryPopover.hidden = false; categoryButton.setAttribute('aria-expanded', 'true'); equipmentSave.disabled = true; categoryInput.disabled = false; categoryInput.focus(); };
     categoryDiscard.onclick = () => closeCategoryPopover(categoryButton);
-    categoryRemoveDiscard.onclick = () => closeCategoryPopover(categoryRemoveButton);
-    categoryPopover.onkeydown = event => { if (event.key === 'Escape') { event.preventDefault(); (categoryRemovePanel.hidden ? categoryDiscard : categoryRemoveDiscard).click(); } };
+    categoryPopover.onkeydown = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); categoryDiscard.click(); } };
     categorySave.onclick = async event => {
       const button = event.currentTarget, version = sessionVersion, name = categoryInput.value.trim().replace(/\s+/g, ' ');
+      if (button.disabled) return;
       categoryInput.value = name; categoryInput.setCustomValidity(name ? '' : 'Enter a category name.'); if (!categoryInput.reportValidity()) return;
       button.disabled = true; categoryDiscard.disabled = true; categoryInput.disabled = true; categoryError.textContent = '';
       try {
+        if (!await confirmAction({ title: 'Add equipment category?', description: `“${name}” will be added to the equipment categories.`, confirmLabel: 'Yes, add category' }) || version !== sessionVersion || !formEl.isConnected) { categoryInput.disabled = false; return; }
         const { category: created } = await api('/item-categories', { method: 'POST', body: JSON.stringify({ name }) });
         if (version !== sessionVersion) return;
         categories = [...categories.filter(entry => String(entry.id) !== String(created.id)), created].sort((a, b) => a.name.localeCompare(b.name));
@@ -287,11 +274,15 @@ export function createInventory(h) {
       } catch (error) { categoryError.textContent = error.message; categoryInput.disabled = false; categoryInput.focus(); }
       finally { if (version === sessionVersion) { button.disabled = false; categoryDiscard.disabled = false; equipmentSave.disabled = !categoryPopover.hidden; } }
     };
-    categoryRemoveConfirm.onclick = async event => {
+    categoryRemoveButton.onclick = async event => {
       const button = event.currentTarget, version = sessionVersion, categoryId = categorySelect.value, categoryName = categorySelect.selectedOptions[0]?.textContent || 'category';
-      if (!categoryId || categories.length <= 1) return;
-      button.disabled = true; categoryRemoveDiscard.disabled = true; categoryRemoveError.textContent = '';
+      if (button.disabled || !categoryId || categories.length <= 1) return;
+      const error = formEl.querySelector('#inv-form-error'), usedCount = records.filter(record => String(record.category_id) === String(categoryId)).length;
+      error.textContent = '';
+      if (usedCount) { toast(`“${categoryName}” is used by ${usedCount} equipment item${usedCount === 1 ? '' : 's'}. Move them to another category before removing it.`); return; }
+      button.disabled = true; equipmentSave.disabled = true;
       try {
+        if (!await confirmAction({ title: 'Remove equipment category?', description: `“${categoryName}” will be permanently removed. This category can only be removed while no equipment uses it.`, confirmLabel: 'Yes, remove category', danger: true }) || version !== sessionVersion || !formEl.isConnected) return;
         await api('/item-categories/' + encodeURIComponent(categoryId), { method: 'DELETE' });
         if (version !== sessionVersion) return;
         categories = categories.filter(category => String(category.id) !== String(categoryId));
@@ -299,37 +290,18 @@ export function createInventory(h) {
         categorySelect.value = String(categories[0]?.id || ''); syncCategoryRemoveButton();
         closeCategoryPopover(categoryRemoveButton); toast(`Category “${categoryName}” removed.`);
         try { await refreshInventory({ force: true }); } catch { toast('Category removed. Inventory could not sync; use Refresh to try again.'); }
-      } catch (error) { categoryRemoveError.textContent = error.message; }
-      finally { if (version === sessionVersion) { button.disabled = false; categoryRemoveDiscard.disabled = false; equipmentSave.disabled = !categoryPopover.hidden; } }
+      } catch (problem) { error.textContent = problem.message; }
+      finally { if (version === sessionVersion) { syncCategoryRemoveButton(); equipmentSave.disabled = !categoryPopover.hidden; } }
     };
     syncCategoryRemoveButton();
-    formEl.onsubmit = async ev => {
-      ev.preventDefault();
+    confirmSubmit(formEl, { title: item ? 'Save equipment changes?' : 'Add this equipment?', description: item ? 'The updated name, category, condition, notes, and rates will be saved.' : 'The equipment will be added to your active collection.', confirmLabel: item ? 'Yes, save changes' : 'Yes, add equipment' }, async () => {
       const values = Object.fromEntries(new FormData(formEl));
       if (item && conditionSelect.disabled) values.condition = item.condition_status;
       for (const key of ['rentalRate', 'deposit', 'latePenalty']) values[key] = Number(values[key]);
       if (item) values.version = item.updated_at;
       const saved = await submit(formEl, () => api('/inventory' + (item ? '/' + item.id : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(values) }), item ? 'Equipment updated.' : 'Equipment added.', item ? null : () => { scope = 'active'; status = 'all'; offset = 0; draw(); });
       if (saved && scope === 'archived') { scope = 'active'; status = 'all'; offset = 0; draw(); }
-    };
-    requireConfirmation(formEl, item ? 'Save equipment changes?' : 'Add this equipment?', item ? 'The updated name, category, condition, notes, and rates will be saved.' : 'The equipment will be added to your active collection.', item ? 'Yes, save changes' : 'Yes, add equipment');
-  }
-  function requireConfirmation(formEl, title, description, yesLabel) {
-    const actionGroups = formEl.querySelectorAll('.inv-form-actions'), actions = actionGroups[actionGroups.length - 1], panel = document.createElement('section');
-    panel.className = 'inv-confirm-panel'; panel.hidden = true; panel.setAttribute('role', 'group'); panel.setAttribute('aria-label', 'Confirm action');
-    panel.innerHTML = '<strong class="inv-confirm-title"></strong><p class="inv-confirm-description"></p><div class="inv-form-actions"><button type="button" class="primary inv-confirm-yes"></button><button type="button" class="secondary inv-confirm-no">No, go back</button></div>';
-    panel.querySelector('.inv-confirm-title').textContent = title; panel.querySelector('.inv-confirm-description').textContent = description; panel.querySelector('.inv-confirm-yes').textContent = yesLabel;
-    actions.before(panel);
-    formEl.addEventListener('submit', event => {
-      if (formEl.dataset.confirmed === 'true') { delete formEl.dataset.confirmed; return; }
-      event.preventDefault(); panel.hidden = false; panel.dataset.signature = JSON.stringify(Object.fromEntries(new FormData(formEl))); panel.querySelector('.inv-confirm-yes').focus();
     });
-    panel.querySelector('.inv-confirm-no').onclick = () => { panel.hidden = true; formEl.querySelector('[type="submit"]')?.focus(); };
-    panel.querySelector('.inv-confirm-yes').onclick = () => {
-      const current = JSON.stringify(Object.fromEntries(new FormData(formEl)));
-      if (panel.dataset.signature !== current) { panel.querySelector('.inv-confirm-description').textContent = 'The details changed. Review the form and confirm again.'; panel.dataset.signature = current; return; }
-      formEl.dataset.confirmed = 'true'; panel.hidden = true; formEl.requestSubmit();
-    };
   }
   async function submit(formEl, operation, message, afterSave = null) {
     const button = formEl.querySelector('[type="submit"]'), error = formEl.querySelector('#inv-form-error') || formEl.querySelector('.inv-error');
@@ -362,6 +334,7 @@ export function createInventory(h) {
           <button class="secondary" id="inv-qr">QR label</button>
           ${!isActive(i) ? '<button class="secondary" id="inv-restore">Restore equipment</button><button class="inv-danger" id="inv-delete">Delete permanently</button>' : i.status === 'UNDER_MAINTENANCE' ? `<button class="secondary" id="inv-maintenance" ${locked ? 'disabled' : ''}>Complete maintenance</button>` : `<button class="secondary" id="inv-maintenance" ${locked || i.status !== 'AVAILABLE' ? 'disabled' : ''}>Start maintenance</button><button class="inv-danger" id="inv-archive" ${locked || Number(i.open_maintenance) > 0 ? 'disabled' : ''}>Archive</button>`}
         </div>
+        <p class="inv-error" role="alert"></p>
         ${locked ? '<div class="info-box">Active or pending rental: availability, condition, and archiving are locked until the rental/return workflow finishes.</div>' : ''}
         <section class="inv-history-list" aria-label="Equipment history">
           <details class="inv-history"><summary>Status history <span>${history.length}</span></summary>${history.map(v => `<div><strong>${v.old_status ? e(stateLabel(v.old_status)) + ' → ' : ''}${e(stateLabel(v.new_status))}</strong><small>${e(formatDate(v.changed_at))} · ${e(v.source)}</small></div>`).join('') || '<p>No status changes recorded.</p>'}</details>
@@ -380,20 +353,22 @@ export function createInventory(h) {
     showModal(title, `<form id="inv-action-form" class="inv-form"><p><strong>${e(i.name)}</strong> · ${e(i.item_code)}</p><p>${action === 'archive' ? 'This equipment will move to the Archive tab. Its rental, pricing, QR, and maintenance history stay available.' : action === 'restore' ? 'Return this equipment to the active collection as available.' : complete ? 'Record the inspection before making this equipment available again.' : 'Take this equipment out of circulation while it is serviced.'}</p>${maintenance ? `<label>${complete ? 'Inspection notes' : 'Maintenance reason'}<textarea name="reason" required maxlength="${complete ? 2000 : 255}" rows="3" placeholder="${complete ? 'Describe the repair and final inspection' : 'Describe what needs attention'}"></textarea></label><label>Condition<select name="condition">${(complete ? ['GOOD', 'FAIR'] : ['NEEDS_INSPECTION', 'DAMAGED', 'FAIR', 'GOOD']).map(c => `<option value="${c}">${label(c)}</option>`).join('')}</select></label>` : ''}<p class="inv-error" role="alert"></p><div class="inv-form-actions"><button type="button" class="secondary" id="inv-action-back">Back</button><button type="submit" class="${action === 'archive' ? 'inv-danger' : 'primary'}">${title}</button></div></form>`);
     modal.querySelector('#inv-action-back').onclick = () => details(i.id);
     const f = modal.querySelector('#inv-action-form');
-    f.onsubmit = ev => { ev.preventDefault(); const payload = { ...Object.fromEntries(new FormData(f)), action, version: i.updated_at }; submit(f, () => api('/inventory/' + i.id + '/actions', { method: 'POST', body: JSON.stringify(payload) }), title + ' saved.', action === 'archive' ? () => { scope = 'archived'; status = 'all'; offset = 0; draw(); } : action === 'restore' ? () => { scope = 'active'; status = 'all'; offset = 0; draw(); } : null); };
-    requireConfirmation(f, `${title}?`, `${action === 'archive' ? 'This moves equipment out of the active collection.' : action === 'restore' ? 'This returns the archived equipment to the active collection.' : complete ? 'This records the inspection and makes the item available again.' : 'This records a maintenance action and changes equipment availability.'}`, `Yes, ${title.toLowerCase()}`);
+    confirmSubmit(f, { title: `${title}?`, description: action === 'archive' ? 'This moves equipment out of the active collection.' : action === 'restore' ? 'This returns the archived equipment to the active collection.' : complete ? 'This records the inspection and makes the item available again.' : 'This records a maintenance action and changes equipment availability.', confirmLabel: `Yes, ${title.toLowerCase()}`, danger: action === 'archive' }, async () => {
+      const payload = { ...Object.fromEntries(new FormData(f)), action, version: i.updated_at };
+      await submit(f, () => api('/inventory/' + i.id + '/actions', { method: 'POST', body: JSON.stringify(payload) }), title + ' saved.', action === 'archive' ? () => { scope = 'archived'; status = 'all'; offset = 0; draw(); } : action === 'restore' ? () => { scope = 'active'; status = 'all'; offset = 0; draw(); } : null);
+    });
   }
   async function permanentDelete(i) {
-    showModal('Delete equipment permanently?', `<form id="inv-delete-form" class="inv-form"><p><strong>${e(i.name)}</strong> · ${e(i.item_code)}</p><p>This permanently removes the equipment record from inventory. Past rentals, rates, and the audit trail remain saved. This cannot be undone.</p><p class="inv-error" id="inv-delete-error" role="alert"></p><div class="inv-form-actions"><button type="button" class="secondary" id="inv-delete-no">No, keep equipment</button><button type="button" class="inv-danger" id="inv-delete-yes">Yes, delete permanently</button></div></form>`);
-    modal.querySelector('#inv-delete-no').onclick = () => details(i.id);
-    modal.querySelector('#inv-delete-yes').onclick = async event => {
-      const button = event.currentTarget, error = modal.querySelector('#inv-delete-error'); button.disabled = true; error.textContent = '';
-      try {
+    const button = modal.querySelector('#inv-delete'), error = modal.querySelector('.inv-error');
+    if (!button || button.disabled) return;
+    button.disabled = true; error.textContent = '';
+    try {
+      if (!await confirmAction({ title: 'Delete equipment permanently?', description: `“${i.name}” (${i.item_code}) will be permanently removed from inventory. Past rentals, rates, and the audit trail remain saved. This cannot be undone.`, confirmLabel: 'Yes, delete permanently', cancelLabel: 'No, keep equipment', danger: true }) || !button.isConnected || !modal.open) return;
         await api('/inventory/' + i.id, { method: 'DELETE', body: JSON.stringify({ version: i.updated_at }) });
         modal.close(); toast('Equipment deleted.'); scope = 'archived'; status = 'all'; offset = 0;
         try { await refreshInventory({ force: true }); } catch { toast('Equipment deleted. Use Refresh to update the archive list.'); }
-      } catch (problem) { error.textContent = problem.message; button.disabled = false; }
-    };
+    } catch (problem) { error.textContent = problem.message; }
+    finally { button.disabled = false; }
   }
   async function qr(i) {
     try {
@@ -546,7 +521,7 @@ export function createInventory(h) {
     } catch (err) { showModal('Equipment label unavailable', errorBody(err)); }
   }
   async function saveQrSheet(items) { if (!items.length) return; try { const result = await api('/inventory/qr-labels'), labels = new Map(result.items.map(item => [String(item.id), item])); download(qrSheet(items, labels, { ...qrCalibration, ...qrPrintSettings }), 'text/html;charset=utf-8', `rent-play-qr-labels-${new Date().toISOString().slice(0, 10)}.html`); toast(`Printable QR sheet saved for ${items.length} equipment item${items.length === 1 ? '' : 's'}. Open it and choose Print labels.`); } catch (err) { showModal('QR sheet unavailable', errorBody(err)); } }
-  return { mount, refresh: refreshInventory, reset: resetCache };
+  return { mount, refresh: refreshInventory, reset: resetCache, details };
 }
 
 // Keep the inventory controls mounted while records change in the background.

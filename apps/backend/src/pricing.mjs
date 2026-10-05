@@ -1,3 +1,5 @@
+import { auditFields, stageAudit } from './audit.mjs';
+
 const product = (id,name,group,rateOptions,extra={})=>({
   id,name,group,rate_options:rateOptions,deposit_amount:0,overtime_rate_per_hour:0,
   high_value:false,included_items:[],sale_price:null,...extra
@@ -106,7 +108,10 @@ export async function loadPricing(db,{allowInvalidFallback=false}={}) {
 
 export async function savePricing(db,actor,input,now=new Date()) {
   const pricing=validatePricing(input);
-  await db.collection('settings').doc('pricing').set({...pricing,updated_at:now,updated_by:String(actor)},{merge:true});
+  const batch=db.batch();
+  batch.set(db.collection('settings').doc('pricing'),{...pricing,updated_at:now,updated_by:String(actor)},{merge:true});
+  stageAudit(batch,db,actor,'PRICING_UPDATED','SETTINGS','pricing',{after:{products:pricing.products,rules:auditFields(pricing.rules,Object.keys(DEFAULT_PRICING.rules))},now});
+  await batch.commit();
   return pricing;
 }
 

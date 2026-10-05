@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateCustomer, loadWorkspace, createWorkspaceUser } from '../src/workspace.mjs';
+import { memoryFirestore } from './support/memory-firestore.mjs';
 
 test('customer validation normalizes safe directory fields', () => {
   assert.deepEqual(validateCustomer({ fullName: '  Maria Santos ', code: ' cust-001 ', email: ' MARIA@EXAMPLE.COM ', phone: ' 09171234567 ', address: ' Los Baños ' }), { full_name: 'Maria Santos', customer_code: 'CUST-001', email: 'maria@example.com', phone: '09171234567', address: 'Los Baños' });
@@ -11,14 +12,13 @@ test('customer validation rejects unsafe or incomplete records', () => {
 });
 
 test('workspace account creation permits only ADMIN role', async () => {
-  const created = [];
   const auth = { createUser: async input => ({ uid: 'admin-uid', ...input }), deleteUser: async () => { } };
-  const db = { collection: name => ({ doc: id => ({ create: async value => created.push({ name, id, value }) }) }) };
-  for (const role of ['OWNER', 'OPERATOR', 'USER']) await assert.rejects(() => createWorkspaceUser(auth, db, { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role }), error => error.status === 400);
-  const result = await createWorkspaceUser(auth, db, { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role: 'ADMIN' });
+  const db = memoryFirestore();
+  for (const role of ['OWNER', 'OPERATOR', 'USER']) await assert.rejects(() => createWorkspaceUser(auth, db, 'actor-admin', { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role }), error => error.status === 400);
+  const result = await createWorkspaceUser(auth, db, 'actor-admin', { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role: 'ADMIN' });
   assert.equal(result.role, 'ADMIN');
-  assert.equal(created[0].value.role, 'ADMIN');
-  assert.equal(created[0].value.is_active, true);
+  assert.equal(db.data('users', 'admin-uid').role, 'ADMIN');
+  assert.equal(db.data('users', 'admin-uid').is_active, true);
 });
 
 test('workspace analytics serializes terminal confirmations and collection history', async () => {

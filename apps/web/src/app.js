@@ -1,7 +1,13 @@
 import { createInventory } from './inventory.js';
 import { createWorkspaceUI } from './workspace-ui.js';
+import { createConfirmationDialog } from './confirmation-dialog.js';
+import { bindRecordLinks, recordAttrs } from './record-links.js';
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
+const confirmation = createConfirmationDialog({ dialog: document.querySelector('#confirmation-modal'), parentModal: modal, notify: message => toast(message) });
+const { confirmAction, confirmSubmit } = confirmation;
+let logoutPending = false;
+let invalidateWorkspace = () => {};
 const icons = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5l1.5 1.5M5 19l1.5-1.5M17.5 6.5l1.5-1.5"/>',
   moon: '<path d="M20.5 13a9 9 0 0 1-9.5-9.5A9 9 0 1 0 20.5 13Z"/>',
@@ -109,6 +115,7 @@ async function api(path, options = {}) {
   catch { throw new Error('Cannot reach the server. Check that the web and backend servers are running.'); }
   const result = await response.json().catch(() => ({ error: 'The server returned an invalid response.' }));
   if (!response.ok) throw Object.assign(new Error(result.error || 'Request failed.'), { status: response.status });
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(options.method || 'GET').toUpperCase()) && path !== '/pricing/quote') invalidateWorkspace();
   return result;
 }
 function toast(message) {
@@ -116,11 +123,13 @@ function toast(message) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('visible'), 4000);
 }
 function goTo(next, replace = false, nextFilter = 'All rentals', nextCategory = '') {
+  if (workspacePages.has(next)) invalidateWorkspace();
   page = next; profileEditing = false; category = nextCategory; filter = nextFilter; query = ''; rentalPage = 0; verificationPage = 0;
   const route = pageRoutes[next] || '/'; if (location.pathname !== route) history[replace ? 'replaceState' : 'pushState']({ page: next }, '', route);
   render(); window.scrollTo(0, 0);
 }
 function showModal(title, body) {
+  confirmation.cancel();
   modal.innerHTML = `<div class="modal-heading"><h2>${escape(title)}</h2><button class="icon-button" id="close-modal" aria-label="Close dialog">✕</button></div>${body}`;
   modal.showModal(); document.querySelector('#close-modal').onclick = () => modal.close();
 }
@@ -182,7 +191,8 @@ function login(message = '') {
   };
   document.querySelector('#forgot').onclick = () => {
     showModal('Reset your password', '<p>Enter your workspace email and Firebase will send a secure password-reset link.</p><form id="reset-form" class="admin-form"><label>Email address<input name="email" type="email" autocomplete="email" required/></label><p class="form-error" role="alert"></p><button class="primary" type="submit">Send reset link</button></form>');
-    document.querySelector('#reset-form').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget, button = form.querySelector('button'), error = form.querySelector('.form-error'); button.disabled = true; try { await api('/auth/password-reset', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); modal.close(); toast('If that account exists, a reset email has been sent.'); } catch (problem) { error.textContent = problem.message; button.disabled = false; } };
+    const form = modal.querySelector('#reset-form');
+    confirmSubmit(form, { title: 'Send password reset link?', description: 'A password reset link will be requested for the email address you entered.', confirmLabel: 'Yes, send reset link' }, async () => { const button = form.querySelector('button'), error = form.querySelector('.form-error'); button.disabled = true; try { await api('/auth/password-reset', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); modal.close(); toast('If that account exists, a reset email has been sent.'); } catch (problem) { error.textContent = problem.message; button.disabled = false; } });
   };
   document.querySelector('#login-form').onsubmit = async e => {
     e.preventDefault(); const button = e.currentTarget.querySelector('[type="submit"]'); button.disabled = true;
@@ -214,7 +224,7 @@ async function refresh() {
     else syncLiveWorkspaceChrome();
   }
   catch (error) {
-    if (error.status === 401) { user = null; data = null; inventoryController.reset(); workspaceUI.reset(); modal.close(); login('Your session ended. Please sign in again.'); }
+    if (error.status === 401) { confirmation.cancel(); user = null; data = null; inventoryController.reset(); workspaceUI.reset(); modal.close(); login('Your session ended. Please sign in again.'); }
     else {
       connectionError = error.message;
       if (document.querySelector('.workspace')) syncLiveWorkspaceChrome();
@@ -252,7 +262,7 @@ function stat(label, value, note, glyph, color, page, target = '', filter = '') 
 }
 function rentalsTable(full = false) {
   const pageSize = 5, allRows = data.rentals.filter(r => (filter === 'All rentals' || r.displayStatus === filter) && `${r.customer} ${r.rental_code} ${r.item_name}`.toLowerCase().includes(query.toLowerCase())), pageCount = Math.max(1, Math.ceil(allRows.length / pageSize)); rentalPage = Math.min(rentalPage, pageCount - 1); const start = rentalPage * pageSize, rows = allRows.slice(start, start + pageSize);
-  return `<section class="panel rental-panel" id="rental-panel"><div class="panel-title"><div><h3>${full ? 'Open rental records' : 'Rentals to keep an eye on'}</h3><p>Active rentals and requests awaiting verification.</p></div>${!full ? '<button class="text-button" data-page="Rentals">View all rentals →</button>' : ''}</div><div class="table-controls"><div class="tabs">${['All rentals', 'Due today', 'Overdue'].map(x => `<button data-filter="${x}" class="${filter === x ? 'selected' : ''}">${x}${x === 'Overdue' ? `<span>${data.stats.overdue}</span>` : ''}</button>`).join('')}</div><label class="table-search">${icon('search')}<input id="rental-search" placeholder="Search rentals" value="${escape(query)}" aria-label="Search rentals"/></label></div><div class="table-scroll"><table><thead><tr><th>ITEM / RENTAL ID</th><th>CUSTOMER</th><th>DUE DATE</th><th>STATUS</th><th></th></tr></thead><tbody>${rows.map(r => `<tr><td><div class="item-cell"><span class="item-symbol">${symbol(data.items.find(i => String(i.id) === String(r.item_id))?.category || '')}</span><div><strong>${escape(r.item_name)}</strong><small>${escape(r.rental_code)}</small></div></div></td><td><span class="mini-avatar">${escape(initials(r.customer))}</span>${escape(r.customer)}</td><td><strong>${escape(formatDate(r.due_at))}</strong><small>Philippine time</small></td><td>${badge(r.displayStatus)}</td><td><button class="row-button" data-rental="${escape(r.id)}" aria-label="View ${escape(r.rental_code)}">${icon('arrow')}</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">No open rentals match this view.</td></tr>'}</tbody></table></div><div class="table-footer"><span>${allRows.length ? `${start + 1}–${Math.min(start + pageSize, allRows.length)} of ${allRows.length}` : '0 rentals'} · Page ${allRows.length ? rentalPage + 1 : 0} of ${Math.ceil(allRows.length / pageSize)}</span><div class="inv-pagination"><button class="secondary" id="rental-prev" ${rentalPage ? '' : 'disabled'}>← Previous</button><button class="secondary" id="rental-next" ${start + pageSize < allRows.length ? '' : 'disabled'}>Next →</button></div></div></section>`;
+  return `<section class="panel rental-panel" id="rental-panel"><div class="panel-title"><div><h3>${full ? 'Open rental records' : 'Rentals to keep an eye on'}</h3><p>Active rentals and requests awaiting verification.</p></div><div class="rental-panel-actions"><button type="button" class="secondary" id="rental-workflow">${icon('arrow')} Rental workflow</button>${!full ? '<button class="text-button" data-page="Rentals">View all rentals →</button>' : ''}</div></div><div class="table-controls"><div class="tabs">${['All rentals', 'Due today', 'Overdue'].map(x => `<button data-filter="${x}" class="${filter === x ? 'selected' : ''}">${x}${x === 'Overdue' ? `<span>${data.stats.overdue}</span>` : ''}</button>`).join('')}</div><label class="table-search">${icon('search')}<input id="rental-search" placeholder="Search rentals" value="${escape(query)}" aria-label="Search rentals"/></label></div><div class="table-scroll"><table><thead><tr><th>ITEM / RENTAL ID</th><th>CUSTOMER</th><th>DUE DATE</th><th>STATUS</th><th></th></tr></thead><tbody>${rows.map(r => `<tr ${recordAttrs('dashboard-rental', r.id, r.rental_code || r.item_name)}><td><div class="item-cell"><span class="item-symbol">${symbol(data.items.find(i => String(i.id) === String(r.item_id))?.category || '')}</span><div><strong>${escape(r.item_name)}</strong><small>${escape(r.rental_code)}</small></div></div></td><td><span class="mini-avatar">${escape(initials(r.customer))}</span>${escape(r.customer)}</td><td><strong>${escape(formatDate(r.due_at))}</strong><small>Philippine time</small></td><td>${badge(r.displayStatus)}</td><td><button class="row-button" data-rental="${escape(r.id)}" aria-label="View ${escape(r.rental_code)}">${icon('arrow')}</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">No open rentals match this view.</td></tr>'}</tbody></table></div><div class="table-footer"><span>${allRows.length ? `${start + 1}–${Math.min(start + pageSize, allRows.length)} of ${allRows.length}` : '0 rentals'} · Page ${allRows.length ? rentalPage + 1 : 0} of ${Math.ceil(allRows.length / pageSize)}</span><div class="inv-pagination"><button class="secondary" id="rental-prev" ${rentalPage ? '' : 'disabled'}>← Previous</button><button class="secondary" id="rental-next" ${start + pageSize < allRows.length ? '' : 'disabled'}>Next →</button></div></div></section>`;
 }
 function chart() {
   const amounts = data.revenue[period]; const max = Math.max(100, ...amounts); const scale = Math.ceil(max / 100) * 100;
@@ -264,7 +274,7 @@ function terminal() {
 }
 function dashboard() {
   const s = data.stats;
-  return `<section class="hero"><div><span class="eyebrow">YOUR DAILY GAME PLAN</span><h2>More play. Less paperwork.</h2><p>A clear view of your rentals, so you can focus on the fun.</p><button class="primary" id="rental-workflow">${icon('arrow')} Rental workflow</button></div>${sportArt}</section><div class="stats">${stat('Active rentals', s.active, 'Confirmed rentals currently out', 'clock', 'blue', 'Rentals')}${stat('Available items', s.available, 'Ready for their next adventure', 'box', 'green', 'Inventory')}${stat('Due today', s.dueToday, `${s.overdue} overdue rental(s) need attention`, 'bell', 'amber', 'Dashboard', 'rental-panel', 'Due today')}${stat('Rental fees', money(s.fees), 'From current active rentals', 'money', 'purple', 'Rentals')}</div><div class="dashboard-grid"><div class="main-column">${rentalsTable()}${chart()}</div><aside class="right-column">${terminal()}<section class="panel category-panel"><h3>A little of everything</h3><p>Your equipment at a glance.</p>${data.categories.map((c, i) => `<button data-category="${i}"><span class="category-symbol">${symbol(c.name)}</span><span>${escape(c.name)}<small>${c.count} items in inventory</small></span>${icon('arrow')}</button>`).join('') || '<p>No categories recorded.</p>'}</section><div class="counter-tip"><span>✦</span><div><strong>A small counter tip</strong><p>Check item condition before confirming a return.</p></div></div></aside></div>`;
+  return `<div class="stats">${stat('Active rentals', s.active, 'Confirmed rentals currently out', 'clock', 'blue', 'Rentals')}${stat('Available items', s.available, 'Ready for their next adventure', 'box', 'green', 'Inventory')}${stat('Due today', s.dueToday, `${s.overdue} overdue rental(s) need attention`, 'bell', 'amber', 'Dashboard', 'rental-panel', 'Due today')}${stat('Rental fees', money(s.fees), 'From current active rentals', 'money', 'purple', 'Rentals')}</div><div class="dashboard-grid"><div class="main-column">${rentalsTable()}${chart()}</div><aside class="right-column">${terminal()}<section class="panel category-panel"><h3>A little of everything</h3><p>Your equipment at a glance.</p>${data.categories.map((c, i) => `<button data-category="${i}"><span class="category-symbol">${symbol(c.name)}</span><span>${escape(c.name)}<small>${c.count} items in inventory</small></span>${icon('arrow')}</button>`).join('') || '<p>No categories recorded.</p>'}</section><div class="counter-tip"><span>✦</span><div><strong>A small counter tip</strong><p>Check item condition before confirming a return.</p></div></div></aside></div>`;
 }
 function inventory() {
   return `<div id="inventory-root" class="inv-loading-shell" aria-live="polite" aria-busy="true">
@@ -342,8 +352,15 @@ function bind() {
   document.onclick = () => { closeAccountMenu(); closeNotifications(); };
   accountMenu.onkeydown = event => { if (event.key === 'Escape') { closeAccountMenu(); accountToggle.focus(); } };
   const logout = async () => {
-    try { await api('/auth/logout', { method: 'POST' }); user = null; data = null; connectionError = ''; inventoryController.reset(); workspaceUI.reset(); history.replaceState({}, '', pageRoutes.Dashboard); modal.close(); login(); }
+    if (logoutPending) return;
+    logoutPending = true;
+    closeAccountMenu(); closeNotifications();
+    try {
+      if (!await confirmAction({ title: 'Log out of Rent & Play?', description: 'Your session will end. You will need to sign in again to access the workspace.', confirmLabel: 'Yes, log out', cancelLabel: 'No, stay signed in' })) return;
+      await api('/auth/logout', { method: 'POST' }); user = null; data = null; connectionError = ''; inventoryController.reset(); workspaceUI.reset(); history.replaceState({}, '', pageRoutes.Dashboard); modal.close(); login();
+    }
     catch (error) { toast(error.message); }
+    finally { logoutPending = false; }
   };
   document.querySelector('#logout').onclick = logout;
   document.querySelector('[data-action="logout"]').onclick = logout;
@@ -366,10 +383,13 @@ function bind() {
   if (search) search.oninput = e => { const pos = e.target.selectionStart; query = e.target.value; rentalPage = 0; render(); const next = document.querySelector('#rental-search'); next.focus(); next.setSelectionRange(pos, pos); };
   document.querySelector('#rental-prev')?.addEventListener('click', () => { rentalPage--; render(); }); document.querySelector('#rental-next')?.addEventListener('click', () => { rentalPage++; render(); });
   document.querySelector('#verification-prev')?.addEventListener('click', () => { verificationPage--; render(); }); document.querySelector('#verification-next')?.addEventListener('click', () => { verificationPage++; render(); });
-  document.querySelectorAll('[data-rental]').forEach(el => el.onclick = () => {
-    const r = data.rentals.find(r => String(r.id) === el.dataset.rental);
+  const openRental = id => {
+    const r = data.rentals.find(r => String(r.id) === String(id));
+    if (!r) return;
     showModal('Rental details', `<div class="detail-header"><div><h3>${escape(r.item_name)}</h3><p>${escape(r.rental_code)}</p></div>${badge(r.displayStatus)}</div><dl><dt>Customer</dt><dd>${escape(r.customer)}</dd><dt>Due</dt><dd>${escape(formatDate(r.due_at))}</dd><dt>Rental fee</dt><dd>${money(r.rental_fee)}</dd><dt>Refundable deposit</dt><dd>${money(r.deposit_amount)}</dd><dt>Rental confirmed</dt><dd>${escape(formatDate(r.confirmed_rental_at))}</dd></dl><div class="info-box">Use the mobile QR workflow to request a return, then confirm it at the physical terminal.</div>`);
-  });
+  };
+  document.querySelectorAll('[data-rental]').forEach(el => el.onclick = () => openRental(el.dataset.rental));
+  bindRecordLinks(app, { 'dashboard-rental': openRental });
   const workflow = document.querySelector('#rental-workflow');
   if (workflow) workflow.onclick = () => showModal('Rental workflow', '<p>Use the mobile app to scan the item QR and submit the customer and due date. After backend validation, the request awaits verification at the ESP32 counter terminal.</p><div class="info-box">Verify the equipment and transaction details, then press the physical confirmation button. This dashboard monitors the resulting database records.</div>');
   const select = document.querySelector('#period'); if (select) select.onchange = e => { period = e.target.value; render(); };
@@ -377,11 +397,11 @@ function bind() {
   const profileEdit = document.querySelector('#profile-edit'); if (profileEdit) profileEdit.onclick = () => { profileEditing = true; render(); document.querySelector('#profile-form input')?.focus(); };
   const profileCancel = document.querySelector('#profile-cancel'); if (profileCancel) profileCancel.onclick = () => { profileEditing = false; render(); };
   const profileForm = document.querySelector('#profile-form');
-  if (profileForm) profileForm.onsubmit = async event => {
-    event.preventDefault(); const button = profileForm.querySelector('[type="submit"]'), error = profileForm.querySelector('.profile-error'); button.disabled = true; error.textContent = '';
+  if (profileForm) confirmSubmit(profileForm, { title: 'Save profile changes?', description: 'Your name and login email will be updated. Use the new email the next time you sign in.', confirmLabel: 'Yes, save changes' }, async () => {
+    const button = profileForm.querySelector('[type="submit"]'), error = profileForm.querySelector('.profile-error'); button.disabled = true; error.textContent = '';
     try { const values = Object.fromEntries(new FormData(profileForm)); const result = await api('/profile', { method: 'PATCH', body: JSON.stringify(values) }); user = result.user; profileEditing = false; render(); toast('Profile updated.'); }
     catch (problem) { error.textContent = problem.message; button.disabled = false; }
-  };
+  });
   const boundPage = page;
   workspaceUI.bind(page, user, () => { if (user && page === boundPage) render(); });
 }
@@ -404,10 +424,12 @@ async function boot() {
     }
   }
 }
-const inventoryController = createInventory({ api, escape, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast });
-const workspaceUI = createWorkspaceUI({ api, escape, icon, showModal, modal, toast, money, formatDate });
-window.addEventListener('popstate', () => { page = routePages[location.pathname] || 'Dashboard'; if (user) render(); });
+const inventoryController = createInventory({ api, escape, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, confirmAction, confirmSubmit });
+const workspaceUI = createWorkspaceUI({ api, escape, icon, showModal, modal, toast, money, formatDate, confirmAction, confirmSubmit, showEquipmentDetails: id => inventoryController.details(id) });
+invalidateWorkspace = () => workspaceUI.invalidate();
+window.addEventListener('popstate', () => { page = routePages[location.pathname] || 'Dashboard'; if (workspacePages.has(page)) invalidateWorkspace(); if (user) render(); });
 setInterval(async () => {
+  if (confirmation.isOpen() || logoutPending) return;
   if (!user || !workspaceUI.autoRefreshEnabled() || page === 'Settings' || document.visibilityState !== 'visible') return;
   if (page !== 'Inventory' && modal.open) return;
   if (document.querySelector('#rental-search:focus,#module-search:focus,.admin-form input:focus,.admin-form textarea:focus,.admin-form select:focus,.analytics-filters input:focus,.analytics-filters select:focus,#analytics-sort:focus,.sidebar.open,#profile-dropdown:not([hidden]),#notification-dropdown:not([hidden])')) return;

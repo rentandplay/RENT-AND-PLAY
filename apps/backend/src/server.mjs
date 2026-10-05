@@ -66,7 +66,7 @@ const defaultServices = {
     }
     return quoteRental(pricing, { ...input, productId });
   },
-  createCustomer: (actor, input) => createCustomer(firestore, actor, input), updateCustomer: (id, input) => updateCustomer(firestore, id, input), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: input => saveSettings(firestore, input), createUser: input => createWorkspaceUser(firebaseAuth, firestore, input), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input)
+  createCustomer: (actor, input) => createCustomer(firestore, actor, input), updateCustomer: (actor, id, input) => updateCustomer(firestore, actor, id, input), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: (actor, input) => saveSettings(firestore, actor, input), createUser: (actor, input) => createWorkspaceUser(firebaseAuth, firestore, actor, input), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input)
 };
 
 export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices } = {}) {
@@ -148,10 +148,10 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (path === '/api/pricing' && req.method === 'GET') return send(res, 200, await services.pricing());
         if (path === '/api/pricing' && req.method === 'PUT') return send(res, 200, { pricing: await services.savePricing(user.id, await body(req)) });
         if (path === '/api/pricing/quote' && req.method === 'POST') return send(res, 200, { quote: await services.pricingQuote(await body(req)) });
-        if (customerRoute) { const [, id] = customerRoute; if (req.method === 'POST' && !id) return send(res, 201, { customer: await services.createCustomer(user.id, await body(req)) }); if (req.method === 'PATCH' && id) return send(res, 200, { customer: await services.updateCustomer(id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
+        if (customerRoute) { const [, id] = customerRoute; if (req.method === 'POST' && !id) return send(res, 201, { customer: await services.createCustomer(user.id, await body(req)) }); if (req.method === 'PATCH' && id) return send(res, 200, { customer: await services.updateCustomer(user.id, id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
         if (path === '/api/rates' && req.method === 'POST') return send(res, 201, { rate: await services.saveRate(user.id, await body(req)) });
-        if (path === '/api/settings' && req.method === 'PATCH') { if (user.role !== 'ADMIN') return send(res, 403, { error: 'Administrator access is required.' }); return send(res, 200, { settings: await services.saveSettings(await body(req)) }); }
-        if (userRoute) { if (user.role !== 'ADMIN') return send(res, 403, { error: 'Administrator access is required.' }); const [, id] = userRoute; if (req.method === 'POST' && !id) return send(res, 201, { user: await services.createUser(await body(req)) }); if (req.method === 'PATCH' && id) return send(res, 200, { user: await services.updateUser(user.id, id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
+        if (path === '/api/settings' && req.method === 'PATCH') { if (user.role !== 'ADMIN') return send(res, 403, { error: 'Administrator access is required.' }); return send(res, 200, { settings: await services.saveSettings(user.id, await body(req)) }); }
+        if (userRoute) { if (user.role !== 'ADMIN') return send(res, 403, { error: 'Administrator access is required.' }); const [, id] = userRoute; if (req.method === 'POST' && !id) return send(res, 201, { user: await services.createUser(user.id, await body(req)) }); if (req.method === 'PATCH' && id) return send(res, 200, { user: await services.updateUser(user.id, id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
         if (inventoryRoute) {
           const [, id, action] = inventoryRoute;
           if (req.method === 'GET' && !id) return send(res, 200, await services.inventoryList());

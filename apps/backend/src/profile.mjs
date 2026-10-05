@@ -1,3 +1,5 @@
+import { stageAudit } from './audit.mjs';
+
 export function validateProfile(input) {
   if(!input||typeof input!=='object')throw Object.assign(new Error('Profile details are required.'),{status:400});
   const fullName=typeof input.fullName==='string'?input.fullName.trim():'';
@@ -10,6 +12,8 @@ export function validateProfile(input) {
 export async function updateProfile(auth,db,id,input) {
   const next=validateProfile(input);
   const current=await auth.getUser(String(id));
+  const ref=db.collection('users').doc(String(id)),profile=await ref.get();
+  if(!profile.exists)throw Object.assign(new Error('Account profile not found.'),{status:404});
   try {
     await auth.updateUser(String(id),{displayName:next.fullName,email:next.email});
   } catch(error) {
@@ -17,10 +21,11 @@ export async function updateProfile(auth,db,id,input) {
     throw error;
   }
   try {
-    const updatedAt=new Date();
-    await db.collection('users').doc(String(id)).update({full_name:next.fullName,email:next.email,updated_at:updatedAt});
-    const profile=await db.collection('users').doc(String(id)).get();
-    return {id:profile.id,...profile.data()};
+    const updatedAt=new Date(),value={full_name:next.fullName,email:next.email},batch=db.batch();
+    batch.update(ref,{...value,updated_at:updatedAt});
+    stageAudit(batch,db,id,'PROFILE_UPDATED','USER',id,{before:{full_name:current.displayName||null,email:current.email},after:value,now:updatedAt});
+    await batch.commit();
+    return {id:ref.id,...profile.data(),...value,updated_at:updatedAt};
   } catch(error) {
     await auth.updateUser(String(id),{displayName:current.displayName||null,email:current.email}).catch(()=>{});
     throw error;

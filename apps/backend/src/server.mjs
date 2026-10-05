@@ -108,7 +108,10 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const session = await sessions.signIn(input.email.trim().toLowerCase(), input.password, input.remember === true);
         if (!session) return send(res, 401, { error: 'Email or password is incorrect.' });
         const user = await services.getUser(session.uid);
-        if (!user?.is_active || user.role !== 'ADMIN') return send(res, 401, { error: 'Email or password is incorrect.' });
+        if (!user) return send(res, 403, { error: 'Your account has no workspace profile. Ask an administrator to set up your access.' });
+        if (!user.is_active) return send(res, 403, { error: 'Your workspace account is inactive. Ask an administrator to restore your access.' });
+        if (String(user.role).toUpperCase() !== 'ADMIN') return send(res, 403, { error: 'Administrator access is required for this workspace.' });
+        user.role = 'ADMIN';
         await services.touchLogin(user.id); attempts.delete(ip);
         return send(res, 200, { user: publicUser(user) }, { 'Set-Cookie': cookie(session.cookie, session.seconds, input.remember === true) });
       }
@@ -131,7 +134,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute) {
         const mobileToken = transactionRoute ? /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1] : null;
         const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
-        const user = await services.getUser(claims.uid); if (!user?.is_active || user.role !== 'ADMIN') return send(res, 401, { error: 'Please sign in.' });
+        const user = await services.getUser(claims.uid); if (!user?.is_active || String(user.role).toUpperCase() !== 'ADMIN') return send(res, 401, { error: 'Please sign in.' });
+        user.role = 'ADMIN';
         if (path === '/api/auth/me') return send(res, 200, { user: publicUser(user) });
         if (path === '/api/profile') return send(res, 200, { user: publicUser(await services.updateProfile(user.id, await body(req))) });
         if (path === '/api/workspace' && req.method === 'GET') return send(res, 200, await services.workspace(user.role));

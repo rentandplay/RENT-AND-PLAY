@@ -576,11 +576,15 @@ function createInventoryView(root, h) {
   categoryInput.onblur = () => { if (currentState) syncCategories(currentState); };
   root.onclick = event => {
     const button = event.target.closest('button');
-    if (!button || !root.contains(button) || button.disabled) return;
-    if (button.dataset.invDetail) return h.onDetails(button.dataset.invDetail);
+    if (button && root.contains(button)) {
+      if (button.disabled) return;
+      if (button.dataset.invDetail) return h.onDetails(button.dataset.invDetail);
 
-    const actions = { 'inv-add': h.onAdd, 'inv-clear': h.onReset, 'inv-empty-action': h.onEmptyAction, 'inv-export': h.onExport, 'inv-qr-export': h.onQrExport, 'inv-table': () => h.onView('table'), 'inv-grid': () => h.onView('grid'), 'inv-prev': h.onPrevious, 'inv-next': h.onNext };
-    actions[button.id]?.();
+      const actions = { 'inv-add': h.onAdd, 'inv-clear': h.onReset, 'inv-empty-action': h.onEmptyAction, 'inv-export': h.onExport, 'inv-qr-export': h.onQrExport, 'inv-table': () => h.onView('table'), 'inv-grid': () => h.onView('grid'), 'inv-prev': h.onPrevious, 'inv-next': h.onNext };
+      return actions[button.id]?.();
+    }
+    const item = event.target.closest('[data-inv-item]');
+    if (item && results.contains(item) && !event.target.closest('a,input,select,textarea,[role="button"]')) h.onDetails(item.dataset.invItem);
   };
 
   function syncCategories(state) {

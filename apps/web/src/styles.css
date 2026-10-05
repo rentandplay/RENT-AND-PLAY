@@ -2971,6 +2971,19 @@ dd {
   padding-bottom: 19px
 }
 
+.inv-table tbody tr {
+  cursor: pointer;
+  transition: background-color .15s ease
+}
+
+.inv-table tbody tr:hover {
+  background: #f5f7fa
+}
+
+[data-theme=dark] .inv-table tbody tr:hover {
+  background: #202f43
+}
+
 .inv-table .badge {
   margin-bottom: 5px
 }
@@ -8015,6 +8028,13 @@ dialog:not(:has(.inv-print-settings)) {
   column-gap: 16px;
   min-height: 194px;
   padding: 16px;
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.inv-card:hover {
+  border-color: #ef8534;
+  box-shadow: 0 4px 14px #182a3d14;
 }
 
 .inv-art {

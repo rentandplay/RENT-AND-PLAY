@@ -1,6 +1,7 @@
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import { asDate, docData, localDateTime } from './firebase.mjs';
 import { DEFAULT_PRICING, quoteRental, validatePricing } from './pricing.mjs';
+import { firebaseFailure, isQuotaError } from './firebase-errors.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const rows = snapshot => snapshot.docs.map(docData);
@@ -269,27 +270,49 @@ export async function resolveTerminalRequest(db, terminal, input, now = new Date
   return result;
 }
 
-export async function terminalPending(db, terminal, now = new Date()) {
-  await expireVerificationRequests(db, now);
-  const snapshot = await db.collection('verification_requests').where('terminal_id', '==', terminal.id).get();
+export async function terminalPending(db, terminal, now = new Date(), { expire = () => expireVerificationRequests(db, now) } = {}) {
+  await expire();
+  const snapshot = await db.collection('verification_requests').where('terminal_id', '==', terminal.id).where('status', '==', 'PENDING').get();
   const pending = [];
   for (const request of rows(snapshot).filter(row => row.status === 'PENDING').map(row => ({ ...row, transaction_type: requestType(row) })).sort((a, b) => asDate(a.requested_at) - asDate(b.requested_at))) {
     const rentalDoc = await ref(db, 'rentals', request.rental_id).get();
     const rental = rentalDoc.exists ? docData(rentalDoc) : null;
     pending.push({ ...request, rental_code: rental?.rental_code || request.rental_id, due_at: rental?.due_at || null, fee_breakdown: rental ? request.transaction_type === 'RETURN' ? finalCharges(rental, request) : rental.fee_breakdown || null : null });
   }
-  await ref(db, 'terminals', terminal.id).update({ last_seen_at: now, status: 'ONLINE' });
+  const lastSeen = asDate(terminal.last_seen_at);
+  if (terminal.status !== 'ONLINE' || !lastSeen || now - lastSeen >= 30000) await ref(db, 'terminals', terminal.id).update({ last_seen_at: now, status: 'ONLINE' });
   return serializeTransaction({ terminal_id: terminal.id, requests: pending });
 }
 
-export function startExpiryWorker(db, { intervalMs = 15000, onError = error => console.warn('Verification expiry sweep failed:', error.code || error.message) } = {}) {
-  let running = false, stopped = false;
-  const sweep = async () => {
-    if (running || stopped) return;
-    running = true;
-    try { await expireVerificationRequests(db); } catch (error) { onError(error); } finally { running = false; }
+export function createExpirySweep(db, { intervalMs = 30000, now = Date.now, onExpired = () => {} } = {}) {
+  let pending = null, lastSuccess = -Infinity;
+  return {
+    run({ force = false } = {}) {
+      if (pending) return pending;
+      if (!force && now() - lastSuccess < intervalMs) return Promise.resolve({ expired: 0 });
+      pending = expireVerificationRequests(db).then(result => {
+        lastSuccess = now();
+        if (result.expired) onExpired(result);
+        return result;
+      }).finally(() => { pending = null; });
+      return pending;
+    }
   };
-  const timer = setInterval(sweep, intervalMs); timer.unref?.();
-  void sweep();
+}
+
+export function startExpiryWorker(db, { intervalMs = 30000, now = Date.now, sweep = () => expireVerificationRequests(db), onError = error => console.warn(`Verification expiry sweep failed (${error.code || 'FIREBASE_ERROR'}): ${error.message} ${firebaseFailure(error).error}`) } = {}) {
+  let running = false, stopped = false, failures = 0, retryAt = 0;
+  const tick = async () => {
+    if (running || stopped || now() < retryAt) return;
+    running = true;
+    try { await sweep(); failures = 0; retryAt = 0; }
+    catch (error) {
+      failures++;
+      retryAt = now() + (isQuotaError(error) ? firebaseFailure(error).retryAfterSeconds * 1000 : Math.min(300000, intervalMs * 2 ** Math.min(failures, 10)));
+      onError(error);
+    } finally { running = false; }
+  };
+  const timer = setInterval(tick, intervalMs); timer.unref?.();
+  void tick();
   return () => { stopped = true; clearInterval(timer); };
 }

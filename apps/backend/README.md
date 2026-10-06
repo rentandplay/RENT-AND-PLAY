@@ -88,7 +88,19 @@ The website prepares rental/return requests and records inspections. Only the de
 
 Run `npm run terminal:register` to provision a new terminal or add a credential to an existing terminal without one. The command refuses to overwrite credentials, stores only a key digest, and displays the key once for ESP32 setup. Configure polling and physical confirmation according to the shared contract.
 
-Requests expire after 10 minutes by default (`VERIFICATION_TTL_SECONDS`). A startup/15-second worker and request-time sweeps persist EXPIRED status/reason. Firestore transactions coordinate confirmation, rejection, expiry, and reservations. Inspected returns requiring maintenance create linked records only after valid device confirmation. Original pricing and condition snapshots survive edits and repairs.
+Requests expire after 10 minutes by default (`VERIFICATION_TTL_SECONDS`). A startup/30-second worker and request-time sweeps persist EXPIRED status/reason. Concurrent display requests share a sweep; mutation-time checks force a fresh sweep. Firestore transactions coordinate confirmation, rejection, expiry, and reservations. Inspected returns requiring maintenance create linked records only after valid device confirmation. Original pricing and condition snapshots survive edits and repairs.
+
+## Firebase usage and quota recovery
+
+Run `npm run firebase:check` from this directory to check the configured project. The diagnostic prints the complete error code and message without printing credentials or record contents. `8 RESOURCE_EXHAUSTED: Quota exceeded.` means Firestore rejected the operation because a usage limit was reached; changing the service-account path does not restore that quota.
+
+Open the project's Firestore **Usage** tab to identify the exhausted limit. If it is the free daily quota, wait for its reset around midnight Pacific time or enable billing/upgrade the Firebase plan to continue sooner. Billing can incur charges and must be configured by the project owner. See [Firebase usage limits](https://firebase.google.com/docs/firestore/quotas) and [Firestore error recovery](https://docs.cloud.google.com/firestore/native/docs/understand-error-codes). Restart the backend after applying source changes, then refresh the browser once access is restored.
+
+Dashboard, equipment-list, workspace, and pricing displays share collection/document snapshots for up to 60 seconds. Writes through this backend invalidate those snapshots, including terminal confirmations and persisted expiry. Manual Refresh bypasses the display cache. Authentication, equipment availability checks, rental quotes, and transaction commits read the database directly. Other backend instances or direct console edits may take up to 60 seconds to appear.
+
+Quota responses use HTTP `429`, `FIRESTORE_QUOTA_EXCEEDED`, and `Retry-After`; requests and the expiry worker share a five-minute cooldown. The browser pauses automatic polling during that cooldown. Logout and password-reset remain usable. Temporary connection failures and invalid configuration have distinct diagnostics. No synthetic records are substituted for unavailable cloud data.
+
+Device polling queries pending requests for its terminal instead of rereading completed history. Online terminal heartbeats are written at most once per 30 seconds; offline terminals are updated immediately on a successful poll.
 
 New return confirmations require an explicit penalty (zero when none applies). Missing historical data remains labelled not recorded. Refundable deposits are separate from rental charges.
 

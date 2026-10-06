@@ -3,13 +3,15 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
 import { FirebaseSessions, publicUser } from './auth.mjs';
-import { firebaseAuth, firestore, requireFirebaseConfig } from './firebase.mjs';
+import { firebaseAuth as defaultFirebaseAuth, firestore as defaultFirestore, requireFirebaseConfig } from './firebase.mjs';
 import { loadDashboard } from './dashboard.mjs';
 import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
 import { updateProfile } from './profile.mjs';
 import { loadWorkspace, createCustomer, updateCustomer, saveRate, savePricing, saveSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
-import { authenticateTerminal, createRentalRequest, createReturnRequest, expireVerificationRequests, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending } from './transactions.mjs';
+import { authenticateTerminal, createRentalRequest, createReturnRequest, createExpirySweep, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending } from './transactions.mjs';
+import { createReadCache } from './read-cache.mjs';
+import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-errors.mjs';
 
 const webRoot = nodePath.resolve(fileURLToPath(new URL('../../web/dist/', import.meta.url)));
 const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
@@ -32,45 +34,63 @@ async function serveWeb(req, res, requestPath) {
   } catch { res.writeHead(404).end('Not found'); }
 }
 
-const defaultServices = {
-  async health() { requireFirebaseConfig(); await firestore.collection('users').limit(1).get(); },
-  async getUser(id) { const doc = await firestore.collection('users').doc(String(id)).get(); return doc.exists ? { id: doc.id, ...doc.data() } : null; },
-  async touchLogin(id) { await firestore.collection('users').doc(String(id)).update({ last_login_at: new Date() }); },
-  updateProfile: (id, input) => updateProfile(firebaseAuth, firestore, id, input),
-  dashboard: async () => { await expireVerificationRequests(firestore); return loadDashboard(firestore); },
-  inventoryList: () => inventoryList(firestore), inventoryDetail: id => inventoryDetail(firestore, id), inventoryQr: id => inventoryQr(firestore, id), inventoryQrLabels: () => inventoryQrLabels(firestore),
-  createItem: (actor, input) => createItem(firestore, actor, input), updateItem: (actor, id, input) => updateItem(firestore, actor, id, input), itemAction: (actor, id, input) => itemAction(firestore, actor, id, input), createItemCategory: (actor, input) => createItemCategory(firestore, actor, input), deleteItemCategory: (actor, id) => deleteItemCategory(firestore, actor, id), deleteArchivedItem: (actor, id, input) => deleteArchivedItem(firestore, actor, id, input),
-  workspace: async role => { await expireVerificationRequests(firestore); return loadWorkspace(firestore, role); }, pricing: () => loadPricing(firestore, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
-  authenticateTerminal: (id, key) => authenticateTerminal(firestore, id, key),
-  terminalPending: terminal => terminalPending(firestore, terminal),
-  terminalConfirm: (terminal, input) => resolveTerminalRequest(firestore, terminal, input),
-  createRentalRequest: async (actor, input) => { await expireVerificationRequests(firestore); return createRentalRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
-  createReturnRequest: async (actor, input) => { await expireVerificationRequests(firestore); return createReturnRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
-  saveRequestInspection: async (actor, id, input) => { await expireVerificationRequests(firestore); return saveRequestInspection(firestore, actor, id, input); },
-  verifyMobileToken: async token => { try { return await firebaseAuth.verifyIdToken(token, true); } catch { return null; } },
-  pricingQuote: async input => {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('Rental quote details are required.'), { status: 400 });
-    const pricing = await loadPricing(firestore); let productId = input.productId;
-    if (input.itemId) {
-      await expireVerificationRequests(firestore);
-      const itemId = String(input.itemId);
-      if (!/^[A-Za-z0-9_-]{1,128}$/.test(itemId)) throw Object.assign(new Error('Invalid equipment ID.'), { status: 400 });
-      const item = await firestore.collection('items').doc(itemId).get();
-      if (!item.exists) throw Object.assign(new Error('Equipment not found.'), { status: 404 });
-      const record = item.data();
-      if (record.is_active === false || record.status !== 'AVAILABLE') throw Object.assign(new Error('This equipment is not available for rental.'), { status: 409 });
-      const openRentals = await firestore.collection('rentals').where('item_id', '==', itemId).get();
-      if (openRentals.docs.some(doc => ['ACTIVE', 'PENDING_VERIFICATION'].includes(doc.data().status))) throw Object.assign(new Error('This equipment already has an open rental.'), { status: 409 });
-      productId = record.pricing_product_id;
-      if (!productId) throw Object.assign(new Error('Link this equipment to a client rate sheet product before quoting.'), { status: 400 });
-    }
-    return quoteRental(pricing, { ...input, productId });
-  },
-  createCustomer: (actor, input) => createCustomer(firestore, actor, input), updateCustomer: (actor, id, input) => updateCustomer(firestore, actor, id, input), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: (actor, input) => saveSettings(firestore, actor, input), createUser: (actor, input) => createWorkspaceUser(firebaseAuth, firestore, actor, input), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input)
-};
+export function createFirebaseServices({ db = defaultFirestore, auth = defaultFirebaseAuth } = {}) {
+  const firestore = db, firebaseAuth = auth;
+  const readCache = createReadCache(firestore, { ttlMs: 60000 });
+  const readDatabase = readCache.database;
+  const verificationSweep = createExpirySweep(firestore, { onExpired: () => readCache.invalidate() });
+  const services = {
+    async health() { requireFirebaseConfig(); await firestore.collection('users').limit(1).get(); },
+    async getUser(id) { const doc = await firestore.collection('users').doc(String(id)).get(); return doc.exists ? { id: doc.id, ...doc.data() } : null; },
+    async touchLogin(id) { await firestore.collection('users').doc(String(id)).update({ last_login_at: new Date() }); },
+    updateProfile: (id, input) => updateProfile(firebaseAuth, firestore, id, input),
+    dashboard: async () => { await verificationSweep.run(); return loadDashboard(readDatabase); },
+    inventoryList: async () => { await verificationSweep.run(); return inventoryList(readDatabase); }, inventoryDetail: id => inventoryDetail(firestore, id), inventoryQr: id => inventoryQr(firestore, id), inventoryQrLabels: () => inventoryQrLabels(firestore),
+    createItem: (actor, input) => createItem(firestore, actor, input), updateItem: (actor, id, input) => updateItem(firestore, actor, id, input), itemAction: (actor, id, input) => itemAction(firestore, actor, id, input), createItemCategory: (actor, input) => createItemCategory(firestore, actor, input), deleteItemCategory: (actor, id) => deleteItemCategory(firestore, actor, id), deleteArchivedItem: (actor, id, input) => deleteArchivedItem(firestore, actor, id, input),
+    workspace: async role => { await verificationSweep.run(); return loadWorkspace(readDatabase, role); }, pricing: () => loadPricing(readDatabase, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
+    authenticateTerminal: (id, key) => authenticateTerminal(firestore, id, key),
+    terminalPending: terminal => terminalPending(firestore, terminal, new Date(), { expire: () => verificationSweep.run() }),
+    terminalConfirm: (terminal, input) => resolveTerminalRequest(firestore, terminal, input),
+    createRentalRequest: async (actor, input) => { await verificationSweep.run({ force: true }); return createRentalRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
+    createReturnRequest: async (actor, input) => { await verificationSweep.run({ force: true }); return createReturnRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
+    saveRequestInspection: async (actor, id, input) => { await verificationSweep.run({ force: true }); return saveRequestInspection(firestore, actor, id, input); },
+    verifyMobileToken: async token => { try { return await firebaseAuth.verifyIdToken(token, true); } catch { return null; } },
+    pricingQuote: async input => {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('Rental quote details are required.'), { status: 400 });
+      const pricing = await loadPricing(firestore); let productId = input.productId;
+      if (input.itemId) {
+        await verificationSweep.run({ force: true });
+        const itemId = String(input.itemId);
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(itemId)) throw Object.assign(new Error('Invalid equipment ID.'), { status: 400 });
+        const item = await firestore.collection('items').doc(itemId).get();
+        if (!item.exists) throw Object.assign(new Error('Equipment not found.'), { status: 404 });
+        const record = item.data();
+        if (record.is_active === false || record.status !== 'AVAILABLE') throw Object.assign(new Error('This equipment is not available for rental.'), { status: 409 });
+        const openRentals = await firestore.collection('rentals').where('item_id', '==', itemId).get();
+        if (openRentals.docs.some(doc => ['ACTIVE', 'PENDING_VERIFICATION'].includes(doc.data().status))) throw Object.assign(new Error('This equipment already has an open rental.'), { status: 409 });
+        productId = record.pricing_product_id;
+        if (!productId) throw Object.assign(new Error('Link this equipment to a client rate sheet product before quoting.'), { status: 400 });
+      }
+      return quoteRental(pricing, { ...input, productId });
+    },
+    createCustomer: (actor, input) => createCustomer(firestore, actor, input), updateCustomer: (actor, id, input) => updateCustomer(firestore, actor, id, input), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: (actor, input) => saveSettings(firestore, actor, input), createUser: (actor, input) => createWorkspaceUser(firebaseAuth, firestore, actor, input), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input)
+  };
+
+  for (const name of ['touchLogin', 'updateProfile', 'createItem', 'updateItem', 'itemAction', 'createItemCategory', 'deleteItemCategory', 'deleteArchivedItem', 'inventoryQr', 'inventoryQrLabels', 'savePricing', 'terminalConfirm', 'createRentalRequest', 'createReturnRequest', 'saveRequestInspection', 'createCustomer', 'updateCustomer', 'saveRate', 'saveSettings', 'createUser', 'updateUser']) {
+    const operation = services[name];
+    services[name] = async (...args) => {
+      try { return await operation(...args); }
+      finally { readCache.invalidate(); }
+    };
+  }
+  return Object.assign(services, { invalidateReadCache: () => readCache.invalidate(), sweepVerificationRequests: () => verificationSweep.run() });
+}
+
+const defaultServices = createFirebaseServices();
 
 export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices } = {}) {
   const attempts = new Map();
+  const quotaBackoff = createQuotaBackoff();
   const origins = new Set([process.env.WEB_ORIGIN || 'http://127.0.0.1:5173', 'http://localhost:5173']);
   function send(res, status, value, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers }); res.end(JSON.stringify(value)); }
   function cookie(value, seconds, persistent = false) { return `rent_play_session=${value}; HttpOnly; SameSite=Strict; Path=/${persistent ? `; Max-Age=${seconds}` : ''}${process.env.COOKIE_SECURE === 'true' ? '; Secure' : ''}`; }
@@ -89,11 +109,14 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       if (path === '/api/auth/logout' && req.method === 'POST') { if (await sessions.verify(token)) sessions.revoke?.(token); return send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0, true) }); }
       if (path === '/api/health' && req.method === 'GET') {
         try {
+          quotaBackoff.assertAvailable();
           await services.health();
           return send(res, 200, { database: true, provider: 'firebase' });
         } catch (error) {
-          console.warn('Health check detected Firebase startup issues; serving limited health response.', error.message);
-          return send(res, 200, { database: false, provider: 'firebase', warning: 'Firebase is not configured yet.' });
+          quotaBackoff.record(error);
+          const failure = firebaseFailure(error);
+          if (!error.quotaCooldown) console.warn(`Firebase health check failed (${error.code || 'FIREBASE_ERROR'}): ${error.message}`);
+          return send(res, 200, { database: false, provider: 'firebase', warning: failure.error, code: failure.code, retryAfterSeconds: failure.retryAfterSeconds }, { 'Retry-After': String(failure.retryAfterSeconds) });
         }
       }
       if (path === '/api/auth/password-reset' && req.method === 'POST') {
@@ -101,6 +124,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(res, 400, { error: 'Enter a valid email address.' });
         await sessions.sendPasswordReset(email).catch(() => { }); return send(res, 200, { ok: true });
       }
+      quotaBackoff.assertAvailable();
+      if (req.method === 'GET' && req.headers['cache-control'] === 'no-cache') services.invalidateReadCache?.();
       if (path === '/api/auth/login' && req.method === 'POST') {
         const ip = req.socket.remoteAddress, now = Date.now(); for (const [key, value] of attempts) if (now - value.since > 900000) attempts.delete(key);
         const entry = attempts.get(ip) || { since: now, count: 0 }; if (entry.count >= 10) return send(res, 429, { error: 'Too many attempts. Try again in 15 minutes.' }); attempts.set(ip, { ...entry, count: entry.count + 1 });
@@ -167,12 +192,22 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
       send(res, 404, { error: 'API endpoint not found.' });
     } catch (error) {
-      if (error.status) send(res, error.status, { error: error.message });
-      else { console.error(`Backend request failed (${error.code || 'FIREBASE_ERROR'}).`); send(res, 503, { error: 'Firebase is unavailable. Check the backend Firebase configuration.' }); }
+      if (Number.isInteger(error.status) && error.status >= 400 && error.status < 600 && !isQuotaError(error)) send(res, error.status, { error: error.message });
+      else {
+        quotaBackoff.record(error);
+        const { status, ...failure } = firebaseFailure(error);
+        if (!error.quotaCooldown) console.error(`Backend request failed (${error.code || 'FIREBASE_ERROR'}): ${error.message} ${failure.error}`);
+        send(res, status, failure, { 'Retry-After': String(failure.retryAfterSeconds) });
+      }
     }
   });
   if (expiryWorker) {
-    const stop = startExpiryWorker(firestore);
+    const stop = startExpiryWorker(defaultFirestore, {
+      sweep: async () => {
+        quotaBackoff.assertAvailable();
+        try { return await services.sweepVerificationRequests(); } catch (error) { quotaBackoff.record(error); throw error; }
+      }
+    });
     server.once('close', stop);
   }
   return server;

@@ -4,7 +4,10 @@ export function memoryFirestore(initial = {}) {
   let sequence = 0, queue = Promise.resolve();
   let store = new Map();
   for (const [name, records] of Object.entries(initial)) for (const [id, value] of Object.entries(records)) store.set(`${name}/${id}`, structuredClone(value));
-  const readDoc = reference => ({ id: reference.id, ref: reference, exists: store.has(reference.path), data: () => structuredClone(store.get(reference.path)) });
+  const readDoc = reference => {
+    const value = structuredClone(store.get(reference.path));
+    return { id: reference.id, ref: reference, exists: store.has(reference.path), data: () => structuredClone(value) };
+  };
   const document = (name, id) => {
     const value = String(id ?? `record_${++sequence}`), path = `${name}/${value}`;
     return { id: value, path, get: async () => readDoc(document(name, value)), create: async data => { if (store.has(path)) throw Error('Document exists'); store.set(path, structuredClone(data)); }, set: async (data, options) => store.set(path, structuredClone(options?.merge ? { ...store.get(path), ...data } : data)), update: async data => { if (!store.has(path)) throw Error('Missing document'); store.set(path, structuredClone({ ...store.get(path), ...data })); } };
@@ -27,6 +30,7 @@ export function memoryFirestore(initial = {}) {
   const commitWrites = writes => {
     const next = new Map(store);
     for (const [type, reference, data, options] of writes) {
+      if (type === 'delete') { next.delete(reference.path); continue; }
       if (type === 'create' && next.has(reference.path)) throw Error('Document exists');
       if (type === 'update' && !next.has(reference.path)) throw Error('Missing document');
       next.set(reference.path, structuredClone(type === 'update' || options?.merge ? { ...next.get(reference.path), ...data } : data));
@@ -40,6 +44,7 @@ export function memoryFirestore(initial = {}) {
         create: (reference, data) => { writes.push(['create', reference, data]); return writer; },
         update: (reference, data) => { writes.push(['update', reference, data]); return writer; },
         set: (reference, data, options) => { writes.push(['set', reference, data, options]); return writer; },
+        delete: reference => { writes.push(['delete', reference]); return writer; },
         commit: async () => commitWrites(writes)
       };
       return writer;
@@ -52,7 +57,8 @@ export function memoryFirestore(initial = {}) {
           get: async reference => { if (writes.length) throw Error('Transaction reads after writes'); return reference.get(); },
           create: (reference, data) => writes.push(['create', reference, data]),
           update: (reference, data) => writes.push(['update', reference, data]),
-          set: (reference, data, options) => writes.push(['set', reference, data, options])
+          set: (reference, data, options) => writes.push(['set', reference, data, options]),
+          delete: reference => writes.push(['delete', reference])
         };
         const result = await callback(tx); commitWrites(writes); return result;
       } finally { unlock(); }

@@ -5,6 +5,7 @@ import net from 'node:net';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
+import { pageRoutes } from '../src/workspace-navigation.js';
 
 const appRoot = fileURLToPath(new URL('../', import.meta.url));
 
@@ -33,6 +34,11 @@ test('VS Code can open the ready web server and every browser module loads', asy
       const origin = `http://127.0.0.1:${port}`;
       assert.equal(readyPattern.exec(output.toString())?.[1], origin, `${mode}: VS Code must recognize the startup URL`);
       const html = await fetch(origin).then(response => response.text());
+      for (const route of Object.values(pageRoutes)) {
+        const response = await fetch(origin + route);
+        assert.equal(response.status, 200, `${mode}: direct page ${route} must load`);
+        assert.match(await response.text(), /id="app"/, `${mode}: ${route} must serve the app shell`);
+      }
       const entry = html.match(/<script type="module" src="([^"]+)"/)[1];
       const pending = [new URL(entry, origin)];
       const visited = new Set();

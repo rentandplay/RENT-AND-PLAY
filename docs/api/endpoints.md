@@ -1,5 +1,13 @@
 # API Endpoints
 
+## Database availability errors
+
+Firestore quota exhaustion returns HTTP `429` with `{error, code: "FIRESTORE_QUOTA_EXCEEDED", retryAfterSeconds}` and a `Retry-After` header. During the five-minute cooldown, further database requests fail without consuming more reads. Device clients should honor that header when polling. Logout and password-reset do not require Firestore access and remain available.
+
+Temporary database failures return HTTP `503` with code `FIREBASE_UNAVAILABLE`; invalid server configuration or credentials use `FIREBASE_CONFIGURATION_ERROR`. `GET /api/health` returns HTTP `200` with `database: false`, the matching `code`, `warning`, and `retryAfterSeconds` when the database is unavailable. A healthy response includes `database: true`.
+
+## Core endpoints
+
 Proposal-defined core endpoints:
 
 - POST `/api/rentals`

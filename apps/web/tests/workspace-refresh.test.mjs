@@ -14,7 +14,7 @@ test('invalidating the workspace after an equipment save loads fresh activities 
   await ui.load(); await ui.load(); assert.equal(reads, 1);
   assert.match(ui.render('Reports', {}), /No audit log entries/);
   current = model([log]); ui.invalidate();
-  assert.match(ui.render('Reports', {}), /Loading reports/);
+  assert.match(ui.render('Reports', {}), /Updating reports/);
   await ui.load(); assert.equal(reads, 2);
   const html = ui.render('Reports', {});
   assert.match(html, /New basketball/); assert.match(html, /Ana Admin/); assert.match(html, /Item Created/);

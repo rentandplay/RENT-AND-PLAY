@@ -6,6 +6,9 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const output = path.join(root, 'dist');
 const sourceFiles = [
     'app.js',
+    'api-client.js',
+    'date-time.js',
+    'workspace-navigation.js',
     'confirmation-dialog.js',
     'record-links.js',
     'record-details.js',

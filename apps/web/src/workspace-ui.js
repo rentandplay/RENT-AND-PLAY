@@ -364,16 +364,18 @@ export function createWorkspaceUI(h) {
     });
     const paymentForm = document.querySelector('#payment-settings-form');
     if (paymentForm) {
-      const imageInput = paymentForm.elements.imageDataUrl, fileInput = paymentForm.querySelector('[data-payment-qr]'), preview = paymentForm.querySelector('[data-payment-qr-preview]'), error = paymentForm.querySelector('.form-error');
+      const imageInput = paymentForm.elements.imageDataUrl, fileInput = paymentForm.querySelector('[data-payment-qr]'), preview = paymentForm.querySelector('[data-payment-qr-preview]'), removeButton = paymentForm.querySelector('[data-payment-qr-remove]'), error = paymentForm.querySelector('.form-error');
+      const syncRemoveButton = () => { if (removeButton) removeButton.hidden = !imageInput.value.trim(); };
+      syncRemoveButton();
       fileInput?.addEventListener('change', () => {
         const file = fileInput.files?.[0]; if (!file) return;
         if (file.size > 250000) { fileInput.value = ''; error.textContent = 'The QR image must be 250 KB or smaller.'; return; }
         const reader = new FileReader();
-        reader.onload = () => { imageInput.value = String(reader.result || ''); error.textContent = ''; const image = new Image(); image.className = 'rental-payment-qr-preview'; image.alt = 'New owner InstaPay QR'; image.src = imageInput.value; preview.replaceChildren(image); };
+        reader.onload = () => { imageInput.value = String(reader.result || ''); syncRemoveButton(); error.textContent = ''; const image = new Image(); image.className = 'rental-payment-qr-preview'; image.alt = 'New owner InstaPay QR'; image.src = imageInput.value; preview.replaceChildren(image); };
         reader.onerror = () => { error.textContent = 'Could not read this QR image. Choose another file.'; };
         reader.readAsDataURL(file);
       });
-      paymentForm.querySelector('[data-payment-qr-remove]')?.addEventListener('click', () => { imageInput.value = ''; if (fileInput) fileInput.value = ''; preview.innerHTML = '<p class="settings-draft-note">No owner QR configured. Customers can choose cash until one is saved.</p>'; });
+      removeButton?.addEventListener('click', () => { imageInput.value = ''; if (fileInput) fileInput.value = ''; syncRemoveButton(); preview.innerHTML = '<p class="settings-draft-note">No owner QR configured. Customers can choose cash until one is saved.</p>'; });
       confirmSubmit(paymentForm, { title: 'Save InstaPay payment details?', description: 'Customers will use this QR for transfers and see the account details in rental checkout.', confirmLabel: 'Save payment details' }, async () => {
         const button = paymentForm.querySelector('[type="submit"]'); button.disabled = true; button.textContent = 'Saving…'; error.textContent = '';
         try { const result = await api('/settings/payment', { method: 'PATCH', body: JSON.stringify(Object.fromEntries(new FormData(paymentForm))) }); model.settings = { ...model.settings, ...(result.settings || {}) }; toast('Owner payment instructions saved.'); rerender(); }

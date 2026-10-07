@@ -125,6 +125,22 @@ export async function savePricing(db,actor,input,now=new Date()) {
   return pricing;
 }
 
+export function equipmentRateOptions(rateType,rentalRate,customOptions=[]) {
+  const baseTypes={
+    HOURLY:{label:'Per hour',kind:'HOURLY',duration_minutes:60},
+    DAILY:{label:'Per day',kind:'BLOCK',duration_minutes:1440},
+    FLAT:{label:'Flat rental rate',kind:'FLAT',duration_minutes:10080}
+  };
+  const baseType=baseTypes[rateType],amount=Number(rentalRate);
+  const base=baseType&&Number.isFinite(amount)&&amount>=0?{id:`admin-base-${rateType.toLowerCase()}`,...baseType,amount}:null;
+  const options=Array.isArray(customOptions)?customOptions.filter(row=>row&&typeof row==='object').map(row=>({...row})):[];
+  if(base){
+    const duplicate=options.findIndex(row=>row.kind===base.kind&&Number(row.duration_minutes??row.durationMinutes)===base.duration_minutes&&Number(row.amount)===base.amount);
+    if(duplicate>=0)options.splice(duplicate,1);
+  }
+  return [...(base?[base]:[]),...options];
+}
+
 function timedAmount(product,durationMinutes) {
   const candidates=[];
   const rates=product.rate_options;
@@ -135,6 +151,8 @@ function timedAmount(product,durationMinutes) {
       candidates.push({amount:blocks*rate.amount,billed_minutes:blocks*rate.duration_minutes,rate_label:rate.label,rate_id:rate.id,rate_kind:rate.kind,rate_components:[component(rate,blocks)]});
     }else if(rate.kind==='SHORT'&&durationMinutes<=rate.duration_minutes){
       candidates.push({amount:rate.amount,billed_minutes:rate.duration_minutes,rate_label:rate.label,rate_id:rate.id,rate_kind:rate.kind,rate_components:[component(rate,1)]});
+    }else if(rate.kind==='FLAT'&&durationMinutes<=rate.duration_minutes){
+      candidates.push({amount:rate.amount,billed_minutes:durationMinutes,rate_label:rate.label,rate_id:rate.id,rate_kind:rate.kind,rate_components:[component(rate,1)]});
     }else if(rate.kind==='PACKAGE'&&hourly){
       const standardBlocks=Math.ceil(durationMinutes/hourly.duration_minutes),packageBlocks=Math.ceil(rate.duration_minutes/hourly.duration_minutes);
       if(standardBlocks>=packageBlocks){

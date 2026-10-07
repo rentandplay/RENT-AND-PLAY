@@ -14,9 +14,8 @@ export function createReleaseVerification({ api, rentalId, onChange = () => {} }
   async function verifyBooking() {
     if (state.busy) return false;
     if (!state.transactionCode.trim()) { state.error = 'Scan or enter the customer rental QR.'; emit(); return false; }
-    if (state.manualLookup && !state.manualReason.trim()) { state.error = 'Enter a reason for using printed codes.'; emit(); return false; }
     const attempt = ++revision;
-    const input = { transactionCode: state.transactionCode.trim(), ...(state.manualLookup ? { manualReason: state.manualReason.trim() } : {}) };
+    const input = { transactionCode: state.transactionCode.trim(), ...(state.manualLookup ? { manualLookup: true, ...(state.manualReason.trim() ? { manualReason: state.manualReason.trim() } : {}) } : {}) };
     state = { ...state, busy: true, error: '' }; emit();
     try {
       const result = await api(`/rentals/${encodeURIComponent(rentalId)}/release-verification`, { method: 'POST', body: JSON.stringify(input) });
@@ -33,7 +32,7 @@ export function createReleaseVerification({ api, rentalId, onChange = () => {} }
   function goBack() { if (state.busy) return; state.step = 1; state.error = ''; emit(); }
   function releaseCodes() {
     if (state.busy || !state.bookingVerified || state.step !== 2) throw new Error('Verify the customer rental QR before confirming handoff.');
-    return { transactionCode: state.transactionCode.trim(), ...(state.manualLookup ? { manualReason: state.manualReason.trim() } : {}) };
+    return { transactionCode: state.transactionCode.trim(), ...(state.manualLookup ? { manualLookup: true, ...(state.manualReason.trim() ? { manualReason: state.manualReason.trim() } : {}) } : {}) };
   }
   function dispose() { revision++; }
   return { snapshot, update, verifyBooking, verifyInventory: verifyBooking, goBack, releaseCodes, dispose };

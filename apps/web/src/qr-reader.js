@@ -11,8 +11,20 @@ function loadDecoder() {
 }
 
 export function bindQrReaders(form, modal, { onCapture } = {}) {
-  let stream, timer, video, running = false, generation = 0, activeButton, buttonLabel;
-  const stop = () => { generation++; running = false; clearTimeout(timer); stream?.getTracks().forEach(track => track.stop()); stream = null; if (video) { video.srcObject = null; video.remove(); video = null; } if (activeButton) { activeButton.innerHTML = buttonLabel; activeButton = null; } };
+  let stream, timer, video, running = false, generation = 0, activeButton, activeOutput, buttonLabel;
+  const stop = () => {
+    generation++; running = false; clearTimeout(timer);
+    stream?.getTracks().forEach(track => track.stop()); stream = null;
+    if (video) { video.srcObject = null; video = null; }
+    form.querySelector('.qr-scanner-frame')?.remove();
+    activeOutput?.classList.remove('is-scanning'); activeOutput = null;
+    if (activeButton) {
+      activeButton.innerHTML = buttonLabel;
+      activeButton.classList.remove('is-scanning');
+      activeButton.removeAttribute('aria-pressed');
+      activeButton = null;
+    }
+  };
   modal.addEventListener?.('close', stop, { once: true });
   form.querySelectorAll('[data-scan-field]').forEach(button => button.onclick = async () => {
     const field = form.elements[button.dataset.scanField];
@@ -20,17 +32,23 @@ export function bindQrReaders(form, modal, { onCapture } = {}) {
     const output = form.querySelector(`[data-camera-status="${button.dataset.scanField}"]`) || form.querySelector('[data-camera-status]');
     if (activeButton === button) { stop(); output.textContent = 'Camera stopped. Scan again or enter the printed code.'; return; }
     stop(); const attempt = generation;
-    activeButton = button; buttonLabel = button.innerHTML; button.textContent = 'Stop camera';
+    activeButton = button; activeOutput = output; buttonLabel = button.innerHTML;
+    button.classList.add('is-scanning'); button.setAttribute('aria-pressed', 'true'); button.textContent = 'Stop camera';
     try {
       if (!globalThis.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('Camera scanning needs HTTPS or localhost. Use manual lookup on this connection.');
-      output.textContent = 'Allow camera access, then point it at the QR code.';
+      output.textContent = 'Starting camera…';
       const decode = await loadDecoder();
       if (attempt !== generation || !form.isConnected || !modal.open) return;
-      const acquired = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 } }, audio: false });
+      const acquired = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }, audio: false });
       if (attempt !== generation || !form.isConnected || !modal.open) { acquired.getTracks().forEach(track => track.stop()); return; }
       stream = acquired; video = document.createElement('video'); video.muted = true; video.playsInline = true; video.srcObject = stream; video.className = 'qr-camera-preview';
-      output.after(video); await video.play();
-      output.textContent = 'Keep the QR inside the camera view. Select Stop camera to enter a code instead.';
+      const frame = document.createElement('div'); frame.className = 'qr-scanner-frame'; frame.setAttribute('role', 'group'); frame.setAttribute('aria-label', 'Live camera preview. Center the QR code in the frame.');
+      const target = document.createElement('div'); target.className = 'qr-scanner-target'; target.setAttribute('aria-hidden', 'true');
+      const label = document.createElement('span'); label.className = 'qr-scanner-label'; label.textContent = 'Center the QR code in the frame';
+      frame.append(video, target, label); output.after(frame); await video.play();
+      output.textContent = 'Scanning for QR. Keep the code steady inside the frame.'; output.classList.add('is-scanning');
+      const track = stream.getVideoTracks()[0], capabilities = track?.getCapabilities?.();
+      if (capabilities?.focusMode?.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
       if (attempt !== generation) return;
       running = true;
       const canvas = document.createElement('canvas'), context = canvas.getContext('2d', { willReadFrequently: true });

@@ -15,7 +15,27 @@ export function createInventory(h) {
   const cash = n => n == null ? 'Not configured' : new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2 }).format(Number(n));
   const unit = t => ({ DAILY: 'per day', HOURLY: 'per hour', FLAT: 'flat fee' })[t] || '';
   const productFor = item => pricingProducts.find(product => product.id === item.pricing_product_id);
-  const itemRateOptions = item => Array.isArray(item.custom_rate_options) && item.custom_rate_options.length ? item.custom_rate_options : productFor(item)?.rate_options || [];
+  const usesAdditionalRates = item => Number(item?.custom_rate_options_version) >= 2;
+  const traditionalRate = item => {
+    if (!['DAILY', 'HOURLY', 'FLAT'].includes(item?.rate_type) || item.rental_rate == null) return null;
+    const daily = item.rate_type === 'DAILY', flat = item.rate_type === 'FLAT';
+    return { id: `admin-base-${item.rate_type.toLowerCase()}`, label: daily ? 'Per day' : flat ? 'Flat rental rate' : 'Per hour', kind: daily ? 'BLOCK' : flat ? 'FLAT' : 'HOURLY', duration_minutes: daily ? 1440 : flat ? 10080 : 60, amount: Number(item.rental_rate) };
+  };
+  const additionalRateOptions = item => {
+    const rates = Array.isArray(item?.custom_rate_options) ? [...item.custom_rate_options] : [], base = traditionalRate(item);
+    if (usesAdditionalRates(item)) return rates;
+    if (base) {
+      const duplicate = rates.findIndex(rate => rate.kind === base.kind && Number(rate.duration_minutes) === base.duration_minutes && Number(rate.amount) === base.amount);
+      if (duplicate >= 0) rates.splice(duplicate, 1);
+    }
+    return rates;
+  };
+  const itemRateOptions = item => {
+    const product = productFor(item), savedOptions = Array.isArray(item?.custom_rate_options) ? item.custom_rate_options : [];
+    if (product) return product.rate_options || [];
+    if (savedOptions.length && !usesAdditionalRates(item)) return savedOptions;
+    return [traditionalRate(item), ...additionalRateOptions(item)].filter(Boolean);
+  };
   const primaryItemRate = item => { const rates = itemRateOptions(item); return rates.find(rate => rate.kind === 'HOURLY') || rates.find(rate => rate.kind !== 'PACKAGE' && rate.kind !== 'WHOLE_STAY') || rates.find(rate => rate.kind !== 'WHOLE_STAY') || null; };
   const displayRateAmount = item => primaryItemRate(item)?.amount ?? item.rental_rate;
   const displayRateUnit = item => primaryItemRate(item)?.label || unit(item.rate_type);
@@ -175,7 +195,7 @@ export function createInventory(h) {
   function draw() {
     if (!root?.isConnected) return;
     if (inventoryView?.root !== root) inventoryView = createInventoryView(root, {
-      escape: e, icon, symbol, badge, stateLabel, cash, unit, label, isActive, renderEquipmentImage,
+      escape: e, icon, symbol, badge, stateLabel, cash, unit, label, isActive, renderEquipmentImage, productFor, displayRateAmount, displayRateUnit, priceOptions,
       onSearch: value => { search = value; offset = 0; draw(); },
       onCategory: value => { cat = value; offset = 0; draw(); },
       onStatus: value => { scope = value === 'archived' ? 'archived' : 'active'; status = scope === 'archived' ? 'all' : value; offset = 0; draw(); },
@@ -223,12 +243,13 @@ export function createInventory(h) {
     const field = (name, title, type, value, extra = '') => `<label>${title}<input name="${name}" type="${type}" value="${e(value)}" ${extra} required/></label>`;
     const defaultImage = imageFilename(item?.name), initialImage = item?.image_data || (defaultImage ? `/public/images/${defaultImage}` : ''), placeholderCategory = item?.category || categories.find(c => String(c.id) === String(item?.category_id || cat))?.name || '';
     const savedCondition = item?.condition_status || 'GOOD', conditionLocked = Boolean(item && (Number(item.open_rentals) > 0 || item.reserved_rental_id || ['RENTED', 'RESERVED_PENDING'].includes(item.status)));
-    const linkedProduct = pricingProducts.find(product => product.id === (item?.pricing_product_id || ''));
-    const savedCustomRates = Array.isArray(item?.custom_rate_options) && item.custom_rate_options.length ? item.custom_rate_options : null;
-    const legacyRate = item ? { id: 'legacy-rate', label: item.rate_type === 'DAILY' ? 'Per day' : item.rate_type === 'FLAT' ? 'Flat rental rate' : 'Per hour', kind: item.rate_type === 'DAILY' ? 'BLOCK' : item.rate_type === 'FLAT' ? 'SHORT' : 'HOURLY', duration_minutes: item.rate_type === 'DAILY' ? 1440 : item.rate_type === 'FLAT' ? 10080 : 60, amount: item.rental_rate ?? 0 } : { id: 'rate-hourly', label: 'Per hour', kind: 'HOURLY', duration_minutes: 60, amount: '' };
-    const productRates = linkedProduct?.rate_options?.filter(rate => rate.kind !== 'WHOLE_STAY') || [];
-    const initialCustomRates = savedCustomRates || (productRates.length ? productRates : [legacyRate]);
-    const initialRateMode = savedCustomRates || !item?.pricing_product_id ? 'custom' : 'product';
+    const oldRateOptions = Array.isArray(item?.custom_rate_options) ? item.custom_rate_options : [];
+    const legacyBaseIndex = item && !usesAdditionalRates(item) ? oldRateOptions.findIndex(rate => rate.kind === 'HOURLY' || rate.kind === 'BLOCK' && Number(rate.duration_minutes) === 1440) : -1;
+    const legacyBaseOption = legacyBaseIndex >= 0 ? oldRateOptions[legacyBaseIndex] : null;
+    const initialRateType = legacyBaseOption?.kind === 'HOURLY' ? 'HOURLY' : legacyBaseOption ? 'DAILY' : item?.rate_type || 'HOURLY';
+    const initialRentalRate = legacyBaseOption?.amount ?? item?.rental_rate ?? '';
+    const savedCustomRates = legacyBaseIndex >= 0 ? oldRateOptions.filter((_, index) => index !== legacyBaseIndex) : additionalRateOptions(item || {});
+    const initialRateMode = item?.pricing_product_id ? 'product' : 'traditional';
     const imageEditor = `<section class="inv-image-editor"><div class="inv-image-preview" id="inv-form-image-preview">${initialImage ? `<img src="${e(initialImage)}" alt="${e(item?.name || 'Equipment image')}"/>` : `<span>${symbol(placeholderCategory)}</span>`}</div><div class="inv-image-editor-copy"><strong>Equipment image</strong><p>Upload a photo to use on this equipment card.</p><div class="inv-image-actions"><label class="secondary inv-image-picker">Choose image<input id="inv-image-file" type="file" accept="image/jpeg,image/png,image/webp"/></label><button type="button" class="secondary" id="inv-image-remove" ${item?.image_data ? '' : 'hidden'}>Remove image</button></div><small>JPG, PNG, or WebP · resized automatically</small><p class="inv-error" id="inv-image-error" role="alert"></p></div><input type="hidden" name="imageData" value="${e(item?.image_data || '')}"/></section>`;
     showModal(item ? 'Edit equipment' : 'Add equipment', `<form id="inv-form" class="inv-form inv-equipment-form">
       <p class="inv-form-intro">${item ? 'Update equipment details and pricing.' : 'Add a photo, equipment details, and rental pricing.'}</p>
@@ -256,26 +277,32 @@ export function createInventory(h) {
         </div>
       </section>
       <section class="inv-form-section">
-        <header class="inv-form-section-heading"><span>02</span><div><h3>Rates &amp; pricing</h3><p>Set item-specific rate options or use a shared rate sheet.</p></div></header>
+        <header class="inv-form-section-heading"><span>02</span><div><h3>Rates &amp; pricing</h3><p>Set this item's standard rate, then add optional mobile rate options.</p></div></header>
         <div class="inv-form-grid">
-          <label>Rate setup<select id="inv-rate-mode" name="rateMode"><option value="custom" ${initialRateMode === 'custom' ? 'selected' : ''}>Custom rates &amp; durations</option><option value="product" ${initialRateMode === 'product' ? 'selected' : ''}>Use a shared pricing product</option></select><small>Choose item-specific rates or link to a shared product.</small></label>
-          <div class="inv-linked-rate-panel" id="inv-linked-rate-panel" ${initialRateMode === 'custom' ? 'hidden' : ''}>
+          <label>Rate setup<select id="inv-rate-mode" name="rateMode"><option value="traditional" ${initialRateMode === 'traditional' ? 'selected' : ''}>Traditional admin-set rate</option><option value="product" ${initialRateMode === 'product' ? 'selected' : ''}>Use a shared pricing product</option></select><small>Set the regular price and rental terms, or use a shared rate sheet.</small></label>
+          <div class="inv-linked-rate-panel" id="inv-linked-rate-panel" ${initialRateMode === 'traditional' ? 'hidden' : ''}>
             <label>Pricing product<select id="inv-pricing-product" name="pricingProductId"><option value="">Choose a product</option>${pricingProducts.map(p => `<option value="${e(p.id)}" ${p.id === (item?.pricing_product_id || '') ? 'selected' : ''}>${e(p.name)} · ${e(p.group)}</option>`).join('')}</select><small>Uses the current shared rates, deposit, and overtime setting.</small></label>
             <div class="inv-linked-rate-summary" id="inv-linked-rate-summary" aria-live="polite"></div>
           </div>
-          <section class="inv-custom-rate-panel" id="inv-custom-rate-panel" ${initialRateMode === 'product' ? 'hidden' : ''}>
-            <div class="inv-custom-rate-heading"><div><strong>Custom price options</strong><small>Add the durations and prices customers can choose in the mobile app.</small></div><button type="button" class="secondary" id="inv-add-rate-option">＋ Add rate option</button></div>
-            <div class="inv-rate-options-list" id="inv-rate-options-list"></div>
-            <small class="inv-rate-help">Short rates apply up to their duration. Standard and fixed blocks round up. Packages need a standard rate.</small>
+          <section class="inv-traditional-rate-panel" id="inv-traditional-rate-panel" ${initialRateMode === 'product' ? 'hidden' : ''}>
+            <div class="inv-form-grid inv-base-rate-grid">
+              <label>Traditional rate basis<select name="rateType" required><option value="HOURLY" ${initialRateType === 'HOURLY' ? 'selected' : ''}>Hourly</option><option value="DAILY" ${initialRateType === 'DAILY' ? 'selected' : ''}>Daily</option><option value="FLAT" ${initialRateType === 'FLAT' ? 'selected' : ''}>Flat rental fee</option></select><small>Default rate used when quoting this item. Package extras use it when the basis is hourly.</small></label>
+              ${field('rentalRate', 'Traditional rental rate (₱)', 'number', initialRentalRate, 'min="0" max="9999999999.99" step="0.01" placeholder="0.00"')}
+            </div>
+            <label class="inv-pricing-option-toggle"><input id="inv-custom-options-toggle" type="checkbox" ${savedCustomRates.length ? 'checked' : ''}/> Add mobile rate options</label>
+            <section class="inv-custom-rate-panel" id="inv-custom-rate-panel" ${savedCustomRates.length ? '' : 'hidden'}>
+              <div class="inv-custom-rate-heading"><div><strong>Additional rate options</strong><small>Up to 8 · name the rate, then set its duration and billing rule.</small></div><button type="button" class="secondary" id="inv-add-rate-option">＋ Add option</button></div>
+              <datalist id="inv-rate-option-suggestions"><option value="30 minutes"></option><option value="2-hour special"></option><option value="3-hour special"></option><option value="5-hour special"></option><option value="5 hours"></option><option value="Per day"></option></datalist>
+              <div class="inv-rate-options-list" id="inv-rate-options-list"></div>
+              <small class="inv-rate-help">The name is shown in the mobile app; the billing rule controls the charge. Mobile quotes compare each option with the traditional rate and use the lowest valid price for the selected duration. Packages require an hourly traditional rate.</small>
+            </section>
             <div class="inv-form-grid inv-rate-terms-grid">
               ${field('deposit', 'Security deposit (₱)', 'number', item?.deposit_amount ?? 0, 'min="0" max="9999999999.99" step="0.01"')}
               ${field('latePenalty', 'Late penalty per started hour (₱)', 'number', item?.late_penalty_rate ?? 0, 'min="0" max="9999999999.99" step="0.01"')}
             </div>
           </section>
-          <input type="hidden" name="rateType" value="${e(item?.rate_type || 'HOURLY')}"/>
-          <input type="hidden" name="rentalRate" value="${e(item?.rental_rate ?? '')}"/>
         </div>
-        <div class="info-box">Custom rates use these item-specific options in the mobile app. Shared pricing uses the current rate sheet settings.</div>
+        <div class="info-box" id="inv-rate-mode-help"></div>
       </section>
       <p id="inv-form-error" class="inv-error" role="alert"></p>
       <div class="inv-form-actions"><button type="button" class="secondary" id="inv-cancel">Cancel</button><button class="primary" type="submit">${item ? 'Save changes' : 'Add equipment'}</button></div>
@@ -293,28 +320,50 @@ export function createInventory(h) {
       catch (error) { imageFileInput.value = ''; imageError.textContent = error.message; }
     };
     imageRemove.onclick = () => { imageDataInput.value = ''; imageFileInput.value = ''; imageError.textContent = ''; setImagePreview(defaultImage ? `/public/images/${defaultImage}` : ''); imageRemove.hidden = true; };
-    const conditionSelect = formEl.elements.condition, pricingSelect = formEl.elements.pricingProductId, rateModeSelect = formEl.elements.rateMode;
+    const conditionSelect = formEl.elements.condition, pricingSelect = formEl.elements.pricingProductId, rateModeSelect = formEl.elements.rateMode, baseRatePanel = formEl.querySelector('#inv-traditional-rate-panel'), customOptionsToggle = formEl.querySelector('#inv-custom-options-toggle');
     if (item?.pricing_product_id && !Array.from(pricingSelect.options).some(option => option.value === String(item.pricing_product_id))) {
       pricingSelect.add(new Option('Current pricing product', item.pricing_product_id)); pricingSelect.value = item.pricing_product_id;
     }
-    const rateList = formEl.querySelector('#inv-rate-options-list'), customRatePanel = formEl.querySelector('#inv-custom-rate-panel'), linkedRatePanel = formEl.querySelector('#inv-linked-rate-panel'), linkedSummary = formEl.querySelector('#inv-linked-rate-summary');
-    const rateKinds = [['SHORT', 'Short duration price'], ['HOURLY', 'Standard duration rate'], ['BLOCK', 'Fixed duration block'], ['PACKAGE', 'Package price']];
-    let customRatesEdited = false, nextRateId = 1;
-    const primaryRate = rates => rates.find(rate => rate.kind === 'HOURLY') || rates.find(rate => rate.kind !== 'PACKAGE' && rate.kind !== 'WHOLE_STAY') || rates.find(rate => rate.kind !== 'WHOLE_STAY');
-    const setLegacyRate = rate => {
-      if (!rate) return;
-      formEl.elements.rateType.value = rate.kind === 'BLOCK' && Number(rate.duration_minutes) === 1440 ? 'DAILY' : rate.kind === 'SHORT' ? 'FLAT' : 'HOURLY';
-      formEl.elements.rentalRate.value = rate.amount;
+    const rateList = formEl.querySelector('#inv-rate-options-list'), customRatePanel = formEl.querySelector('#inv-custom-rate-panel'), linkedRatePanel = formEl.querySelector('#inv-linked-rate-panel'), linkedSummary = formEl.querySelector('#inv-linked-rate-summary'), rateModeHelp = formEl.querySelector('#inv-rate-mode-help'), addRateOptionButton = formEl.querySelector('#inv-add-rate-option');
+    let nextRateId = 1;
+    const optionPresets = new Map([
+      ['30 minutes', { duration: 30, kind: 'SHORT' }], ['2-hour special', { duration: 120, kind: 'PACKAGE' }], ['3-hour special', { duration: 180, kind: 'PACKAGE' }],
+      ['5-hour special', { duration: 300, kind: 'PACKAGE' }], ['5 hours', { duration: 300, kind: 'BLOCK' }], ['per day', { duration: 1440, kind: 'BLOCK' }]
+    ]);
+    const durationLabel = value => {
+      const minutes = Number(value);
+      if (!Number.isInteger(minutes) || minutes < 1) return 'the entered duration';
+      const hours = Math.floor(minutes / 60), remainder = minutes % 60;
+      return [hours ? `${hours} hr${hours === 1 ? '' : 's'}` : '', remainder ? `${remainder} min` : ''].filter(Boolean).join(' ') || '1 min';
+    };
+    const optionBehaviorText = (kind, duration, price) => {
+      const time = durationLabel(duration), amount = price === '' || price == null ? 'This price' : cash(Number(price));
+      if (kind === 'SHORT') return `${amount} covers rentals up to ${time}.`;
+      if (kind === 'PACKAGE') return formEl.elements.rateType.value === 'HOURLY' ? `Applies from ${time}; longer rentals add the traditional hourly rate.` : 'Package pricing requires an hourly traditional rate.';
+      return `${amount} applies for each started ${time} block.`;
+    };
+    const updateRateBehaviors = () => rateList.querySelectorAll('[data-rate-id]').forEach(row => {
+      const kind = row.querySelector('[data-rate-field="kind"]'), invalidPackage = kind.value === 'PACKAGE' && formEl.elements.rateType.value !== 'HOURLY';
+      kind.setCustomValidity(invalidPackage ? 'Package pricing requires an hourly traditional rate.' : '');
+      const behavior = row.querySelector('[data-rate-behavior]');
+      behavior.textContent = optionBehaviorText(kind.value, row.querySelector('[data-rate-field="duration"]').value, row.querySelector('[data-rate-field="amount"]').value);
+      behavior.classList.toggle('inv-rate-behavior-invalid', invalidPackage);
+    });
+    const applyOptionPreset = row => {
+      const label = row.querySelector('[data-rate-field="label"]'), duration = row.querySelector('[data-rate-field="duration"]'), kind = row.querySelector('[data-rate-field="kind"]'), preset = optionPresets.get(label.value.trim().toLowerCase());
+      if (preset) { duration.value = preset.duration; kind.value = preset.kind; }
     };
     const renderRateOptions = rates => {
       rateList.innerHTML = rates.map((rate, index) => `<div class="inv-rate-option-row" data-rate-id="${e(rate.id || `custom-rate-${nextRateId++}`)}">
-        <label>Option name<input data-rate-field="label" type="text" maxlength="80" value="${e(rate.label || '')}" placeholder="e.g. 3-hour special" required/></label>
+        <label>Option name<input data-rate-field="label" type="text" list="inv-rate-option-suggestions" maxlength="80" value="${e(rate.label || '')}" placeholder="Choose or type a name" required/></label>
         <label>Duration (minutes)<input data-rate-field="duration" type="number" min="1" max="10080" step="1" value="${e(rate.duration_minutes ?? rate.durationMinutes ?? '')}" required/></label>
-        <label>Rate method<select data-rate-field="kind" required>${rateKinds.map(([kind, title]) => `<option value="${kind}" ${rate.kind === kind ? 'selected' : ''}>${title}</option>`).join('')}</select></label>
+        <label>Billing rule<select data-rate-field="kind" required><option value="SHORT" ${rate.kind === 'SHORT' ? 'selected' : ''}>Short rate · up to duration</option><option value="BLOCK" ${!['SHORT', 'PACKAGE'].includes(rate.kind) ? 'selected' : ''}>Fixed block · repeats</option><option value="PACKAGE" ${rate.kind === 'PACKAGE' ? 'selected' : ''}>Package · hourly extra</option></select></label>
         <label>Price (₱)<input data-rate-field="amount" type="number" min="0" max="9999999999.99" step="0.01" value="${e(rate.amount ?? '')}" placeholder="0.00" required/></label>
         <button type="button" class="inv-rate-remove" data-remove-rate aria-label="Remove ${e(rate.label || `rate option ${index + 1}`)}">Remove</button>
+        <small class="inv-rate-behavior" data-rate-behavior>${e(optionBehaviorText(rate.kind === 'HOURLY' ? 'BLOCK' : rate.kind || 'BLOCK', rate.duration_minutes ?? rate.durationMinutes ?? '', rate.amount ?? ''))}</small>
       </div>`).join('');
-      rateList.querySelectorAll('[data-remove-rate]').forEach(button => { button.disabled = rates.length <= 1; });
+      addRateOptionButton.disabled = rates.length >= 8;
+      updateRateBehaviors();
     };
     const readRateOptions = () => Array.from(rateList.querySelectorAll('[data-rate-id]')).map(row => ({ id: row.dataset.rateId, label: row.querySelector('[data-rate-field="label"]').value.trim(), duration_minutes: Number(row.querySelector('[data-rate-field="duration"]').value), kind: row.querySelector('[data-rate-field="kind"]').value, amount: Number(row.querySelector('[data-rate-field="amount"]').value) }));
     const updateLinkedSummary = () => {
@@ -323,47 +372,39 @@ export function createInventory(h) {
       linkedSummary.innerHTML = `<strong>${e(product.name)}</strong><span>${product.rate_options.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`).join(' · ')}</span><small>Deposit ${cash(product.deposit_amount)} · Late penalty ${cash(product.overtime_rate_per_hour)} per started hour</small>`;
     };
     const syncLinkedProduct = () => {
-      const product = pricingProducts.find(entry => entry.id === pricingSelect.value);
       updateLinkedSummary();
-      if (!product) return;
-      setLegacyRate(primaryRate(product.rate_options));
-      formEl.elements.deposit.value = product.deposit_amount;
-      formEl.elements.latePenalty.value = product.overtime_rate_per_hour;
     };
-    renderRateOptions(initialCustomRates);
-    pricingSelect.onchange = () => {
-      customRatesEdited = false;
-      syncLinkedProduct();
-      const product = pricingProducts.find(entry => entry.id === pricingSelect.value);
-      const rates = product?.rate_options?.filter(rate => rate.kind !== 'WHOLE_STAY') || [];
-      if (rates.length) renderRateOptions(rates);
-    };
-    rateList.oninput = () => { customRatesEdited = true; };
-    rateList.onchange = () => { customRatesEdited = true; };
+    renderRateOptions(savedCustomRates);
+    rateList.oninput = updateRateBehaviors;
+    rateList.onchange = event => { if (event.target.matches('[data-rate-field="label"]')) applyOptionPreset(event.target.closest('[data-rate-id]')); updateRateBehaviors(); };
     rateList.onclick = event => {
       const button = event.target.closest('[data-remove-rate]');
-      if (!button || rateList.querySelectorAll('[data-rate-id]').length <= 1) return;
-      button.closest('[data-rate-id]').remove(); customRatesEdited = true;
-      rateList.querySelectorAll('[data-remove-rate]').forEach(entry => { entry.disabled = rateList.querySelectorAll('[data-rate-id]').length <= 1; });
-    };
-    formEl.querySelector('#inv-add-rate-option').onclick = () => {
-      const rates = readRateOptions(); rates.push({ id: `custom-rate-${Date.now().toString(36)}-${nextRateId++}`, label: '', kind: 'HOURLY', duration_minutes: 60, amount: '' });
-      renderRateOptions(rates); customRatesEdited = true;
-    };
-    const syncRateMode = () => {
-      const custom = rateModeSelect.value === 'custom';
-      customRatePanel.hidden = !custom; linkedRatePanel.hidden = custom;
-      pricingSelect.required = !custom; pricingSelect.disabled = custom;
-      customRatePanel.querySelectorAll('input, select, button').forEach(control => { control.disabled = !custom; });
-      if (!custom) syncLinkedProduct();
-    };
-    rateModeSelect.onchange = () => {
-      if (rateModeSelect.value === 'custom' && !customRatesEdited) {
-        const product = pricingProducts.find(entry => entry.id === pricingSelect.value), rates = product?.rate_options?.filter(rate => rate.kind !== 'WHOLE_STAY') || [];
-        if (rates.length) renderRateOptions(rates);
-      }
+      if (!button) return;
+      button.closest('[data-rate-id]').remove();
       syncRateMode();
     };
+    addRateOptionButton.onclick = () => {
+      const rates = readRateOptions(); rates.push({ id: `custom-rate-${Date.now().toString(36)}-${nextRateId++}`, label: '', duration_minutes: '60', kind: 'BLOCK', amount: '' });
+      renderRateOptions(rates);
+    };
+    const syncRateMode = () => {
+      const traditional = rateModeSelect.value === 'traditional';
+      baseRatePanel.hidden = !traditional; linkedRatePanel.hidden = traditional;
+      rateModeHelp.textContent = traditional
+        ? 'Mobile checkout compares the traditional rate with additional options, then uses the lowest valid price for the selected duration. Option names are display labels; billing rules determine the charge. Deposits and late penalties are set here.'
+        : 'Mobile checkout uses the selected shared product’s current rates, deposit, and late penalty. Edit those shared settings under Rates & Fees.';
+      pricingSelect.required = !traditional; pricingSelect.disabled = traditional;
+      baseRatePanel.querySelectorAll('.inv-base-rate-grid input, .inv-base-rate-grid select, .inv-rate-terms-grid input').forEach(control => { control.disabled = !traditional; });
+      customOptionsToggle.disabled = !traditional;
+      customRatePanel.hidden = !traditional || !customOptionsToggle.checked;
+      customRatePanel.querySelectorAll('input, select, button').forEach(control => { control.disabled = !traditional || !customOptionsToggle.checked || control === addRateOptionButton && rateList.querySelectorAll('[data-rate-id]').length >= 8; });
+      if (!traditional) syncLinkedProduct();
+    };
+    rateModeSelect.onchange = syncRateMode;
+    customOptionsToggle.onchange = syncRateMode;
+    formEl.elements.rateType.onchange = updateRateBehaviors;
+    formEl.elements.rentalRate.oninput = updateRateBehaviors;
+    pricingSelect.onchange = syncLinkedProduct;
     if (rateModeSelect.value === 'product') syncLinkedProduct();
     syncRateMode();
     if (item) { if (!Array.from(conditionSelect.options).some(o => o.value === savedCondition)) conditionSelect.add(new Option(label(savedCondition), savedCondition)); conditionSelect.value = savedCondition; conditionSelect.disabled = conditionLocked; }
@@ -411,26 +452,24 @@ export function createInventory(h) {
     };
     syncCategoryRemoveButton();
     confirmSubmit(formEl, { title: item ? 'Save equipment changes?' : 'Add this equipment?', description: item ? 'The updated name, category, condition, notes, and rates will be saved.' : 'The equipment will be added to your active collection.', confirmLabel: item ? 'Yes, save changes' : 'Yes, add equipment' }, async () => {
-      if (rateModeSelect.value === 'custom') {
-        const customRates = readRateOptions(), primary = primaryRate(customRates);
-        setLegacyRate(primary);
-      }
       const values = Object.fromEntries(new FormData(formEl));
-      if (rateModeSelect.value === 'custom') {
+      if (rateModeSelect.value === 'traditional') {
         values.pricingProductId = '';
-        values.customRateOptions = readRateOptions();
+        values.customRateOptions = customOptionsToggle.checked ? readRateOptions() : [];
+        values.rateType = formEl.elements.rateType.value;
+        values.rentalRate = Number(formEl.elements.rentalRate.value);
         values.deposit = Number(formEl.elements.deposit.value);
         values.latePenalty = Number(formEl.elements.latePenalty.value);
       } else {
         const product = pricingProducts.find(entry => entry.id === pricingSelect.value);
-        if (!product) { formEl.querySelector('#inv-form-error').textContent = 'Choose a pricing product or switch to custom rates.'; return; }
+        if (!product) { formEl.querySelector('#inv-form-error').textContent = 'Choose a pricing product or switch to traditional admin-set rates.'; return; }
         values.pricingProductId = product.id;
         values.customRateOptions = [];
         values.deposit = product.deposit_amount;
         values.latePenalty = product.overtime_rate_per_hour;
-        setLegacyRate(primaryRate(product.rate_options));
-        values.rateType = formEl.elements.rateType.value;
-        values.rentalRate = formEl.elements.rentalRate.value;
+        const primary = product.rate_options.find(rate => rate.kind === 'HOURLY') || product.rate_options.find(rate => rate.kind !== 'PACKAGE' && rate.kind !== 'WHOLE_STAY') || product.rate_options[0];
+        values.rateType = primary?.kind === 'BLOCK' && Number(primary.duration_minutes) === 1440 ? 'DAILY' : ['SHORT', 'FLAT'].includes(primary?.kind) ? 'FLAT' : 'HOURLY';
+        values.rentalRate = Number(primary?.amount ?? 0);
       }
       if (item && conditionSelect.disabled) values.condition = savedCondition;
       for (const key of ['rentalRate', 'deposit', 'latePenalty']) values[key] = Number(values[key]);
@@ -663,7 +702,7 @@ export function createInventory(h) {
 
 // Keep the inventory controls mounted while records change in the background.
 function createInventoryView(root, h) {
-  const { escape: e, icon, symbol, badge, stateLabel, cash, unit, label, isActive, renderEquipmentImage } = h;
+  const { escape: e, icon, symbol, badge, stateLabel, cash, unit, label, isActive, renderEquipmentImage, productFor, displayRateAmount, displayRateUnit, priceOptions } = h;
   const statuses = [['all', 'All statuses'], ['AVAILABLE', 'Available'], ['RENTED', 'Rented'], ['RESERVED_PENDING', 'Reserved for booking'], ['UNDER_INSPECTION', 'Under inspection'], ['UNDER_MAINTENANCE', 'Under maintenance'], ['archived', 'Archived']];
   const sortOptions = [['name-asc', 'Name A–Z'], ['name-desc', 'Name Z–A'], ['newest', 'Newest first'], ['rate-asc', 'Rental rate: low to high'], ['rate-desc', 'Rental rate: high to low']];
   root.removeAttribute('aria-live'); root.removeAttribute('aria-busy');
@@ -716,7 +755,7 @@ function createInventoryView(root, h) {
     const actions = [['view', 'View', 'eye', ''], ['edit', 'Edit', 'edit', isActive(item) ? '' : 'Restore archived equipment before editing.'], ['qr', 'QR label', 'qr', ''], ['archive', 'Archive', 'archive', archiveReason]];
     return `<div class="inv-item-actions" role="group" aria-label="Actions for ${e(item.name)}">${actions.map(([action, name, glyph, reason]) => `<button type="button" class="inv-quick-action${action === 'archive' ? ' inv-quick-archive' : ''}" data-inv-action="${action}" data-inv-id="${e(item.id)}" aria-label="${e(name)} for ${e(item.name)}" title="${e(reason || name)}" aria-haspopup="dialog" ${reason ? 'disabled' : ''}>${icon(glyph)}</button>`).join('')}</div>`;
   };
-  const signature = item => JSON.stringify([item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.deposit_amount, item.pricing_product_id, item.custom_rate_options || [], item.sale_price, item.image_data || '', productFor(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id]);
+  const signature = item => JSON.stringify([item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.deposit_amount, item.pricing_product_id, item.custom_rate_options || [], item.custom_rate_options_version, item.sale_price, item.image_data || '', productFor(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id]);
   function itemNode(item, mode) {
     const node = document.createElement(mode === 'grid' ? 'article' : 'tr');
     node.dataset.invItem = String(item.id);

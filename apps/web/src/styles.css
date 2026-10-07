@@ -9878,12 +9878,14 @@ textarea:focus-visible, [tabindex="0"]:focus-visible {
 
 /* Item-specific customer rates in the equipment editor. */
 .inv-linked-rate-panel,
+.inv-traditional-rate-panel,
 .inv-custom-rate-panel {
   grid-column: 1 / -1;
   min-width: 0;
 }
 
 .inv-linked-rate-panel[hidden],
+.inv-traditional-rate-panel[hidden],
 .inv-custom-rate-panel[hidden] {
   display: none;
 }
@@ -9891,6 +9893,40 @@ textarea:focus-visible, [tabindex="0"]:focus-visible {
 .inv-linked-rate-panel {
   display: grid;
   gap: 12px;
+}
+
+.inv-traditional-rate-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.inv-base-rate-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.inv-form .inv-pricing-option-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+  width: fit-content;
+  margin-bottom: 0;
+  color: var(--ui-text);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.inv-form .inv-pricing-option-toggle input {
+  width: 17px;
+  height: 17px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border-radius: 4px;
+  flex: 0 0 17px;
+  accent-color: var(--ui-accent);
 }
 
 .inv-linked-rate-summary {
@@ -9960,7 +9996,7 @@ textarea:focus-visible, [tabindex="0"]:focus-visible {
 
 .inv-rate-option-row {
   display: grid;
-  grid-template-columns: minmax(130px, 1.25fr) repeat(3, minmax(110px, 1fr)) auto;
+  grid-template-columns: minmax(140px, 1.15fr) minmax(105px, .8fr) minmax(175px, 1.35fr) minmax(105px, .8fr) auto;
   align-items: end;
   gap: 9px;
   min-width: 0;
@@ -9983,6 +10019,17 @@ textarea:focus-visible, [tabindex="0"]:focus-visible {
   margin-top: 4px;
   padding: 8px 9px;
   font-size: 12px;
+}
+
+.inv-rate-behavior {
+  grid-column: 1 / -1;
+  color: var(--ui-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.inv-rate-behavior-invalid {
+  color: #ae4c46;
 }
 
 .inv-rate-remove {
@@ -10020,6 +10067,10 @@ textarea:focus-visible, [tabindex="0"]:focus-visible {
 }
 
 @media (max-width: 760px) {
+  .inv-base-rate-grid {
+    grid-template-columns: 1fr;
+  }
+
   .inv-rate-option-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -10363,4 +10414,208 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
   .record-charge-summary > div { padding: 13px; }
   .record-charge-summary strong { font-size: 22px; }
   .record-disclosure-body .condition-snapshots { grid-template-columns: 1fr; }
+}
+
+/* Keep transaction dialogs calm, compact, and easy to scan. */
+#modal[open]:has(.rental-release-form) {
+  max-height: min(860px, calc(100dvh - 32px));
+}
+
+#modal:has(.rental-release-form) > .modal-heading {
+  padding: 14px 22px;
+}
+
+.rental-release-steps {
+  padding: 12px 22px;
+  gap: 18px;
+}
+
+.rental-flow-summary {
+  padding: 12px 22px;
+}
+
+.rental-flow-summary strong { font-size: 16px; }
+.rental-flow-summary small { font-size: 10px; }
+.rental-flow-summary div > span { font-size: 11px; }
+
+.rental-flow-scroll {
+  padding: 16px 22px;
+}
+
+.rental-scan-panel { max-width: 650px; }
+.rental-scan-panel h3 { font-size: 20px; }
+.rental-scan-panel > p { margin: 6px 0 14px; max-width: 66ch; }
+.rental-step-caption { margin-bottom: 4px; }
+
+.rental-scan-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  align-items: end;
+  gap: 10px;
+}
+
+.rental-scan-entry > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.rental-scan-entry input { min-height: 44px; }
+.rental-scan-entry > button { min-height: 44px; white-space: nowrap; font-size: 12px; }
+.rental-scan-entry > button.is-scanning { background: #27364a; box-shadow: none; }
+.rental-scan-entry > button.is-scanning:hover { background: #1d2a3b; }
+.rental-scan-panel > .rental-manual-toggle { margin: 10px 0 0; font-size: 11px; }
+.rental-scan-panel > [data-manual-reason] { margin-top: 9px; }
+
+.rental-scan-panel [data-camera-status]:not(:empty),
+.rental-desk-form [data-camera-status]:not(:empty) {
+  margin: 9px 0 0;
+  padding: 9px 11px;
+  border: 1px solid var(--ui-border);
+  border-radius: 9px;
+  background: var(--ui-soft);
+  color: var(--ui-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.qr-scanner-frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: clamp(176px, 26vh, 238px);
+  margin-top: 10px;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid #182236;
+  border-radius: 13px;
+  background: #0c1422;
+}
+
+:root .qr-camera-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+  border-radius: 0;
+  background: #0c1422;
+}
+
+.qr-scanner-target {
+  position: relative;
+  width: min(56%, 210px);
+  aspect-ratio: 1;
+  z-index: 1;
+  border: 2px solid #fff;
+  border-radius: 14px;
+  box-shadow: 0 0 0 999px #07111c38;
+  pointer-events: none;
+}
+
+.qr-scanner-target::after {
+  position: absolute;
+  top: 50%;
+  left: 9%;
+  right: 9%;
+  height: 2px;
+  border-radius: 2px;
+  background: #ff963e;
+  box-shadow: 0 0 12px #ff963eaa;
+  content: '';
+  animation: qr-scan-line 2.4s ease-in-out infinite alternate;
+}
+
+.qr-scanner-label {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 10px;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border: 1px solid #ffffff28;
+  border-radius: 20px;
+  background: #07111cba;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@keyframes qr-scan-line {
+  from { transform: translateY(-42px); }
+  to { transform: translateY(42px); }
+}
+
+.rental-release-inspection {
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.rental-release-inspection .rental-section-heading { margin-bottom: 10px; }
+.rental-release-inspection .rental-section-heading p { font-size: 11px; }
+
+.rental-release-inspection-grid {
+  display: grid;
+  grid-template-columns: minmax(170px, .75fr) minmax(0, 1.25fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.rental-release-inspection-grid > label:first-child {
+  display: grid;
+  gap: 6px;
+  color: var(--ui-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.rental-release-inspection-grid select { min-height: 42px; }
+.rental-release-inspection .rental-accessory-check { padding: 10px 12px; }
+.rental-release-inspection .rental-accessory-check small { font-size: 10px; }
+.rental-inspection-more { margin-top: 10px; }
+.rental-inspection-more summary { cursor: pointer; color: var(--ui-muted); font-size: 11px; }
+.rental-inspection-more > label { margin-top: 10px; }
+.rental-inspection-more textarea { min-height: 64px; }
+
+.rental-release-footer, .transaction-detail-footer {
+  padding: 12px 22px;
+  gap: 12px;
+}
+
+.rental-release-footer > p { font-size: 11px; }
+.rental-release-footer button, .transaction-detail-footer button { min-height: 40px; padding: 9px 13px; font-size: 12px; }
+.rental-release-footer .form-actions, .transaction-detail-footer .form-actions { gap: 8px; }
+
+.rental-form-scroll > label:has(textarea) { grid-column: 1 / -1; }
+
+.transaction-detail-overview { padding: 16px 22px; }
+.transaction-record-modal .transaction-detail-head { margin-bottom: 12px; }
+.transaction-record-modal .transaction-detail-head h3 { font-size: 22px; }
+.transaction-record-modal .transaction-detail-grid > div { padding: 10px 12px; }
+.transaction-detail-scroll { padding: 18px 22px; }
+
+@media (max-width: 600px) {
+  #modal:has(.rental-release-form) > .modal-heading { padding: 12px 16px; }
+  .rental-release-steps { padding: 10px 16px; }
+  .rental-flow-summary { padding: 10px 16px; }
+  .rental-flow-scroll { padding: 14px 16px; }
+  .rental-scan-entry { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .rental-scan-entry > button { width: 100%; }
+  .rental-release-inspection-grid { grid-template-columns: minmax(0, 1fr); }
+  .qr-scanner-frame { height: clamp(160px, 28vh, 210px); }
+  .rental-release-footer, .transaction-detail-footer { padding: 12px 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qr-scanner-target::after { animation: none; }
 }

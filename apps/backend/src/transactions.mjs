@@ -1,6 +1,6 @@
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import { asDate, docData, localDateTime } from './firebase.mjs';
-import { DEFAULT_PRICING, quoteRental, validatePricing } from './pricing.mjs';
+import { DEFAULT_PRICING, equipmentRateOptions, quoteRental, validatePricing } from './pricing.mjs';
 import { firebaseFailure, isQuotaError } from './firebase-errors.mjs';
 import { isMobileRental } from './mobile.mjs';
 import { queueRentalNotification } from './notifications.mjs';
@@ -15,6 +15,11 @@ const idValue = value => {
 };
 const text = (value, max, label) => {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > max) fail(400, `${label} is required (maximum ${max} characters).`);
+  return value.trim();
+};
+const optionalText = (value, max, label) => {
+  if (value == null || typeof value === 'string' && !value.trim()) return '';
+  if (typeof value !== 'string' || value.trim().length > max) fail(400, `${label} must be text (maximum ${max} characters).`);
   return value.trim();
 };
 const amount = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 9999999999.99 && Math.abs(value * 100 - Math.round(value * 100)) < .0001;
@@ -62,7 +67,7 @@ export function validateInspection(input, actor, type, now = new Date()) {
   if (type === 'RENTAL' && !['GOOD', 'FAIR'].includes(condition)) fail(400, 'Release inspection must confirm good or fair condition.');
   const result = input.result || (['GOOD', 'FAIR'].includes(condition) ? 'AVAILABLE' : 'UNDER_MAINTENANCE');
   if (!['AVAILABLE', 'UNDER_MAINTENANCE'].includes(result) || (type === 'RENTAL' && result !== 'AVAILABLE') || (['DAMAGED', 'NEEDS_INSPECTION'].includes(condition) && result !== 'UNDER_MAINTENANCE')) fail(400, 'Damaged equipment must return to Under Maintenance.');
-  return { condition, notes: text(input.notes, 2000, 'Inspection notes'), inspected_by: String(actor.id || actor), inspected_by_name: String(actor.full_name || actor.name || actor.id || actor), inspected_at: now, result };
+  return { condition, notes: type === 'RENTAL' ? optionalText(input.notes, 2000, 'Inspection notes') : text(input.notes, 2000, 'Inspection notes'), inspected_by: String(actor.id || actor), inspected_by_name: String(actor.full_name || actor.name || actor.id || actor), inspected_at: now, result };
 }
 
 export function validatePenalty(input) {
@@ -94,7 +99,9 @@ export async function frozenQuote(tx, db, item, input, now) {
     if (!activeRate || !amount(activeRate.deposit_amount) || !amount(activeRate.late_penalty_rate)) fail(400, 'Configure a valid deposit and late penalty for this equipment.');
     const pricing = pricingDoc.exists ? validatePricing(pricingDoc.data()) : structuredClone(DEFAULT_PRICING);
     const customProductId = `custom-${item.id}`;
-    pricing.products.push({ id: customProductId, name: item.name, group: 'Custom equipment', rate_options: item.custom_rate_options, deposit_amount: activeRate.deposit_amount, overtime_rate_per_hour: activeRate.late_penalty_rate, high_value: false, included_items: [], sale_price: null });
+    const customOptions = Array.isArray(activeRate.custom_rate_options) ? activeRate.custom_rate_options : item.custom_rate_options;
+    const rateOptions = Number(activeRate.custom_rate_options_version ?? item.custom_rate_options_version) >= 2 ? equipmentRateOptions(activeRate.rate_type, activeRate.rental_rate, customOptions) : customOptions;
+    pricing.products.push({ id: customProductId, name: item.name, group: 'Custom equipment', rate_options: rateOptions, deposit_amount: activeRate.deposit_amount, overtime_rate_per_hour: activeRate.late_penalty_rate, high_value: false, included_items: [], sale_price: null });
     const checkout = input.mode === 'WHOLE_STAY' ? dateValue(input.resortCheckoutAt, 'Resort checkout time').toISOString() : undefined;
     const q = quoteRental(pricing, { ...input, ...(checkout ? { resortCheckoutAt: checkout } : {}), productId: customProductId, startAt: start.toISOString(), actualReturnAt: null }, now);
     saved = { pricing_source: 'ITEM_CUSTOM_RATES', product_id: null, product_name: item.name, rate_id: q.rate_id, rate_label: q.rate_label, rate_kind: q.rate_kind, rate_components: q.rate_components, mode: input.mode === 'WHOLE_STAY' ? 'WHOLE_STAY' : 'TIMED', requested_minutes: q.requested_minutes, billed_minutes: q.billed_minutes, rental_fee: q.rental_fee, deposit_amount: q.deposit_amount, start_at: start, due_at: new Date(q.due_at), overtime_rate: q.overtime_rate_per_hour, overtime_unit_minutes: 60, lost_piece_fee: q.lost_piece_fee, overtime_basis: q.overtime_basis, after_hours_return_note: q.after_hours_return_note };

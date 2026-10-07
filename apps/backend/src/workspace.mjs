@@ -98,7 +98,19 @@ export async function loadWorkspace(db, role = 'ADMIN', now = new Date(), { owne
     action: log.action || 'UNKNOWN_ACTION', entity_type: log.entity_type || '', entity_id: log.entity_id || '', entity_label: auditLabel(log), created_at: log.created_at || null
   })).sort((a, b) => (asDate(b.created_at) || 0) - (asDate(a.created_at) || 0)).slice(0, 200) : [];
   const statusHistory = source.item_status_history.map(({ id, item_id, old_status, new_status, changed_at }) => serial({ id, item_id, old_status, new_status, changed_at }));
-  return { customers: source.customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, refreshedAt: now.toISOString() };
+  const linkedUids = [...new Set(source.customers.map(customer => customer.auth_uid).filter(Boolean).map(String))];
+  const linkedProfiles = await Promise.all(linkedUids.map(async uid => {
+    const profile = await db.collection('users').doc(uid).get();
+    return profile.exists ? { id: uid, ...profile.data() } : null;
+  }));
+  const userProfiles = new Map(linkedProfiles.filter(Boolean).map(user => [String(user.id), user]));
+  const customers = source.customers.map(customer => {
+    const linkedProfile = customer.auth_uid ? userProfiles.get(String(customer.auth_uid)) : null;
+    return linkedProfile && normalizeRole(linkedProfile.role) === 'USER'
+      ? { ...customer, full_name: linkedProfile.full_name || linkedProfile.name || customer.full_name, email: linkedProfile.email || customer.email, phone: linkedProfile.phone || customer.phone }
+      : customer;
+  });
+  return { customers: customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, refreshedAt: now.toISOString() };
 }
 
 export async function createCustomer(db, actor, input, now = new Date()) {
@@ -146,9 +158,31 @@ export async function updateCustomer(db, actor, id, input, now = new Date(), aut
   const currentCustomer = current.data(), before = auditFields(currentCustomer, customerFields), batch = db.batch();
   if (input.action === 'archive' || input.action === 'restore') {
     const is_active = input.action === 'restore';
+    const authUid = typeof currentCustomer.auth_uid === 'string' ? currentCustomer.auth_uid : '';
+    let userRef = null, userProfile = null, authUser = null;
+    if (authUid) {
+      if (!auth) fail(503, 'Mobile account status updates are unavailable.');
+      userRef = db.collection('users').doc(authUid);
+      const userSnap = await userRef.get();
+      if (!userSnap.exists || String(userSnap.data().role || '').toUpperCase() !== 'USER') fail(409, 'The linked mobile account is missing or has an unexpected role.');
+      userProfile = userSnap.data();
+      try { authUser = await auth.getUser(authUid); }
+      catch (error) { if (error.code === 'auth/user-not-found') fail(409, 'The linked Firebase sign-in account could not be found.'); throw error; }
+      if (!is_active && authUid === String(actor)) fail(400, 'You cannot archive the customer account you are currently using.');
+      batch.update(userRef, { is_active, updated_at: now });
+      stageAudit(batch, db, actor, is_active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', 'USER', authUid, { before: auditFields(userProfile, accountFields), after: { ...auditFields(userProfile, accountFields), is_active }, now });
+    }
     batch.update(ref, { is_active, updated_at: now });
     stageAudit(batch, db, actor, is_active ? 'CUSTOMER_RESTORED' : 'CUSTOMER_ARCHIVED', 'CUSTOMER', ref.id, { before, after: { ...before, is_active }, now });
-    await batch.commit(); return { id: ref.id, is_active };
+    let authUpdated = false;
+    try {
+      if (authUid && authUser.disabled === is_active) { await auth.updateUser(authUid, { disabled: !is_active }); authUpdated = true; }
+      await batch.commit();
+    } catch (error) {
+      if (authUpdated) await auth.updateUser(authUid, { disabled: authUser.disabled }).catch(() => {});
+      throw error;
+    }
+    return { id: ref.id, is_active };
   }
   const value = validateCustomer(input);
   const authUid = typeof currentCustomer.auth_uid === 'string' ? currentCustomer.auth_uid : '';

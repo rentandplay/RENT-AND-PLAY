@@ -7,9 +7,9 @@ test('inventory accepts precise PHP prices and normalizes codes without acceptin
   for(const changes of [{rentalRate:-1},{deposit:Infinity},{latePenalty:1.001},{rateType:'WEEKLY'},{categoryId:'1 OR 1'},{code:'bad code'},{name:''},{description:'a'.repeat(2001)}])assert.throws(()=>validateItem({...valid,...changes}),err=>err.status===400);
 });
 test('equipment codes use one compact sequence independent of category',()=>{
-  assert.equal(equipmentItemCode(1),'RENT-001');
-  assert.equal(equipmentItemCode(14),'RENT-014');
-  assert.equal(equipmentItemCode(1000),'RENT-1000');
+  assert.equal(equipmentItemCode(1),'EQUIP-001');
+  assert.equal(equipmentItemCode(14),'EQUIP-014');
+  assert.equal(equipmentItemCode(1000),'EQUIP-1000');
   assert.equal(validateItem({...valid,code:undefined},{codeRequired:false}).code,null);
 });
 test('availability actions guard both item status and pending/active rental records',()=>{

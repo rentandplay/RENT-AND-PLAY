@@ -56,21 +56,23 @@ function collectPayment(rental, input, requirePayment = false) {
 }
 
 function transactionScanCheck(input, rental) {
-  if (input.manualReason != null && typeof input.manualReason !== 'string') fail(400, 'Enter a valid manual lookup reason.');
-  const manual = Boolean(input.manualReason?.trim());
-  if (manual) requiredText(input.manualReason, 'Manual lookup reason');
+  const { manual } = manualLookup(input);
   const code = requiredText(input.transactionCode, 'Customer transaction QR', 256);
   if (!(code === rental.booking_qr_token || manual && [rental.id, rental.rental_code].includes(code))) fail(409, 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.');
 }
 
+function manualLookup(input) {
+  if (input.manualLookup != null && typeof input.manualLookup !== 'boolean') fail(400, 'Choose whether to use manual code lookup.');
+  const reason = optionalText(input.manualReason, 'Manual lookup reason');
+  return { manual: input.manualLookup === true || Boolean(reason), reason };
+}
+
 function scanCheck(input, item, rental = null) {
   if (rental) transactionScanCheck(input, rental);
-  if (input.manualReason != null && typeof input.manualReason !== 'string') fail(400, 'Enter a valid manual lookup reason.');
-  const manual = Boolean(input.manualReason?.trim());
-  if (manual) requiredText(input.manualReason, 'Manual lookup reason');
+  const { manual, reason } = manualLookup(input);
   const inventory = requiredText(input.inventoryCode, 'Inventory QR or item code', 256);
   if (!(inventory === item.qr_token || manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(inventory))) fail(409, `Equipment mismatch. This rental request requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan the QR sticker on that exact unit.`);
-  return { verification_method: manual ? 'MANUAL' : 'QR', manual_reason: manual ? input.manualReason.trim() : null };
+  return { verification_method: manual ? 'MANUAL' : 'QR', manual_reason: reason || null };
 }
 
 function inspectionRecord(tx, db, actor, rentalId, itemId, input, phase, now) {
@@ -264,8 +266,7 @@ export async function reviewRentalPaymentProof(db, actor, id, input, now = new D
 
 export async function prepareRentalDelivery(db, actor, id, input, now = new Date()) {
   details(input);
-  const code = requiredText(input.inventoryCode, 'Equipment QR', 256), manualReason = optionalText(input.manualReason, 'Manual lookup reason');
-  const manual = Boolean(manualReason);
+  const code = requiredText(input.inventoryCode, 'Equipment QR', 256), lookup = manualLookup(input);
   const rentalId = idValue(id);
   return serializeFlow(await db.runTransaction(async tx => {
     const rentalDoc = await tx.get(record(db, 'rentals', rentalId));
@@ -276,9 +277,8 @@ export async function prepareRentalDelivery(db, actor, id, input, now = new Date
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
     const item = docData(itemDoc);
     if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== rentalId || rows(related).some(row => row.id !== rentalId && open(row))) fail(409, 'The assigned equipment is no longer reserved for this rental request.');
-    if (manual) requiredText(manualReason, 'Manual lookup reason');
-    if (!(code === item.qr_token || manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(code))) fail(409, `Equipment mismatch. This rental requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan that unit’s printed QR at the shop.`);
-    const prepared = { status: 'PREPARED', prepared_at: now, prepared_by: actorId(actor), item_id: itemId, item_code: item.item_code || item.qrCode || '', verification_method: manual ? 'MANUAL' : 'QR', manual_reason: manual ? manualReason : null };
+    if (!(code === item.qr_token || lookup.manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(code))) fail(409, `Equipment mismatch. This rental requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan that unit’s printed QR at the shop.`);
+    const prepared = { status: 'PREPARED', prepared_at: now, prepared_by: actorId(actor), item_id: itemId, item_code: item.item_code || item.qrCode || '', verification_method: lookup.manual ? 'MANUAL' : 'QR', manual_reason: lookup.reason || null };
     const changes = { delivery_status: 'PREPARED', delivery_preparation: prepared, hold_expires_at: new Date(now.getTime() + ttl('RENTAL_DELIVERY_HOLD_SECONDS', 7200)), updated_at: now };
     tx.update(rentalDoc.ref, changes);
     audit(tx, db, actor, 'RENTAL_PREPARED_FOR_DELIVERY', rentalId, now, { item_id: itemId, verification_method: prepared.verification_method });
@@ -322,8 +322,8 @@ export async function releaseBooking(db, actor, id, input, now = new Date()) {
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
     const item = docData(itemDoc);
     transactionScanCheck(input, rental);
-    const manualHandoff = Boolean(input.manualReason?.trim());
-    const verification = { verification_method: manualHandoff ? 'MANUAL' : 'QR', manual_reason: manualHandoff ? input.manualReason.trim() : null };
+    const lookup = manualLookup(input);
+    const verification = { verification_method: lookup.manual ? 'MANUAL' : 'QR', manual_reason: lookup.reason || null };
     if (input.customerVerified !== true) fail(400, 'Verify that the person receiving the equipment matches the rental customer.');
     if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== id || rows(related).some(row => row.id !== id && open(row))) fail(409, 'The assigned equipment is no longer available for release.');
     const payment = collectPayment(rental, input, true), fee = rental.fee_breakdown;

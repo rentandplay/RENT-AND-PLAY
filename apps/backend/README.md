@@ -44,7 +44,7 @@ The account command creates one Firebase Authentication account, its matching ac
 
 The preview stops when any equipment record has an open rental or maintenance job. To apply the replacement after reviewing the counts, run `npm run catalog:replace-mobile -- --apply`. The command first writes an equipment-only backup to the ignored `apps/backend/backups/` folder, preserves rental/status/audit history, and records the replacement in the audit log. It removes unmatched item and category documents from Firestore; old rate rows are retained as inactive history.
 
-Equipment item codes use one shared sequence across categories: `RENT-001`, `RENT-002`, and so on. To convert the existing Firestore item codes for both web and Android, preview `npm run item-codes:migrate`, then apply `npm run item-codes:migrate -- --apply`. The migration backs up the equipment and code registry, updates `item_code` and the Android `qrCode` alias, preserves existing `qr_token` scan values, and records each code change in the audit log.
+Equipment item codes use one shared sequence across categories: `EQUIP-001`, `EQUIP-002`, and so on. To convert the existing Firestore item codes for both web and Android, preview `npm run item-codes:migrate`, then apply `npm run item-codes:migrate -- --apply`. The migration backs up the equipment and code registry, updates `item_code`, the Android `qrCode` alias, and the QR scan token, and records each code change in the audit log. Print new QR labels after applying the migration; older labels contain the previous codes.
 
 Start the backend, then start the web app in a second terminal:
 

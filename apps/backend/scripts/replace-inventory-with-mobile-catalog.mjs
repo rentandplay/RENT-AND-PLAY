@@ -138,7 +138,7 @@ async function main() {
     const saved = {
       item_code: catalogItem.qrCode,
       qrCode: catalogItem.qrCode,
-      qr_token: previous?.qr_token || catalogItem.qrCode,
+      qr_token: catalogItem.qrCode,
       category_id: category.id,
       name: catalogItem.name,
       description: catalogItem.description,

@@ -21,21 +21,34 @@ async function commitOperations(operations) {
 
 function makeBackupPath() {
   const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
-  return join(process.cwd(), 'backups', `equipment-codes-before-rent-format-${stamp}.json`);
+  return join(process.cwd(), 'backups', `equipment-codes-before-equip-format-${stamp}.json`);
 }
 
 async function main() {
   requireFirebaseConfig();
-  const [items, codes, counterSnapshot] = await Promise.all([
+  const [items, codes, oldCounterSnapshot, counterSnapshot] = await Promise.all([
     readCollection('items'),
     readCollection('item_codes'),
-    firestore.collection('counters').doc('item_codes_RENT').get()
+    firestore.collection('counters').doc('item_codes_RENT').get(),
+    firestore.collection('counters').doc('item_codes_EQUIP').get()
   ]);
   const orderedItems = items.sort((a, b) =>
     String(a.name || '').localeCompare(String(b.name || ''), 'en') || String(a.id).localeCompare(String(b.id), 'en'));
+  const sequenceByItemId = new Map();
+  const basketball = orderedItems.find(item => String(item.name || '').trim().toLocaleLowerCase('en') === 'basketball');
+  if (basketball) sequenceByItemId.set(String(basketball.id), 3);
+  const reservedSequences = new Set(sequenceByItemId.values());
+  let sequence = 1;
+  for (const item of orderedItems) {
+    const id = String(item.id);
+    if (sequenceByItemId.has(id)) continue;
+    while (reservedSequences.has(sequence)) sequence++;
+    sequenceByItemId.set(id, sequence);
+    reservedSequences.add(sequence++);
+  }
   const itemIds = new Set(orderedItems.map(item => String(item.id)));
   const codeById = new Map(codes.map(code => [String(code.id), code]));
-  const targetCodes = new Set(orderedItems.map((_item, index) => equipmentItemCode(index + 1)));
+  const targetCodes = new Set(orderedItems.map(item => equipmentItemCode(sequenceByItemId.get(String(item.id)))));
 
   for (const code of targetCodes) {
     const registered = codeById.get(code);
@@ -45,14 +58,14 @@ async function main() {
   }
 
   const highestReservedSequence = codes.reduce((highest, row) => {
-    const match = /^RENT-(\d+)$/i.exec(String(row.id));
+    const match = /^EQUIP-(\d+)$/i.exec(String(row.id));
     return match ? Math.max(highest, Number(match[1])) : highest;
   }, 0);
-  const nextSequence = Math.max(orderedItems.length, highestReservedSequence) + 1;
+  const nextSequence = Math.max(...sequenceByItemId.values(), highestReservedSequence) + 1;
   console.log(`Found ${orderedItems.length} equipment items and ${codes.length} registered item codes.`);
-  console.log('Planned equipment codes (alphabetical by item name):');
-  orderedItems.forEach((item, index) => {
-    const nextCode = equipmentItemCode(index + 1);
+  console.log('Planned equipment codes (alphabetical by item name, with Basketball assigned EQUIP-003):');
+  orderedItems.forEach(item => {
+    const nextCode = equipmentItemCode(sequenceByItemId.get(String(item.id)));
     console.log(`  ${item.item_code || item.qrCode || '(no code)'} -> ${nextCode}  ${item.name || item.id}`);
   });
   console.log(`The shared web/mobile counter will continue at ${equipmentItemCode(nextSequence)}.`);
@@ -66,22 +79,22 @@ async function main() {
   await writeFile(backupPath, `${JSON.stringify(timestampSafe({
     created_at: new Date(),
     collections: { items, item_codes: codes },
-    rent_counter: counterSnapshot.exists ? counterSnapshot.data() : null
+    rent_counter: oldCounterSnapshot.exists ? oldCounterSnapshot.data() : null,
+    equip_counter: counterSnapshot.exists ? counterSnapshot.data() : null
   }), null, 2)}\n`, 'utf8');
   console.log(`Saved a backup to ${backupPath}.`);
 
   const now = new Date();
-  await firestore.collection('counters').doc('item_codes_RENT').set({ next_sequence: nextSequence, updated_at: now }, { merge: true });
+  await firestore.collection('counters').doc('item_codes_EQUIP').set({ next_sequence: nextSequence, updated_at: now }, { merge: true });
 
   const writes = [];
   orderedItems.forEach((item, index) => {
-    const nextCode = equipmentItemCode(index + 1);
+    const nextCode = equipmentItemCode(sequenceByItemId.get(String(item.id)));
     const oldCodes = new Set([item.item_code, item.qrCode].filter(value => typeof value === 'string' && value));
-    const oldQrToken = typeof item.qr_token === 'string' && item.qr_token ? item.qr_token : item.qrCode || item.item_code || nextCode;
     writes.push(batch => batch.update(firestore.collection('items').doc(item.id), {
       item_code: nextCode,
       qrCode: nextCode,
-      qr_token: oldQrToken,
+      qr_token: nextCode,
       updated_at: now
     }));
     const codeRef = firestore.collection('item_codes').doc(nextCode);
@@ -95,13 +108,13 @@ async function main() {
     writes.push(batch => batch.create(auditRef, {
       user_id: 'equipment-code-migration', actor_type: 'SYSTEM',
       action: 'ITEM_CODE_CHANGED', entity_type: 'ITEM', entity_id: item.id,
-      old_values: { item_code: item.item_code || null, qrCode: item.qrCode || null },
-      new_values: { item_code: nextCode, qrCode: nextCode, preserved_qr_token: oldQrToken },
+      old_values: { item_code: item.item_code || null, qrCode: item.qrCode || null, qr_token: item.qr_token || null },
+      new_values: { item_code: nextCode, qrCode: nextCode, qr_token: nextCode },
       created_at: now
     }));
   });
   await commitOperations(writes);
-  console.log(`Updated ${orderedItems.length} equipment items. Existing QR scan tokens remain valid.`);
+  console.log(`Updated ${orderedItems.length} equipment items. New QR labels now encode their EQUIP codes.`);
 }
 
 try {

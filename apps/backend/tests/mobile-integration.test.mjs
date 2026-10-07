@@ -96,6 +96,20 @@ test('profile bootstrap and edits cannot grant admin access or change token iden
   await assert.rejects(mobileProfile(db, claims), hasStatus(403));
 });
 
+test('customer profile edits update the linked customer directory record', async () => {
+  const db = fixture(), claims = { uid: 'customer-1', email: 'reynold@gmail.com' };
+  await db.collection('users').doc(claims.uid).set({ full_name: 'Customer', email: claims.email, phone: '', role: 'USER', is_active: true });
+  await db.collection('customers').doc(claims.uid).set({ full_name: 'Customer', email: 'rentandplay@gmail.com', phone: null, auth_uid: claims.uid, is_active: true });
+
+  const response = await mobileProfile(db, claims, { name: 'Reynold Pastor', phone: '09761180282' }, 'PATCH', now);
+
+  assert.equal(response.user.name, 'Reynold Pastor');
+  assert.equal(db.data('users', claims.uid).full_name, 'Reynold Pastor');
+  assert.equal(db.data('customers', claims.uid).full_name, 'Reynold Pastor');
+  assert.equal(db.data('customers', claims.uid).phone, '09761180282');
+  assert.equal(db.data('customers', claims.uid).email, 'rentandplay@gmail.com');
+});
+
 test('quotes and checkout use saved package rates; duplicate requests reserve exactly one item', async () => {
   const db = fixture(), { quote } = await quoteEquipmentRental(db, input, now);
   assert.equal(quote.rental_fee, 500); assert.equal(quote.deposit_amount, 100); assert.equal(quote.billed_minutes, 180); assert.equal(quote.total_to_collect, 600);

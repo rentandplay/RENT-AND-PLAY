@@ -1,6 +1,6 @@
 import { asDate, docData } from './firebase.mjs';
 import { inventoryList } from './inventory.mjs';
-import { loadPricing } from './pricing.mjs';
+import { equipmentRateOptions, loadPricing } from './pricing.mjs';
 import { normalizeRole } from './roles.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -24,7 +24,7 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     const created = existing ? { ...existing, role: existingRole } : { full_name: clean(input.name || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name'), email: claims.email || '', phone: clean(input.phone || '', 40, 'phone'), role: 'USER', is_active: true, hasAcceptedTerms: false, created_at: now };
     const changes = {};
     if (method === 'PATCH') {
-      if (input.name !== undefined) { changes.full_name = clean(input.name, 150, 'name'); if (!changes.full_name) fail(400, 'Your name is required.'); changes.name = changes.full_name; }
+      if (input.name !== undefined) { changes.full_name = clean(input.name, 150, 'name'); if (changes.full_name.length < 2) fail(400, 'Your name must contain at least 2 characters.'); changes.name = changes.full_name; }
       if (input.phone !== undefined) changes.phone = clean(input.phone, 40, 'phone');
       if (input.validIdUrl !== undefined) changes.validIdUrl = clean(input.validIdUrl, 2048, 'ID reference');
       if (input.profileImageUrl !== undefined) changes.profileImageUrl = clean(input.profileImageUrl, 2048, 'profile image');
@@ -33,6 +33,19 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
         changes.hasAcceptedTerms = input.hasAcceptedTerms;
       }
       changes.updated_at = now;
+    }
+    if (method === 'PATCH' && existingRole === 'USER') {
+      const customerRef = db.collection('customers').doc(String(claims.uid));
+      const customerDoc = await tx.get(customerRef);
+      if (customerDoc.exists) {
+        const customerChanges = {};
+        if (changes.full_name !== undefined) customerChanges.full_name = changes.full_name;
+        if (changes.phone !== undefined) customerChanges.phone = changes.phone || null;
+        if (Object.keys(customerChanges).length) {
+          customerChanges.updated_at = now;
+          tx.update(customerRef, customerChanges);
+        }
+      }
     }
     if (!existing) tx.create(userRef, { ...created, ...changes });
     else if (method === 'PATCH') tx.update(userRef, changes);
@@ -48,12 +61,15 @@ export async function mobileCatalog(db) {
   const items = inventory.items.filter(item => item.is_active !== false && typeof item.name === 'string' && item.name.trim()).flatMap(item => {
     const linkedProduct = products.get(item.pricing_product_id);
     const customOptions = Array.isArray(item.custom_rate_options) ? item.custom_rate_options : [];
-    const product = customOptions.length ? {
-      id: `custom-${item.id}`, name: item.name, rate_options: customOptions,
+    const validRate = ['HOURLY', 'DAILY', 'FLAT'].includes(item.rate_type) && [item.rental_rate, item.deposit_amount, item.late_penalty_rate].every(validAmount);
+    const hasItemSpecificRates = customOptions.length > 0 || (!item.pricing_product_id && validRate);
+    const usesLegacyRateOptions = customOptions.length > 0 && !(Number(item.custom_rate_options_version) >= 2);
+    const product = hasItemSpecificRates ? {
+      id: `custom-${item.id}`, name: item.name,
+      rate_options: usesLegacyRateOptions ? customOptions : equipmentRateOptions(item.rate_type, item.rental_rate, customOptions),
       deposit_amount: item.deposit_amount, overtime_rate_per_hour: item.late_penalty_rate,
       high_value: false, sale_price: null
     } : linkedProduct;
-    const validRate = ['HOURLY', 'DAILY', 'FLAT'].includes(item.rate_type) && [item.rental_rate, item.deposit_amount, item.late_penalty_rate].every(validAmount);
     const options = product?.rate_options.filter(rate => rate.kind !== 'WHOLE_STAY') || [];
     const configured = product ? options.length > 0 && !(product.high_value && pricing.rules.high_value_deposit_required && product.deposit_amount <= 0) : validRate;
     if (!configured) return [];
@@ -70,7 +86,7 @@ export async function mobileCatalog(db) {
       rental_rate: product?.overtime_rate_per_hour ?? item.rental_rate,
       deposit_amount: product?.deposit_amount ?? item.deposit_amount,
       late_penalty_rate: product?.overtime_rate_per_hour ?? item.late_penalty_rate,
-      pricing_product_id: customOptions.length ? null : item.pricing_product_id, rate_options: product?.rate_options || [],
+      pricing_product_id: hasItemSpecificRates ? null : item.pricing_product_id, rate_options: product?.rate_options || [],
       can_rent: status === 'AVAILABLE',
       unavailable_reason: status === 'AVAILABLE' ? null : 'This equipment is currently unavailable.'
     }];
@@ -125,6 +141,7 @@ export async function mobileRentalList(db, actor, rentalId = '') {
     return {
       ...rental, id: rental.id, item_id: rental.item_id ?? rental.itemId,
       item_name: rental.item_name || rental.itemName || item?.name || 'Equipment',
+      item_image_url: item?.image_url || item?.imageUrl || null,
       item_code: item?.item_code || item?.qrCode || '', qr_token: item?.qr_token || '',
       customer_id: rental.customer_id ?? rental.customerId, customer_name: rental.customer_name || rental.customerName,
       status: String(rental.status || '').toUpperCase(),

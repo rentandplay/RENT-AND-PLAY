@@ -3068,6 +3068,73 @@ dd {
   line-height: 1.5
 }
 
+.inv-table .inv-actions-cell {
+  width: 1%;
+  text-align: center
+}
+
+.inv-item-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 32px);
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  margin-left: auto
+}
+
+.inv-quick-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-surface);
+  color: var(--ui-muted);
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease
+}
+
+.inv-quick-action svg {
+  width: 16px;
+  height: 16px
+}
+
+.inv-quick-action:hover:not(:disabled) {
+  border-color: var(--orange);
+  background: #fff1e5;
+  color: #b55d20
+}
+
+.inv-quick-archive {
+  color: #b94b49
+}
+
+.inv-quick-archive:hover:not(:disabled) {
+  border-color: #d66d68;
+  background: #fff0ef;
+  color: #a73d3a
+}
+
+.inv-quick-action:disabled {
+  opacity: .4
+}
+
+[data-theme="dark"] .inv-quick-action:hover:not(:disabled) {
+  background: #3b2b20;
+  color: #ffc18f
+}
+
+[data-theme="dark"] .inv-quick-archive {
+  color: #f29c9a
+}
+
+[data-theme="dark"] .inv-quick-archive:hover:not(:disabled) {
+  background: #44282c;
+  color: #ffc0ba
+}
+
 .inv-empty {
   text-align: center;
   padding: 64px 24px
@@ -7429,6 +7496,21 @@ dialog:not(:has(.inv-print-settings)) {
   }
 }
 
+/* Small forms stack naturally; larger forms retain the workspace layout. */
+#modal.modal-compact {
+  width: min(560px, calc(100vw - 32px));
+}
+
+#modal.modal-compact > .admin-form,
+#modal.modal-compact .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#modal.modal-compact > .admin-form > label { margin-top: 0; }
+#modal.modal-compact > .admin-form > p { margin: 0; overflow-wrap: anywhere; }
+#modal.modal-compact .form-error:empty,
+#modal.modal-compact [data-camera-status]:empty { display: none; }
+
 /* Analytics chart polish */
 .analytics-chart-polished {
   padding: 13px 14px 12px;
@@ -8150,6 +8232,12 @@ dialog:not(:has(.inv-print-settings)) {
   align-self: end;
   flex-wrap: wrap;
   margin: 12px 0 0;
+}
+
+.inv-price-options {
+  flex-basis: 100%;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .inv-image-editor {
@@ -8941,6 +9029,37 @@ dialog:has(.inv-details-modal-content) > .modal-heading {
   width: 14px;
   height: 14px;
 }
+.rentals-table-panel .rental-actions-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+.rental-actions-toggle svg,
+.rental-action-choices svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.rental-action-choices {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+#modal:has(.rental-actions-dialog) {
+  width: min(440px, calc(100vw - 32px));
+}
+.rental-action-choices button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 44px;
+  text-align: left;
+}
 .return-queue-panel {
   margin-bottom: 16px;
   padding: 0 18px 12px;
@@ -9492,12 +9611,17 @@ dialog:has(.transaction-record-modal) { width: min(850px, calc(100vw - 32px)); }
 .customer-contact .customer-muted { color: var(--customer-subtle); }
 .customer-directory .admin-table td .customer-overdue-text, .customer-overdue-text { color: #b45e4f; }
 .customer-directory .admin-table td .customer-out-text { color: #5480a4; }
-.customer-row-actions { display: flex; align-items: center; gap: 13px; justify-content: flex-end; }
+.customer-row-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .customer-view { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 10px; background: var(--customer-soft); border: 1px solid var(--customer-border); border-radius: 7px; font-size: 10px; font-weight: 550; white-space: nowrap; }
 .customer-view:hover { border-color: #efcdae; background: #fff6ee; color: #bd6d31; }
 .customer-view svg { width: 13px; height: 13px; }
 .customer-edit { color: var(--customer-subtle); font-size: 10px; padding: 7px 0; }
 .customer-edit:hover { color: var(--orange); }
+.customer-restore, .customer-delete { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 6px 9px; border: 1px solid var(--customer-border); border-radius: 7px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.customer-restore { color: #397755; background: #f1f8f3; }
+.customer-restore:hover { border-color: #91b7a0; background: #e8f4eb; }
+.customer-delete { color: #a74842; background: #fff5f4; }
+.customer-delete:hover { border-color: #d59a94; background: #fce9e7; }
 .customer-directory .badge { white-space: nowrap; }
 .customer-directory .module-pagination { padding: 14px 20px; border-color: var(--customer-border); color: var(--customer-subtle); }
 .customer-empty { display: flex; flex-direction: column; align-items: center; padding: 48px 20px 52px; text-align: center; }
@@ -9526,8 +9650,9 @@ dialog:has(.customer-form) { width: min(720px, calc(100vw - 32px)); }
 .customer-profile-metrics > div:first-child { border-left: 0; padding-left: 0; }
 .customer-profile-metrics strong { display: block; font-size: 25px; margin-bottom: 5px; font-variant-numeric: tabular-nums; }
 .customer-profile-metrics span { font-size: 10px; color: var(--customer-subtle); }
-.customer-profile-actions { display: flex; gap: 18px; align-items: center; padding-bottom: 20px; }
+.customer-profile-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding-bottom: 20px; }
 .customer-profile-actions .text-button { color: var(--customer-subtle); }
+.customer-profile-actions .customer-delete { margin-left: auto; }
 .customer-archive-confirm { background: #fff5ec; border: 1px solid #f0d9c2; border-radius: 10px; padding: 16px; margin-bottom: 20px; }
 .customer-archive-confirm[hidden] { display: none; }
 .customer-archive-confirm strong { font-size: 12px; }
@@ -9557,6 +9682,12 @@ dialog[open] > .admin-form.customer-form { display: flex; flex-direction: column
 .customer-form-section > label { margin-top: 17px; }
 .customer-form .customer-required { color: var(--customer-subtle); font-weight: 400; font-size: 8px; margin-top: -2px; }
 .customer-form-section > p { margin-top: 10px; color: var(--customer-subtle); font-size: 10px; line-height: 1.6; }
+.customer-password-control { position: relative; display: block; }
+.customer-password-control input { padding-right: 62px; }
+.customer-password-toggle { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); padding: 5px 3px; color: var(--customer-subtle); font-size: 10px; font-weight: 650; }
+.customer-password-toggle:hover { color: var(--orange); }
+.customer-password-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+.customer-password-error:empty { display: none; }
 .customer-form .form-actions { border-top: 1px solid var(--customer-border); padding-top: 18px; }
 .customer-form .form-error:empty { display: none; }
 [data-theme="dark"] .customers-page, [data-theme="dark"] .customer-profile, [data-theme="dark"] .customer-form {
@@ -9581,6 +9712,10 @@ dialog[open] > .admin-form.customer-form { display: flex; flex-direction: column
 [data-theme="dark"] .customer-directory .admin-table td .customer-overdue-text, [data-theme="dark"] .customer-overdue-text { color: #eba999; }
 [data-theme="dark"] .customer-directory .admin-table td .customer-out-text, [data-theme="dark"] .customer-returning { color: #9cc5b5; }
 [data-theme="dark"] .customer-view:hover { color: #f0b685; border-color: #71513b; background: #372b22; }
+[data-theme="dark"] .customer-restore { color: #a5d0b2; background: #20352b; }
+[data-theme="dark"] .customer-restore:hover { border-color: #577862; background: #294234; }
+[data-theme="dark"] .customer-delete { color: #f1aaa3; border-color: #5f3c3a; background: #392829; }
+[data-theme="dark"] .customer-delete:hover { border-color: #89534f; background: #482f30; }
 [data-theme="dark"] .customer-empty > span, [data-theme="dark"] .customer-form-section h3 > span { background: #3b2c24; color: #f0b685; }
 @media (max-width: 1100px) {
   .customer-metrics { gap: 10px; }
@@ -9732,8 +9867,8 @@ textarea:focus-visible, [tabindex="0"]:focus-visible {
 .customer-filter, .customer-selects label, .customer-selects select { font-size: 12px; }
 .customer-filter { min-height: 40px; }
 .customer-directory .admin-table td .customer-identity strong { font-size: 13px; }
-.customer-contact > span, .customer-view, .customer-edit { font-size: 12px; }
-.customer-view, .customer-edit { min-height: 38px; }
+.customer-contact > span, .customer-view, .customer-edit, .customer-restore, .customer-delete { font-size: 12px; }
+.customer-view, .customer-edit, .customer-restore, .customer-delete { min-height: 38px; }
 .customer-returning { font-size: 10px; }
 .customer-sr-only { top: 0; left: 0; clip: rect(0, 0, 0, 0); }
 .customer-page-note { font-size: 11px; }
@@ -9793,4 +9928,278 @@ textarea:focus-visible, [tabindex="0"]:focus-visible {
   margin: 0;
   color: var(--ui-muted, #64748b);
   font-size: 13px;
+}
+:root .qr-camera-preview { width: 100%; max-height: 300px; object-fit: contain; background: #101827; border-radius: 12px; }
+:root .inspection-photo-preview { display: flex; flex-wrap: wrap; gap: 10px; }
+:root .inspection-photo-preview img { width: 110px; height: 90px; object-fit: cover; border-radius: 8px; }
+:root .inspection-photo-full { width: 100%; max-height: 75vh; object-fit: contain; }
+:root .badge.awaiting-pickup, :root .badge.approved { background: #e0e7ff; color: #3730a3; }
+:root .badge.under-inspection { background: #fef3c7; color: #92400e; }
+
+/* Rental desk: compact controls, sequential scanning, and contained scrolling. */
+.admin-form input[type="checkbox"] {
+  width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 1px 0 0;
+  flex: 0 0 18px; accent-color: #ee8534; cursor: pointer;
+}
+.admin-form .pricing-check {
+  display: flex; align-items: flex-start; gap: 11px; margin-top: 0;
+  font-size: 13px; font-weight: 550; line-height: 1.5; cursor: pointer;
+}
+.admin-form .pricing-check > span { min-width: 0; }
+.admin-form .pricing-check small { display: block; margin-top: 3px; color: var(--ui-muted); font-size: 12px; font-weight: 400; }
+.record-fields dd { text-align: left; color: var(--ui-text); line-height: 1.55; }
+.record-field-note { display: block; margin-top: 4px; color: var(--ui-muted); font-size: 12px; }
+.condition-snapshot dl { grid-template-columns: minmax(90px, .8fr) minmax(0, 1fr); gap: 8px 12px; margin-bottom: 0; }
+.condition-snapshot dd { text-align: left; margin: 0; }
+.transaction-timeline li.pending { background: transparent; color: var(--ui-text); border: 0; padding: 0; }
+html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
+
+#modal:has(.rental-desk-form):not(:has(.rental-release-form)) { width: min(700px, calc(100vw - 32px)); }
+#modal.modal-compact:has(.rental-desk-form):not(:has(.rental-release-form)) { width: min(560px, calc(100vw - 32px)); }
+#modal[open] > .admin-form.rental-desk-form:not(.rental-release-form) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+#modal[open].modal-compact > .admin-form.rental-desk-form { grid-template-columns: 1fr; }
+.rental-desk-form > label { margin-top: 0; }
+.rental-desk-form > p, .rental-desk-form > .rental-scan-field, .rental-desk-form > .pricing-check,
+.rental-desk-form > .rental-inspection, .rental-desk-form > [data-manual-reason], .rental-desk-form > [data-quote-preview] { grid-column: 1 / -1; }
+.rental-desk-form p { color: var(--ui-muted); font-size: 13px; line-height: 1.6; }
+.rental-desk-form label { color: var(--ui-text); font-size: 13px; }
+.rental-desk-form input:not([type="checkbox"]), .rental-desk-form select { min-height: 44px; }
+.rental-desk-form input:not([type="checkbox"]), .rental-desk-form select, .rental-desk-form textarea { font-weight: 450; }
+.rental-scan-field { display: grid; gap: 10px; }
+.rental-scan-field > button { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.rental-desk-form .form-error:empty, .rental-desk-form [data-camera-status]:empty { display: none; }
+.rental-section-heading { margin: 0 0 16px; }
+.rental-section-heading h3 { color: var(--ui-text); font-size: 15px; }
+.rental-section-heading p { margin-top: 5px; }
+.rental-inspection { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--ui-border); }
+.rental-inspection-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.rental-inspection-grid .rental-accessory-check { padding: 11px 0; }
+.rental-inspection-grid [data-photo-preview] { grid-column: 1 / -1; }
+.rental-photo-picker { align-content: start; }
+.rental-photo-picker > small { margin-top: -5px; }
+.rental-photo-picker input[type="file"] { padding: 12px; font-size: 12px; min-width: 0; color: var(--ui-muted); }
+.rental-photo-picker input::file-selector-button { border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-soft); color: var(--ui-text); padding: 8px 10px; margin-right: 8px; cursor: pointer; }
+
+#modal[open]:has(.rental-release-form), #modal[open]:has(.transaction-record-modal) {
+  display: flex; flex-direction: column; width: min(800px, calc(100vw - 32px)); max-width: calc(100vw - 32px);
+  max-height: min(900px, calc(100dvh - 40px)); padding: 0; overflow: hidden;
+  background: var(--ui-surface); color: var(--ui-text); border: 1px solid var(--ui-border); border-radius: 18px;
+  box-shadow: 0 24px 90px #07132040;
+}
+#modal:has(.rental-release-form) > .modal-heading, #modal:has(.transaction-record-modal) > .modal-heading {
+  flex: 0 0 auto; margin: 0; padding: 20px 26px; border-bottom: 1px solid var(--ui-border); gap: 16px;
+}
+#modal:has(.rental-release-form) > .modal-heading h2, #modal:has(.transaction-record-modal) > .modal-heading h2 { font-size: 18px; line-height: 1.4; letter-spacing: -.4px; }
+#modal:has(.rental-release-form) #close-modal, #modal:has(.transaction-record-modal) #close-modal { border: 1px solid var(--ui-border); background: var(--ui-soft); border-radius: 9px; width: 34px; height: 34px; flex: 0 0 34px; }
+#modal[open] > .admin-form.rental-release-form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 0; margin: 0; overflow: hidden; }
+.rental-release-steps { display: flex; flex: 0 0 auto; margin: 0; padding: 22px 26px; list-style: none; gap: 16px; border-bottom: 1px solid var(--ui-border); }
+.rental-release-steps li { display: flex; align-items: center; flex: 1; gap: 9px; color: var(--ui-muted); min-width: 0; position: relative; }
+.rental-release-steps li > span { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px; border: 1px solid var(--ui-border); border-radius: 50%; background: var(--ui-soft); font-size: 12px; font-weight: 700; }
+.rental-release-steps li > strong { font-size: 12px; font-weight: 600; line-height: 1.4; }
+.rental-release-steps li.is-current { color: var(--ui-text); }
+.rental-release-steps li.is-current > span { background: #ee8534; border-color: #ee8534; color: #fff; box-shadow: 0 0 0 4px #ee853416; }
+.rental-release-steps li.is-complete > span { background: #e8f6ee; color: #24744c; border-color: #b9dfc9; }
+.rental-flow-summary { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 26px; background: var(--ui-soft); border-bottom: 1px solid var(--ui-border); }
+.rental-flow-summary > div { display: grid; gap: 5px; min-width: 0; }
+.rental-flow-summary small { color: var(--ui-muted); font-size: 11px; line-height: 1.5; }
+.rental-flow-summary strong { color: var(--ui-text); font-size: 18px; letter-spacing: -.4px; }
+.rental-flow-summary div > span { color: var(--ui-muted); font-size: 12px; overflow-wrap: anywhere; line-height: 1.5; }
+.rental-timer-note { color: #a55723; background: #ee853414; border-radius: 20px; padding: 7px 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.rental-flow-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px 26px; scrollbar-gutter: stable; }
+.rental-scan-panel { max-width: 550px; margin: 0 auto; text-align: left; }
+.rental-scan-art { display: grid; place-items: center; float: right; width: 54px; height: 54px; border: 1px solid #edc7a7; border-radius: 14px; background: #fff7f0; color: #c36b28; margin: 0 0 12px 20px; }
+.rental-scan-art > svg { width: 34px; height: 34px; }
+.rental-step-caption { display: block; font-size: 10px; letter-spacing: .12em; color: #b56429; font-weight: 700; margin-bottom: 8px; }
+.rental-scan-panel h3 { font-size: 22px; line-height: 1.35; font-weight: 700; letter-spacing: -.5px; color: var(--ui-text); }
+.rental-scan-panel > p { margin: 10px 0 22px; max-width: 55ch; }
+.rental-scan-panel > label { text-align: left; margin: 18px 0 12px; }
+.rental-scan-panel input { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.rental-scan-panel input::placeholder { font-family: Inter, "Segoe UI", sans-serif; font-size: 13px; color: var(--ui-muted); }
+.rental-scan-actions { display: flex; gap: 10px; }
+.rental-scan-actions > button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; font-size: 13px; }
+.rental-scan-actions > .primary { flex: 1; }
+.rental-scan-panel [data-camera-status] { font-size: 12px; margin: 14px 0 0; text-align: left; }
+.rental-expected-item { display: grid; gap: 5px; text-align: left; padding: 16px 18px; border: 1px solid #ee853450; border-left: 3px solid #ee8534; border-radius: 10px; background: #ee853408; }
+.rental-expected-item > span { color: var(--ui-muted); font-size: 11px; }
+.rental-expected-item > strong { color: var(--ui-text); font-size: 17px; }
+.rental-expected-item > small { color: var(--ui-muted); font-size: 12px; }
+.rental-verified-notice { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 13px 16px; text-align: left; border: 1px solid #b9dfc9; background: #f0f9f4; border-radius: 10px; }
+.rental-verified-notice > span { display: grid; place-items: center; width: 27px; height: 27px; flex: 0 0 27px; background: #d7efdf; color: #24744c; border-radius: 50%; font-weight: 700; }
+.rental-verified-notice strong { display: block; font-size: 13px; color: #236440; }
+.rental-verified-notice small { display: block; font-size: 12px; color: #5b7a67; margin-top: 3px; overflow-wrap: anywhere; }
+.rental-release-checks { min-width: 0; border: 0; margin: 0; padding: 0; }
+.rental-release-checks > .pricing-check, .rental-payment-checks > .pricing-check { border: 1px solid var(--ui-border); border-radius: 10px; padding: 14px; background: var(--ui-surface); }
+.rental-release-checks .pricing-check:has(input:checked) { border-color: #ee853465; background: #ee853406; }
+.rental-release-checks > .pricing-check { margin: 0 0 12px; }
+.rental-payment-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.rental-payment-checks strong { display: block; color: var(--ui-text); font-size: 20px; font-weight: 700; margin: 5px 0 2px; font-variant-numeric: tabular-nums; }
+.rental-release-error:not(:empty) { padding: 12px 14px; margin: 16px 0; background: #fff1ef; color: #a0322a; border: 1px solid #efccc7; border-radius: 9px; line-height: 1.6; }
+.rental-manual-fallback { margin: 20px 0 0; border-top: 1px solid var(--ui-border); padding-top: 16px; }
+.rental-manual-fallback summary { cursor: pointer; font-size: 12px; color: var(--ui-muted); width: fit-content; line-height: 1.5; }
+.rental-manual-fallback > p { margin: 12px 0; font-size: 12px; }
+.rental-manual-fallback > label { margin-top: 12px; }
+.rental-release-footer, .transaction-detail-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 26px; border-top: 1px solid var(--ui-border); background: var(--ui-surface); }
+.rental-release-footer > p { font-size: 12px; line-height: 1.5; max-width: 28ch; }
+.rental-release-footer .form-actions, .transaction-detail-footer .form-actions { display: flex; flex-shrink: 0; margin: 0; padding: 0; gap: 9px; border: 0; }
+.rental-release-footer button, .transaction-detail-footer button { min-height: 42px; font-size: 13px; padding: 11px 16px; white-space: nowrap; }
+.rental-release-form button:disabled { opacity: .55; }
+
+/* Rental forms keep the main action visible while the content scrolls. */
+.notification-count-badge { position: absolute; top: 2px; right: 1px; min-width: 18px; height: 18px; border-radius: 10px; padding: 0 4px; display: grid; place-items: center; background: #ef7d26; color: #fff; font-size: 10px; font-weight: 700; line-height: 18px; }
+.notification-toolbar { padding: 8px 16px; border-bottom: 1px solid var(--ui-border); }
+.notification-toolbar button { font-size: 12px; min-height: 36px; }
+.notification-toolbar button:disabled { opacity: .5; }
+.notification-list > .notification-unread { background: var(--ui-soft); border-left: 3px solid #ef7d26; }
+.notification-list .notification-time { margin-top: 6px; font-size: 10px; }
+.notification-list small { overflow-wrap: anywhere; }
+.notification-feedback { padding: 12px 16px; color: var(--ui-muted); font-size: 12px; }
+.notification-feedback button { color: #ef7d26; padding: 4px 8px; }
+.notification-list > .notification-load-more { justify-content: center; font-weight: 600; color: #ef7d26; }
+#modal[open]:has(.rental-desk-form:not(.rental-release-form)) { display: flex; flex-direction: column; padding: 0; width: min(700px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: hidden; }
+#modal:has(.rental-desk-form:not(.rental-release-form)) > .modal-heading { flex: 0 0 auto; padding: 22px 24px; margin: 0; border-bottom: 1px solid var(--ui-border); }
+#modal > .rental-desk-form:not(.rental-release-form) { display: flex; flex-direction: column; gap: 0; min-height: 0; margin: 0; padding: 0; overflow: hidden; }
+.rental-form-scroll { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 18px; min-height: 0; padding: 22px 24px; overflow-y: auto; overscroll-behavior: contain; }
+.rental-form-scroll > p, .rental-form-scroll > section, .rental-form-scroll > div, .rental-form-scroll > .pricing-check { grid-column: 1 / -1; }
+.rental-form-scroll > p { font-size: 13px; line-height: 1.6; color: var(--ui-muted); }
+.rental-form-scroll > label { min-width: 0; }
+.rental-form-scroll > [data-custom-resort] { grid-column: 1 / -1; }
+.rental-form-scroll .rental-payment-note { padding: 12px 14px; border: 1px solid var(--ui-border); background: var(--ui-soft); border-radius: 10px; }
+.rental-desk-form:not(.rental-release-form) > .form-actions { flex: 0 0 auto; margin: 0; padding: 16px 24px; border-top: 1px solid var(--ui-border); background: var(--ui-surface); }
+.rental-desk-form:not(.rental-release-form) > .form-error { margin: 0; padding: 0 24px; }
+.rental-desk-form:not(.rental-release-form) > .form-error:not(:empty) { padding: 12px 24px; }
+.rental-desk-form .form-actions button { min-height: 44px; }
+.rental-footer-total { margin-right: auto; display: grid; gap: 4px; text-align: left; }
+.rental-footer-total small { color: var(--ui-muted); font-size: 11px; }
+.rental-footer-total strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.rental-desk-form button:disabled { opacity: .55; cursor: default; }
+.rental-booking-price { padding: 18px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-soft); }
+.rental-booking-price h3 { margin: 0 0 14px; font-size: 15px; }
+.rental-booking-price dl { display: block; margin: 0; }
+.rental-booking-price dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; font-size: 13px; }
+.rental-booking-price dt { color: var(--ui-muted); }
+.rental-booking-price dd { margin: 0; font-weight: 650; text-align: right; white-space: nowrap; }
+.rental-booking-price .rental-price-total { border-top: 1px solid var(--ui-border); padding-top: 14px; margin-top: 8px; }
+.rental-price-total dt { color: var(--ui-text); font-weight: 650; }
+.rental-price-total dd { font-size: 22px; }
+.rental-booking-price p, .rental-booking-price small { font-size: 12px; line-height: 1.5; color: var(--ui-muted); }
+.rental-booking-price p { margin: 12px 0 6px; }
+.rental-price-placeholder { color: var(--ui-muted); font-size: 13px; }
+.inspection-photo-preview figure { margin: 0; display: grid; gap: 6px; }
+.inspection-photo-preview button { min-height: 40px; font-size: 12px; }
+@media (max-width: 600px) {
+  #modal[open]:has(.rental-desk-form:not(.rental-release-form)) { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 14px; }
+  #modal:has(.rental-desk-form:not(.rental-release-form)) > .modal-heading { padding: 16px; }
+  #modal:has(.rental-desk-form:not(.rental-release-form)) > .modal-heading h2 { font-size: 18px; }
+  .rental-form-scroll { grid-template-columns: 1fr; padding: 18px 16px; gap: 18px; }
+  .rental-desk-form:not(.rental-release-form) > .form-actions { padding: 14px 16px; }
+  .rental-desk-form:not(.rental-release-form) > .form-actions:has(.rental-footer-total) { flex-wrap: wrap; }
+  .rental-footer-total { flex-basis: 100%; }
+  .rental-desk-form:not(.rental-release-form) > .form-error:not(:empty) { padding: 10px 16px; }
+}
+
+/* Transaction details keep the next action visible while records scroll. */
+@media (max-width: 600px) {
+  .admin-table-scroll:has(.rental-actions-toggle) { overflow: visible; border: 0; background: transparent; }
+  .admin-table:has(.rental-actions-toggle) { display: block; width: 100%; min-width: 0; border: 0; }
+  .admin-table:has(.rental-actions-toggle) thead { display: none; }
+  .admin-table:has(.rental-actions-toggle) tbody { display: grid; gap: 14px; }
+  .admin-table:has(.rental-actions-toggle) tbody > tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 8px; padding: 16px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); min-width: 0; }
+  .admin-table:has(.rental-actions-toggle) tbody > tr > td { min-width: 0; padding: 0; border: 0; width: auto; white-space: normal; overflow-wrap: anywhere; background: transparent; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(2) { order: 1; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(2) strong { font-size: 17px; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(5) { order: 2; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(3) { order: 3; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(4) { order: 4; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(6) { order: 5; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(1) { order: 6; grid-column: 1; padding-top: 6px; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(7) { order: 6; grid-column: 2; padding-top: 6px; align-self: center; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(3)::before { content: 'Customer'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(4)::before { content: 'Deadline'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
+  .admin-table:has(.rental-actions-toggle) td:nth-child(6)::before { content: 'Charges'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
+  .admin-table:has(.rental-actions-toggle) button { min-height: 44px; }
+}
+
+.transaction-record-modal { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; max-width: none; }
+.transaction-detail-overview { flex: 0 0 auto; padding: 22px 26px; border-bottom: 1px solid var(--ui-border); }
+.transaction-record-modal .transaction-detail-head { margin-bottom: 18px; }
+.transaction-record-modal .transaction-detail-head .eyebrow { font-size: 11px; letter-spacing: .07em; }
+.transaction-record-modal .transaction-detail-head h3 { font-size: 24px; font-weight: 700; letter-spacing: -.6px; margin: 7px 0 5px; }
+.transaction-record-modal .transaction-detail-head p { font-size: 12px; color: var(--ui-muted); }
+.transaction-record-modal .transaction-detail-head .badge { font-size: 11px; padding: 7px 10px; }
+.transaction-record-modal .transaction-detail-grid { gap: 12px; }
+.transaction-record-modal .transaction-detail-grid > div { border: 1px solid var(--ui-border); background: var(--ui-soft); border-radius: 10px; padding: 12px 14px; gap: 5px; }
+.transaction-record-modal .transaction-detail-grid small { font-size: 11px; color: var(--ui-muted); }
+.transaction-record-modal .transaction-detail-grid strong { font-size: 13px; line-height: 1.5; color: var(--ui-text); overflow-wrap: anywhere; }
+.transaction-detail-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 22px 26px; }
+.transaction-detail-scroll > .record-section:first-child, .record-disclosure-body > .record-section:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
+.transaction-record-modal .record-section { margin-top: 22px; padding-top: 22px; border-color: var(--ui-border); }
+.transaction-record-modal .record-section h3, .record-disclosure-body > h3 { font-size: 14px; color: var(--ui-text); font-weight: 650; }
+.transaction-record-modal .record-fields { gap: 15px 24px; margin: 16px 0; }
+.transaction-record-modal .record-fields dt { color: var(--ui-muted); font-size: 11px; }
+.transaction-record-modal .record-fields dd { margin-top: 5px; font-size: 13px; font-weight: 550; text-align: left; }
+.record-charge-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0 20px; }
+.record-charge-summary > div { padding: 16px; border: 1px solid var(--ui-border); border-radius: 11px; background: var(--ui-soft); }
+.record-charge-summary small { color: var(--ui-muted); font-size: 11px; }
+.record-charge-summary strong { display: block; color: var(--ui-text); font-size: 25px; font-weight: 700; letter-spacing: -.6px; margin-top: 7px; font-variant-numeric: tabular-nums; }
+.record-charge-summary > div:first-child { border-color: #ee853450; background: #ee853409; }
+.record-charge-summary > div:first-child > strong { color: #b96126; }
+.transaction-record-modal .record-note { font-size: 11px; line-height: 1.6; color: var(--ui-muted); }
+.record-disclosure { margin-top: 16px; border: 1px solid var(--ui-border); border-radius: 11px; background: var(--ui-surface); }
+.record-disclosure > summary { position: relative; list-style: none; display: grid; gap: 4px; cursor: pointer; padding: 16px 42px 16px 16px; }
+.record-disclosure > summary::-webkit-details-marker { display: none; }
+.record-disclosure > summary::after { position: absolute; right: 19px; top: 22px; width: 7px; height: 7px; border: solid var(--ui-muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); content: ''; }
+.record-disclosure[open] > summary::after { transform: rotate(225deg); top: 26px; }
+.record-disclosure > summary > span { font-size: 13px; font-weight: 650; color: var(--ui-text); }
+.record-disclosure > summary > small { font-size: 11px; color: var(--ui-muted); line-height: 1.5; }
+.record-disclosure > summary:focus-visible, .rental-manual-fallback summary:focus-visible { outline: 2px solid #ee8534; outline-offset: 2px; border-radius: 9px; }
+.record-disclosure-body { padding: 4px 16px 16px; }
+.record-disclosure-body .condition-snapshots { gap: 10px; }
+.record-disclosure-body .condition-snapshot { background: var(--ui-soft); border-color: var(--ui-border); padding: 14px; }
+.record-disclosure-body .condition-snapshot h4 { font-size: 13px; color: var(--ui-text); }
+.record-disclosure-body .transaction-detail-section-title { margin: 8px 0 18px; }
+.record-disclosure-body .transaction-timeline li { min-height: 57px; gap: 14px; }
+.record-disclosure-body .transaction-timeline li strong { color: var(--ui-text); font-size: 12px; font-weight: 600; }
+.record-disclosure-body .transaction-timeline li small { color: var(--ui-muted); font-size: 11px; line-height: 1.5; }
+.transaction-footer-copy { display: grid; gap: 4px; min-width: 0; }
+.transaction-footer-copy > strong { font-size: 13px; color: var(--ui-text); }
+.transaction-footer-copy > small { font-size: 11px; color: var(--ui-muted); line-height: 1.5; }
+[data-theme="dark"] .rental-scan-art { background: #ee853412; border-color: #ee853445; color: #f0ad7c; }
+[data-theme="dark"] .rental-step-caption, [data-theme="dark"] .rental-timer-note, [data-theme="dark"] .record-charge-summary > div:first-child > strong { color: #f0ad7c; }
+[data-theme="dark"] .rental-release-steps li.is-complete > span { background: #214030; border-color: #3c6750; color: #a2d8b7; }
+[data-theme="dark"] .rental-verified-notice { background: #16362a; border-color: #315b47; }
+[data-theme="dark"] .rental-verified-notice > span { background: #28543d; color: #b9e6ca; }
+[data-theme="dark"] .rental-verified-notice strong { color: #b4dfc5; }
+[data-theme="dark"] .rental-verified-notice small { color: #9bc3ac; }
+[data-theme="dark"] .rental-release-error:not(:empty) { background: #41272a; color: #f6b3ad; border-color: #6b3c3f; }
+[data-theme="dark"] .transaction-timeline li.pending { background: transparent; }
+
+@media (max-width: 600px) {
+  html:has(dialog[open]) { scrollbar-gutter: auto; }
+  #modal[open]:has(.rental-release-form), #modal[open]:has(.transaction-record-modal) { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 14px; }
+  #modal:has(.rental-release-form) > .modal-heading, #modal:has(.transaction-record-modal) > .modal-heading { padding: 15px 16px; }
+  #modal:has(.rental-release-form) > .modal-heading h2, #modal:has(.transaction-record-modal) > .modal-heading h2 { font-size: 16px; }
+  #modal[open] > .admin-form.rental-desk-form:not(.rental-release-form) { grid-template-columns: 1fr; }
+  .rental-release-steps { padding: 16px; gap: 10px; }
+  .rental-release-steps li { flex-direction: column; align-items: flex-start; gap: 7px; }
+  .rental-release-steps li > strong { font-size: 10px; }
+  .rental-flow-summary { padding: 14px 16px; }
+  .rental-timer-note { display: none; }
+  .rental-flow-scroll, .transaction-detail-scroll { padding: 20px 16px; }
+  .rental-scan-panel h3 { font-size: 20px; }
+  .rental-payment-checks, .rental-inspection-grid { grid-template-columns: 1fr; }
+  .rental-inspection-grid .rental-accessory-check { padding: 0; }
+  .rental-release-footer, .transaction-detail-footer { flex-direction: column; align-items: stretch; padding: 14px 16px; gap: 12px; }
+  .rental-release-footer > p { max-width: none; }
+  .rental-release-footer .form-actions, .transaction-detail-footer .form-actions { justify-content: flex-end; }
+  .rental-release-footer button, .transaction-detail-footer button { font-size: 12px; padding: 10px 13px; }
+  .transaction-detail-overview { padding: 18px 16px; }
+  .transaction-record-modal .transaction-detail-head h3 { font-size: 21px; }
+  .transaction-record-modal .transaction-detail-head { gap: 10px; }
+  .transaction-record-modal .transaction-detail-grid { grid-template-columns: 1fr; gap: 8px; }
+  .transaction-record-modal .transaction-detail-grid > div { padding: 10px 12px; }
+  .transaction-record-modal .record-fields { grid-template-columns: 1fr; gap: 13px; }
+  .record-charge-summary { gap: 9px; }
+  .record-charge-summary > div { padding: 13px; }
+  .record-charge-summary strong { font-size: 22px; }
+  .record-disclosure-body .condition-snapshots { grid-template-columns: 1fr; }
 }

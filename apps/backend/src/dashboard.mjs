@@ -4,7 +4,7 @@ import {publicTerminal,serializeTransaction} from './transactions.mjs';
 export function databaseDate(value) {return asDate(value);}
 export const dateKey = date => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 export function rentalStatus(row,now=new Date()) {
-  if(row.status!=='ACTIVE')return row.status==='PENDING_VERIFICATION'?'Pending':row.status;
+  if(row.status!=='ACTIVE')return row.status==='APPROVED'?'Awaiting pickup':row.status==='RETURN_PENDING_INSPECTION'?'Inspection pending':row.status==='PENDING_ADMIN_APPROVAL'?'Pending admin review':row.status==='PENDING_VERIFICATION'?'Pending':row.status;
   const due=databaseDate(row.due_at);
   if(due<now)return 'Overdue';
   return dateKey(due)===dateKey(now)?'Due today':'Active';
@@ -15,7 +15,7 @@ export function revenueWeeks(rows,now=new Date()) {
   const monday=localToday.getTime()-((localDay+6)%7)*86400000;
   const result={'This week':Array(7).fill(0),'Last week':Array(7).fill(0)};
   for(const row of rows){
-    if(!['ACTIVE','COMPLETED'].includes(row.status)||!row.confirmed_rental_at)continue;
+    if(!['ACTIVE','RETURN_PENDING_INSPECTION','COMPLETED'].includes(row.status)||!row.confirmed_rental_at)continue;
     const index=Math.floor((databaseDate(row.confirmed_rental_at).getTime()-monday)/86400000);
     if(index>=0&&index<7)result['This week'][index]+=Number(row.rental_fee||0);
     if(index>=-7&&index<0)result['Last week'][index+7]+=Number(row.rental_fee||0);
@@ -34,8 +34,8 @@ export async function loadDashboard(db,now=new Date()) {
   const terminalsById=new Map(source.terminals.map(terminal=>[terminal.id,terminal]));
   const rentalsById=new Map(source.rentals.map(rental=>[rental.id,rental]));
   const currentRate=itemId=>source.item_rates.filter(rate=>String(rate.item_id)===itemId&&rate.is_active!==false&&asDate(rate.effective_from)<=now&&(!rate.effective_to||asDate(rate.effective_to)>now)).sort((a,b)=>asDate(b.effective_from)-asDate(a.effective_from))[0];
-  const open=source.rentals.filter(rental=>['PENDING_VERIFICATION','ACTIVE'].includes(rental.status)).sort((a,b)=>asDate(a.due_at)-asDate(b.due_at));
-  const reserved=new Set(open.filter(rental=>rental.status==='PENDING_VERIFICATION').map(rental=>String(rental.item_id)));
+  const open=source.rentals.filter(rental=>['PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','APPROVED','ACTIVE','RETURN_PENDING_INSPECTION'].includes(rental.status)).sort((a,b)=>asDate(a.due_at)-asDate(b.due_at));
+  const reserved=new Set(open.filter(rental=>['PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','APPROVED'].includes(rental.status)).map(rental=>String(rental.item_id)));
   const items=source.items.filter(item=>item.is_active!==false).map(item=>{
     const {image_data,...itemFields}=item;
     const rate=currentRate(item.id)||{};

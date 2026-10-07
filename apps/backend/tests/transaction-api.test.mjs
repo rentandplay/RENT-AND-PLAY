@@ -17,7 +17,7 @@ test('API allows authenticated request preparation but requires device authentic
     terminalConfirm: (terminal, input) => resolveTerminalRequest(db, terminal, input, new Date(now.getTime() + 1000)),
     verifyMobileToken: async token => token === 'mobile-admin-token' ? { uid: actor.id } : null
   };
-  const server = createApi({ services, sessions: { verify: async token => token === 'admin-cookie' ? { uid: actor.id } : null } });
+  const server = createApi({ hardwareEnabled: true, services, sessions: { verify: async token => token === 'admin-cookie' ? { uid: actor.id } : null } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const request = (path, method = 'GET', input, headers = {}) => fetch(origin + path, { method, headers: { 'Content-Type': 'application/json', ...headers }, ...(input ? { body: JSON.stringify(input) } : {}) });

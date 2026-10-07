@@ -7,42 +7,49 @@ const product = (id,name,group,rateOptions,extra={})=>({
 
 export const DEFAULT_PRICING = {
   products:[
-    product('bike','Bike','Active rentals',[
+    product('bike','Bicycle','Sports',[
       {id:'half-hour',label:'30 minutes',kind:'SHORT',duration_minutes:30,amount:150},
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:200},
       {id:'three-hour-special',label:'3-hour special',kind:'PACKAGE',duration_minutes:180,amount:500}
-    ],{high_value:true,overtime_rate_per_hour:200}),
-    product('pickleball-set','Pickleball set','Active rentals',[
+    ],{high_value:true,deposit_amount:200,overtime_rate_per_hour:200}),
+    product('pickleball-set','Pickleball Set','Sports',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:120}
-    ],{overtime_rate_per_hour:120,included_items:['2 paddles','Balls']}),
-    product('badminton-set','Badminton set','Active rentals',[
+    ],{deposit_amount:100,overtime_rate_per_hour:120,included_items:['4 paddles','6 outdoor pickleballs','Portable net']}),
+    product('badminton-set','Badminton Set','Sports',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:100}
-    ],{overtime_rate_per_hour:100,included_items:['2 rackets','1 shuttlecock']}),
-    product('basketball-volleyball-ball','Basketball / volleyball ball','Active rentals',[
+    ],{deposit_amount:100,overtime_rate_per_hour:100,included_items:['4 rackets','6 shuttlecocks','Net']}),
+    product('basketball','Basketball','Sports',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:50},
       {id:'five-hour-special',label:'5-hour special',kind:'PACKAGE',duration_minutes:300,amount:200}
-    ],{overtime_rate_per_hour:50}),
-    product('ps4','PS4','Tech rentals',[
+    ],{deposit_amount:50,overtime_rate_per_hour:50}),
+    product('volleyball','Volleyball','Sports',[
+      {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:50},
+      {id:'five-hour-special',label:'5-hour special',kind:'PACKAGE',duration_minutes:300,amount:200}
+    ],{deposit_amount:50,overtime_rate_per_hour:50}),
+    product('ps4','PlayStation 4 Console','Tech Rentals',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:250}
-    ],{high_value:true,overtime_rate_per_hour:250}),
-    product('nintendo-switch','Nintendo Switch','Tech rentals',[
+    ],{high_value:true,deposit_amount:300,overtime_rate_per_hour:250}),
+    product('nintendo-switch','Nintendo Switch','Tech Rentals',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:200}
-    ],{high_value:true,overtime_rate_per_hour:200}),
-    product('deck-of-cards','Deck of cards','Cards rent / sale',[
+    ],{high_value:true,deposit_amount:300,overtime_rate_per_hour:200}),
+    product('ps5','PlayStation 5 Console','Tech Rentals',[
+      {id:'day',label:'Per day',kind:'BLOCK',duration_minutes:1440,amount:120}
+    ],{high_value:true,deposit_amount:500,overtime_rate_per_hour:120}),
+    product('deck-of-cards','Deck of Cards','Cards',[
       {id:'five-hour',label:'5 hours',kind:'BLOCK',duration_minutes:300,amount:50}
-    ],{overtime_rate_per_hour:10,sale_price:150,sale_label:'Brand new'}),
-    product('uno-cards','UNO cards','Cards rent / sale',[
+    ],{deposit_amount:50,overtime_rate_per_hour:10,sale_price:150,sale_label:'Brand new'}),
+    product('uno-cards','Uno Cards','Cards',[
       {id:'five-hour',label:'5 hours',kind:'BLOCK',duration_minutes:300,amount:100}
-    ],{overtime_rate_per_hour:20,sale_price:300,sale_label:'Brand new'}),
-    product('bingo-cards','Bingo','Cards rent / sale',[
+    ],{deposit_amount:50,overtime_rate_per_hour:20,sale_price:300,sale_label:'Brand new'}),
+    product('bingo-cards','Bingo Set','Cards',[
       {id:'five-hour',label:'5 hours',kind:'BLOCK',duration_minutes:300,amount:150}
-    ],{overtime_rate_per_hour:30,sale_price:450,sale_label:'Brand new'}),
+    ],{deposit_amount:100,overtime_rate_per_hour:30,sale_price:450,sale_label:'Brand new'}),
     ...[
-      ['jenga','Jenga'],['scrabble','Scrabble'],['chess','Chess']
-    ].map(([id,name])=>product(id,name,'Board games',[
+      ['jenga','Jenga'],['scrabble','Scrabble'],['chess','Chess Set']
+    ].map(([id,name])=>product(id,name,'Board Games',[
       {id:'five-hour',label:'5 hours',kind:'BLOCK',duration_minutes:300,amount:150},
       {id:'whole-stay',label:'Whole stay until resort checkout',kind:'WHOLE_STAY',duration_minutes:null,amount:250}
-    ],{overtime_rate_per_hour:30})),
+    ],{deposit_amount:100,overtime_rate_per_hour:30})),
   ],
   rules:{
     opens_at:'08:00',closes_at:'20:00',valid_id_required:true,
@@ -70,9 +77,12 @@ const validTime=value=>typeof value==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test
 export function validatePricing(input={}) {
   if(!input||typeof input!=='object'||Array.isArray(input)||!Array.isArray(input.products)||!input.rules||typeof input.rules!=='object'||Array.isArray(input.rules))fail(400,'Pricing setup is required.');
   const defaults=clone(DEFAULT_PRICING),byId=new Map(input.products.map(row=>[row?.id,row]));
+  const legacyBall=byId.get('basketball-volleyball-ball');
+  for(const id of ['bike','pickleball-set','badminton-set','ps4','nintendo-switch','deck-of-cards','uno-cards','bingo-cards','jenga','scrabble','chess'])if(!byId.has(id))fail(400,`Pricing setup is missing ${id}.`);
+  if(!legacyBall&&(!byId.has('basketball')||!byId.has('volleyball')))fail(400,'Pricing setup is missing a sports product.');
   const products=defaults.products.map(base=>{
-    const row=byId.get(base.id);
-    if(!row)fail(400,`Pricing setup is missing ${base.name}.`);
+    const row=byId.get(base.id)||(['basketball','volleyball'].includes(base.id)?legacyBall:null);
+    if(!row){if(base.id==='ps5')return base;fail(400,`Pricing setup is missing ${base.name}.`);}
     const ratesById=new Map((Array.isArray(row.rate_options)?row.rate_options:[]).map(rate=>[rate?.id,rate]));
     base.rate_options=base.rate_options.map(rate=>{
       const submitted=ratesById.get(rate.id);

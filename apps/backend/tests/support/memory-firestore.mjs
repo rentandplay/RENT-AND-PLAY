@@ -12,16 +12,18 @@ export function memoryFirestore(initial = {}) {
     const value = String(id ?? `record_${++sequence}`), path = `${name}/${value}`;
     return { id: value, path, get: async () => readDoc(document(name, value)), create: async data => { if (store.has(path)) throw Error('Document exists'); store.set(path, structuredClone(data)); }, set: async (data, options) => store.set(path, structuredClone(options?.merge ? { ...store.get(path), ...data } : data)), update: async data => { if (!store.has(path)) throw Error('Missing document'); store.set(path, structuredClone({ ...store.get(path), ...data })); } };
   };
-  const collection = (name, filters = [], limit = Infinity, order = null) => {
+  const collection = (name, filters = [], limit = Infinity, order = null, cursor = null) => {
     const query = {
       doc: id => document(name, id),
-      where: (field, operator, value) => { if (operator !== '==') throw Error('Unsupported fixture query'); return collection(name, [...filters, [field, value]], limit, order); },
-      limit: value => collection(name, filters, value, order),
-      orderBy: (field, direction = 'asc') => collection(name, filters, limit, { field, direction }),
+      where: (field, operator, value) => { if (operator !== '==') throw Error('Unsupported fixture query'); return collection(name, [...filters, [field, value]], limit, order, cursor); },
+      limit: value => collection(name, filters, value, order, cursor),
+      orderBy: (field, direction = 'asc') => collection(name, filters, limit, { field, direction }, cursor),
+      startAfter: doc => collection(name, filters, limit, order, doc.id),
       get: async () => {
-        const entries = [...store].filter(([path, data]) => path.startsWith(name + '/') && filters.every(([field, value]) => data[field] === value) && (!order || data[order.field] !== undefined));
-        if (order) entries.sort(([, a], [, b]) => (a[order.field] < b[order.field] ? -1 : a[order.field] > b[order.field] ? 1 : 0) * (order.direction === 'desc' ? -1 : 1));
-        const docs = entries.slice(0, limit).map(([path]) => readDoc(document(name, path.slice(name.length + 1))));
+        const entries = [...store].filter(([path, data]) => path.startsWith(name + '/') && !path.slice(name.length + 1).includes('/') && filters.every(([field, value]) => data[field] === value) && (!order || data[order.field] !== undefined));
+        if (order) entries.sort(([ap, a], [bp, b]) => ((a[order.field] < b[order.field] ? -1 : a[order.field] > b[order.field] ? 1 : ap.localeCompare(bp))) * (order.direction === 'desc' ? -1 : 1));
+        const start = cursor ? entries.findIndex(([path]) => path === `${name}/${cursor}`) + 1 : 0;
+        const docs = entries.slice(start, start + limit).map(([path]) => readDoc(document(name, path.slice(name.length + 1))));
         return { docs, empty: docs.length === 0, size: docs.length };
       }
     };

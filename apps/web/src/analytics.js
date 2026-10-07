@@ -93,16 +93,17 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const allowed=id=>{const item=itemMap.get(String(id));return (!selection.itemId||String(id)===String(selection.itemId))&&(!selection.categoryId||String(item?.category_id)===String(selection.categoryId));};
   const selectedItems=items.filter(item=>allowed(item.id));
   const selectedTransactions=transactions.filter(row=>allowed(row.item_id));
-  const settled=selectedTransactions.filter(row=>['ACTIVE','COMPLETED'].includes(row.status));
+  const settled=selectedTransactions.filter(row=>['ACTIVE','RETURN_PENDING_INSPECTION','COMPLETED'].includes(row.status));
   const confirmed=settled.filter(row=>within(row.confirmed_rental_at));
-  const returns=settled.filter(row=>row.status==='COMPLETED'&&within(row.confirmed_return_at));
+  const physicalReturn = row => row.received_at || row.confirmed_return_at;
+  const returns=settled.filter(row=>row.status==='COMPLETED'&&within(physicalReturn(row)));
   const validDue=row=>ms(row.due_at)!==null&&ms(row.confirmed_rental_at)!==null&&ms(row.due_at)>=ms(row.confirmed_rental_at);
-  const onTimeSamples=returns.filter(row=>validDue(row)&&ms(row.confirmed_return_at)>=ms(row.confirmed_rental_at));
-  const onTimeReturns=onTimeSamples.filter(row=>ms(row.confirmed_return_at)<=ms(row.due_at)).length;
-  const dueRentals=settled.filter(row=>validDue(row)&&within(row.due_at)&&(row.status==='ACTIVE'||ms(row.confirmed_return_at)!==null&&ms(row.confirmed_return_at)>=ms(row.confirmed_rental_at)));
-  const overdueRentals=dueRentals.filter(row=>row.status==='COMPLETED'?ms(row.confirmed_return_at)>ms(row.due_at):ms(row.due_at)<asOf);
+  const onTimeSamples=returns.filter(row=>validDue(row)&&ms(physicalReturn(row))>=ms(row.confirmed_rental_at));
+  const onTimeReturns=onTimeSamples.filter(row=>ms(physicalReturn(row))<=ms(row.due_at)).length;
+  const dueRentals=settled.filter(row=>validDue(row)&&within(row.due_at)&&(row.status==='ACTIVE'||ms(physicalReturn(row))!==null&&ms(physicalReturn(row))>=ms(row.confirmed_rental_at)));
+  const overdueRentals=dueRentals.filter(row=>row.status==='COMPLETED'?ms(physicalReturn(row))>ms(row.due_at):ms(row.due_at)<asOf);
   const overdueNow=settled.filter(row=>row.status==='ACTIVE'&&validDue(row)&&ms(row.due_at)<now.getTime()).length;
-  const durations=returns.filter(row=>ms(row.confirmed_rental_at)!==null&&ms(row.confirmed_return_at)>=ms(row.confirmed_rental_at)).map(row=>(ms(row.confirmed_return_at)-ms(row.confirmed_rental_at))/HOUR);
+  const durations=returns.filter(row=>ms(row.confirmed_rental_at)!==null&&ms(physicalReturn(row))>=ms(row.confirmed_rental_at)).map(row=>(ms(physicalReturn(row))-ms(row.confirmed_rental_at))/HOUR);
   const feeTotalCents=confirmed.reduce((total,row)=>total+cents(row.rental_fee),0);
   const customerCounts=new Map();for(const row of confirmed)if(row.customer_id)customerCounts.set(String(row.customer_id),(customerCounts.get(String(row.customer_id))||0)+1);
   const repeatCustomers=[...customerCounts.values()].filter(count=>count>=2).length;
@@ -124,7 +125,7 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   }
   const rentalIntervals=new Map(),maintenanceIntervals=new Map();let invalidRentalIntervals=0,invalidMaintenanceIntervals=0;
   for(const row of settled){
-    const left=ms(row.confirmed_rental_at),right=row.status==='ACTIVE'?asOf:ms(row.confirmed_return_at);
+    const left=ms(row.confirmed_rental_at),right=ms(row.received_at)|| (row.status==='ACTIVE'?asOf:ms(physicalReturn(row)));
     if(left===null||right===null||right<left){invalidRentalIntervals++;continue;}
     if(left>=asOf||right<=start)continue;
     const key=String(row.item_id);itemRow(key,row);if(!rentalIntervals.has(key))rentalIntervals.set(key,[]);
@@ -162,9 +163,9 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const trend=trendBuckets(range,groupBy);
   for(const row of confirmed){const key=manilaDateKey(row.confirmed_rental_at),bucket=trend.find(value=>key>=value.from&&key<=value.to);if(bucket){bucket.rentals++;bucket.fees+=cents(row.rental_fee);}}
   for(const bucket of trend)bucket.fees/=100;
-  const reserved=new Set(selectedTransactions.filter(row=>row.status==='PENDING_VERIFICATION').map(row=>String(row.item_id)));
+  const reserved=new Set(selectedTransactions.filter(row=>['PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','APPROVED'].includes(row.status)).map(row=>String(row.item_id)));
   const equipmentStatus={Available:0,Rented:0,Pending:0,Maintenance:0,Archived:0};
-  for(const item of selectedItems){if(item.is_active===false)equipmentStatus.Archived++;else if(item.status==='UNDER_MAINTENANCE')equipmentStatus.Maintenance++;else if(item.status==='RENTED')equipmentStatus.Rented++;else if(item.status==='RESERVED_PENDING'||reserved.has(String(item.id)))equipmentStatus.Pending++;else equipmentStatus.Available++;}
+  for(const item of selectedItems){if(item.is_active===false)equipmentStatus.Archived++;else if(item.status==='UNDER_MAINTENANCE')equipmentStatus.Maintenance++;else if(item.status==='RENTED')equipmentStatus.Rented++;else if(['RESERVED_PENDING','UNDER_INSPECTION'].includes(item.status)||reserved.has(String(item.id)))equipmentStatus.Pending++;else equipmentStatus.Available++;}
   const terminalMap=new Map((data.terminals||[]).map(row=>[String(row.id),row])),terminalGroups=new Map(),verificationSamples=[];
   let invalidVerification=0,linkedConfirmationTimes=0;
   for(const request of data.verification||[]){

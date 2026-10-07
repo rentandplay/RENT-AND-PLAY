@@ -15,7 +15,7 @@ export const pageInfo = Object.freeze({
   Returns: ['Ready for the next rental', 'Record return inspections and review completed equipment handoffs.', 'box'],
   'Transaction History': ['Every rental, one record', 'Find past transactions, saved charges, and their complete verification history.', 'clock'],
   Maintenance: ['Keep your collection ready', 'Track inspections and repairs, and return serviced equipment to the collection.', 'settings'],
-  'ESP32 terminal': ['Your counter handoffs', 'Review inspections and monitor requests awaiting physical terminal confirmation.', 'chip'],
+  'ESP32 terminal': ['Hardware on standby', 'Keep terminal configuration and past verification records ready for future hardware setup.', 'chip'],
   Reports: ['See how your business is doing', 'Explore rental performance, equipment use, and service trends.', 'chart'],
   Settings: ['Make this workspace yours', 'Manage business details, appearance, and your workspace preferences.', 'settings'],
   Profile: ['Your workspace account', 'Keep your name and sign-in details up to date.', 'users']

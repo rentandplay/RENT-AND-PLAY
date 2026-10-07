@@ -7,7 +7,10 @@
     "dev": "node server.mjs",
     "start": "node server.mjs",
     "build": "node build.mjs",
-    "check": "node --check src/app.js && node --check src/api-client.js && node --check src/date-time.js && node --check src/workspace-navigation.js && node --check src/confirmation-dialog.js && node --check src/record-links.js && node --check src/record-details.js && node --check src/inventory.js && node --check src/equipment-label.js && node --check src/label-logo.js && node --check src/mx10-printer.js && node --check src/workspace-ui.js && node --check src/customer-ui.js && node --check src/transaction-records.js && node --check src/transaction-workflow.js && node --check src/settings-ui.js && node --check src/preferences.js && node --check src/analytics.js && node --check src/analytics-report.js && node --check server.mjs",
+    "check": "node --check src/app.js && node --check src/api-client.js && node --check src/date-time.js && node --check src/workspace-navigation.js && node --check src/confirmation-dialog.js && node --check src/record-links.js && node --check src/record-details.js && node --check src/inventory.js && node --check src/equipment-label.js && node --check src/label-logo.js && node --check src/mx10-printer.js && node --check src/workspace-ui.js && node --check src/customer-ui.js && node --check src/transaction-records.js && node --check src/transaction-workflow.js && node --check src/settings-ui.js && node --check src/preferences.js && node --check src/analytics.js && node --check src/analytics-report.js && node --check server.mjs && node --check src/rental-desk.js && node --check src/release-verification.js && node --check src/qr-reader.js && node --check src/notifications.js",
     "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "jsqr": "^1.4.0"
   }
 }

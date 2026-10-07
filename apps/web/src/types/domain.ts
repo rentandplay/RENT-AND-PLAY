@@ -1,9 +1,11 @@
-export type ItemStatus = "AVAILABLE" | "RENTED" | "UNDER_MAINTENANCE";
+export type ItemStatus = "AVAILABLE" | "RESERVED_PENDING" | "RENTED" | "UNDER_MAINTENANCE";
 export type VerificationStatus = "PENDING" | "CONFIRMED" | "REJECTED" | "EXPIRED";
 export type RentalStatus =
+  | "PENDING_ADMIN_APPROVAL"
   | "PENDING_VERIFICATION"
   | "ACTIVE"
   | "COMPLETED"
+  | "CANCELLED"
   | "REJECTED"
   | "EXPIRED";
 

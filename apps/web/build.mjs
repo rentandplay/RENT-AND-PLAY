@@ -7,6 +7,7 @@ const output = path.join(root, 'dist');
 const sourceFiles = [
     'app.js',
     'api-client.js',
+    'notifications.js',
     'date-time.js',
     'workspace-navigation.js',
     'confirmation-dialog.js',
@@ -20,6 +21,9 @@ const sourceFiles = [
     'customer-ui.js',
     'transaction-records.js',
     'transaction-workflow.js',
+    'rental-desk.js',
+    'release-verification.js',
+    'qr-reader.js',
     'settings-ui.js',
     'preferences.js',
     'analytics.js',

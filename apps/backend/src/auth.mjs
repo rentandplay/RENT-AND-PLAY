@@ -1,6 +1,7 @@
 import {firebaseAuth,requireFirebaseConfig} from './firebase.mjs';
+import { normalizeRole } from './roles.mjs';
 
-export const publicUser = row => ({ id: String(row.id), name: row.full_name, email: row.email, role: row.role });
+export const publicUser = row => ({ id: String(row.id), name: row.full_name, email: row.email, role: normalizeRole(row.role) || row.role });
 
 export class FirebaseSessions {
   constructor(auth=firebaseAuth,fetcher=fetch){this.auth=auth;this.fetcher=fetcher;this.revoked=new Set();}

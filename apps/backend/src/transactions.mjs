@@ -2,6 +2,8 @@ import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import { asDate, docData, localDateTime } from './firebase.mjs';
 import { DEFAULT_PRICING, quoteRental, validatePricing } from './pricing.mjs';
 import { firebaseFailure, isQuotaError } from './firebase-errors.mjs';
+import { isMobileRental } from './mobile.mjs';
+import { queueRentalNotification } from './notifications.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const rows = snapshot => snapshot.docs.map(docData);
@@ -23,7 +25,11 @@ const dateValue = (value, label) => {
   if (!Number.isFinite(date.getTime())) fail(400, `Enter a valid ${label.toLowerCase()}.`);
   return date;
 };
-const isOpen = rental => ['ACTIVE', 'PENDING_VERIFICATION'].includes(rental.status);
+const isOpen = rental => ['ACTIVE', 'APPROVED', 'RETURN_PENDING_INSPECTION', 'PENDING_VERIFICATION', 'PENDING_ADMIN_APPROVAL', 'PENDING_ESP32_RENT'].includes(String(rental.status || '').toUpperCase());
+export async function rentalsForItem(tx, db, itemId) {
+  const snapshots = await Promise.all(['item_id', 'itemId'].map(field => tx.get(db.collection('rentals').where(field, '==', itemId))));
+  return { docs: [...new Map(snapshots.flatMap(snapshot => snapshot.docs).map(doc => [doc.id, doc])).values()] };
+}
 const requestType = request => String(request.transaction_type || request.type || '').toUpperCase();
 const expired = (request, now) => { const deadline = asDate(request.expires_at); return deadline && Number.isFinite(deadline.getTime()) && deadline <= now; };
 
@@ -77,7 +83,7 @@ export function finalCharges(rental, request) {
   return { ...saved, snapshot_version: saved.snapshot_version || null, pricing_source: saved.pricing_source || 'LEGACY_INCOMPLETE', rental_fee: amount(saved.rental_fee) ? saved.rental_fee : amount(rental.rental_fee) ? rental.rental_fee : null, deposit_amount: saved.deposit_amount ?? rental.deposit_amount ?? null, due_at: saved.due_at || rental.due_at || null, actual_return_at: request.actual_return_at, overtime_units: units, overtime_fee: overtime, penalty_amount: penalty, penalty_reason: request.penalty_reason || null, final_rental_charges: total, finalized_at: null };
 }
 
-async function frozenQuote(tx, db, item, input, now) {
+export async function frozenQuote(tx, db, item, input, now) {
   const [pricingDoc, businessDoc, rateDocs] = await Promise.all([tx.get(ref(db, 'settings', 'pricing')), tx.get(ref(db, 'settings', 'business')), tx.get(db.collection('item_rates').where('item_id', '==', item.id))]);
   const grace = Number(businessDoc.exists ? businessDoc.data().default_late_grace_hours ?? 0 : 0);
   if (!Number.isFinite(grace) || grace < 0 || grace > 168) fail(400, 'Correct the business grace period before requesting a rental.');
@@ -110,15 +116,28 @@ function requestRecord(rentalId, itemId, terminal, type, now, ttlSeconds) {
 const actorId = actor => String(actor.id || actor);
 const audit = (tx, db, actor, action, id, now, extra = {}) => tx.create(db.collection('audit_logs').doc(), { actor_type: extra.actor_type || 'USER', user_id: actor, action, entity_type: 'VERIFICATION_REQUEST', entity_id: id, created_at: now, ...extra });
 
+export async function quoteEquipmentRental(db, input, now = new Date()) {
+  if (!input || typeof input !== 'object') fail(400, 'Rental details are required.');
+  const itemId = idValue(input.itemId);
+  const fee = await db.runTransaction(async tx => {
+    const [itemDoc, openDocs] = await Promise.all([tx.get(ref(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
+    if (!itemDoc.exists) fail(404, 'Equipment not found.');
+    const item = docData(itemDoc);
+    if (item.is_active === false || String(item.status).toUpperCase() !== 'AVAILABLE' || item.reserved_rental_id || rows(openDocs).some(isOpen)) fail(409, 'This equipment already has an open rental or is unavailable.');
+    return frozenQuote(tx, db, item, input, now);
+  });
+  return serializeTransaction({ quote: { ...fee, total_to_collect: round(fee.rental_fee + fee.deposit_amount), overtime_rate_per_hour: fee.overtime_rate, warnings: [] } });
+}
+
 export async function createRentalRequest(db, actor, input, now = new Date(), ttlSeconds = 600) {
   if (!input || typeof input !== 'object') fail(400, 'Rental details are required.');
   const itemId = idValue(input.itemId), customerId = idValue(input.customerId), terminalId = idValue(input.terminalId);
   const rentalRef = db.collection('rentals').doc(), requestRef = db.collection('verification_requests').doc();
   const result = await db.runTransaction(async tx => {
-    const [itemDoc, customerDoc, terminalDoc, openDocs] = await Promise.all([tx.get(ref(db, 'items', itemId)), tx.get(ref(db, 'customers', customerId)), tx.get(ref(db, 'terminals', terminalId)), tx.get(db.collection('rentals').where('item_id', '==', itemId))]);
+    const [itemDoc, customerDoc, terminalDoc, openDocs] = await Promise.all([tx.get(ref(db, 'items', itemId)), tx.get(ref(db, 'customers', customerId)), tx.get(ref(db, 'terminals', terminalId)), rentalsForItem(tx, db, itemId)]);
     if (!itemDoc.exists || !customerDoc.exists || !terminalDoc.exists) fail(404, 'Equipment, customer, or terminal not found.');
     const item = docData(itemDoc), terminal = docData(terminalDoc);
-    if (item.is_active === false || item.status !== 'AVAILABLE' || item.reserved_rental_id || rows(openDocs).some(isOpen)) fail(409, 'This equipment already has an open rental or is unavailable.');
+    if (item.is_active === false || String(item.status).toUpperCase() !== 'AVAILABLE' || item.reserved_rental_id || rows(openDocs).some(isOpen)) fail(409, 'This equipment already has an open rental or is unavailable.');
     if (customerDoc.data().is_active === false || terminal.is_active === false) fail(409, 'Select an active customer and terminal.');
     if (!/^[a-f0-9]{64}$/.test(terminal.auth_token_hash || '')) fail(409, 'Configure the terminal device credential before requesting a handoff.');
     const fee = await frozenQuote(tx, db, item, input, now);
@@ -131,6 +150,47 @@ export async function createRentalRequest(db, actor, input, now = new Date(), tt
     return { rental: { id: rentalRef.id, ...rental }, request: { id: requestRef.id, ...request } };
   });
   return serializeTransaction(result);
+}
+
+export async function createMobileRentalRequest(db, actor, input, now = new Date()) {
+  return (await import('./rental-flow.mjs')).createBooking(db, actor, input, now);
+}
+
+export async function reviewMobileRental(db, actor, rentalId, input, now = new Date()) {
+  return (await import('./rental-flow.mjs')).reviewBooking(db, actor, rentalId, input, now);
+}
+
+export async function requestMobileReturn(db, actor, rentalId, input = {}, now = new Date()) {
+  const id = idValue(rentalId), rentalRef = ref(db, 'rentals', id);
+  const condition = String(input.condition || 'GOOD').toUpperCase();
+  if (!['GOOD', 'FAIR', 'DAMAGED', 'NEEDS_INSPECTION'].includes(condition)) fail(400, 'Choose a valid equipment condition.');
+  const notes = typeof input.notes === 'string' ? input.notes.trim().slice(0, 2000) : '';
+  const result = await db.runTransaction(async tx => {
+    const rentalDoc = await tx.get(rentalRef);
+    if (!rentalDoc.exists) fail(404, 'Rental not found.');
+    const rental = docData(rentalDoc);
+    if (String(rental.customer_id ?? rental.customerId) !== actorId(actor)) fail(403, 'You can only return your own rental.');
+    if (String(rental.status).toUpperCase() !== 'ACTIVE') fail(409, 'Only an approved active rental can be returned.');
+    if (!isMobileRental(rental)) fail(409, 'Bring this equipment to the operator for its counter return.');
+    const itemDoc = await tx.get(ref(db, 'items', idValue(rental.item_id ?? rental.itemId)));
+    if (!itemDoc.exists || String(itemDoc.data().status).toUpperCase() !== 'RENTED') fail(409, 'The rental and equipment status must be reviewed by an administrator.');
+    if (rental.latest_return_request_status === 'PENDING_ADMIN_APPROVAL') return { rental, duplicate: true };
+    const request = { status: 'PENDING', requested_at: now, requested_by: actorId(actor), reported_condition: condition, notes };
+    const changes = { mobile_return_request: request, latest_return_request_status: 'PENDING_ADMIN_APPROVAL', return_request_revision: (rental.return_request_revision || 0) + 1, updated_at: now };
+    tx.update(rentalRef, changes);
+    audit(tx, db, actorId(actor), 'MOBILE_RETURN_REQUESTED', id, now, { rental_id: id, actor_type: 'CUSTOMER' });
+    queueRentalNotification(tx, db, { ...rental, ...changes }, 'RETURN_REQUESTED', now, { audience: 'STAFF', revision: changes.return_request_revision });
+    return { rental: { ...rental, ...changes } };
+  });
+  return serializeTransaction(result);
+}
+
+export async function reviewMobileReturn(db, actor, rentalId, input, now = new Date()) {
+  return (await import('./rental-flow.mjs')).completeRentalReturn(db, actor, rentalId, input, now);
+}
+
+export async function cancelMobileRentalRequest(db, actor, rentalId, now = new Date()) {
+  return (await import('./rental-flow.mjs')).cancelBooking(db, actor, rentalId, now);
 }
 
 export async function createReturnRequest(db, actor, input, now = new Date(), ttlSeconds = 600) {
@@ -243,7 +303,7 @@ export async function resolveTerminalRequest(db, terminal, input, now = new Date
     const condition = { ...inspection, id: conditionRef.id, rental_id: rentalDoc.id, item_id: String(itemId), verification_request_id: requestId, phase: request.transaction_type === 'RENTAL' ? 'RELEASE' : 'RETURN', terminal_id: terminal.id, terminal_code: terminal.terminal_code || terminal.id, confirmed_at: now };
     let changes, newStatus;
     if (request.transaction_type === 'RENTAL') {
-      if (rental.status !== 'PENDING_VERIFICATION' || item.is_active === false || item.status !== 'AVAILABLE' || (item.reserved_rental_id && item.reserved_rental_id !== rentalDoc.id)) fail(409, 'Equipment is no longer reserved for this rental.');
+      if (rental.status !== 'PENDING_VERIFICATION' || item.is_active === false || String(item.status).toUpperCase() !== 'AVAILABLE' || (item.reserved_rental_id && item.reserved_rental_id !== rentalDoc.id)) fail(409, 'Equipment is no longer reserved for this rental.');
       if (!rental.fee_breakdown?.snapshot_version || asDate(rental.due_at) <= now) fail(409, 'A saved quote with a future due time is required. Submit a new rental request.');
       newStatus = 'RENTED'; changes = { status: 'ACTIVE', confirmed_rental_at: now, release_condition: condition, release_condition_record_id: conditionRef.id, confirmed_rental_terminal_id: terminal.id };
     } else {
@@ -290,7 +350,9 @@ export function createExpirySweep(db, { intervalMs = 30000, now = Date.now, onEx
     run({ force = false } = {}) {
       if (pending) return pending;
       if (!force && now() - lastSuccess < intervalMs) return Promise.resolve({ expired: 0 });
-      pending = expireVerificationRequests(db).then(result => {
+      const sweepAt = new Date(now());
+      pending = Promise.all([expireVerificationRequests(db, sweepAt), import('./rental-flow.mjs').then(flow => flow.expireRentalHolds(db, sweepAt))]).then(results => {
+        const result = { expired: results.reduce((total, entry) => total + entry.expired, 0) };
         lastSuccess = now();
         if (result.expired) onExpired(result);
         return result;

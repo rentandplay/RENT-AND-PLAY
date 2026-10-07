@@ -10,6 +10,10 @@ const conditions=['GOOD','FAIR','DAMAGED','NEEDS_INSPECTION'];
 const dateKeys=['created_at','updated_at','effective_from','effective_to','changed_at','started_at','completed_at'];
 const serialize=record=>dateFields(record,dateKeys);
 const rows=snapshot=>snapshot.docs.map(docData);
+async function itemRentalDocs(db,id,tx=null) {
+  const snapshots=await Promise.all(['item_id','itemId'].map(field=>{const query=db.collection('rentals').where(field,'==',id);return tx?tx.get(query):query.get();}));
+  return {docs:[...new Map(snapshots.flatMap(snapshot=>snapshot.docs).map(doc=>[doc.id,doc])).values()]};
+}
 const newest=(records,key)=>records.sort((a,b)=>(asDate(b[key])?.getTime()||0)-(asDate(a[key])?.getTime()||0));
 function validateImageData(value) {
   if(value===undefined)return undefined;
@@ -39,29 +43,29 @@ export function validateItem(input,{codeRequired=true}={}) {
   if(pricingProductId&&!DEFAULT_PRICING.products.some(product=>product.id===pricingProductId))fail(400,'Choose a product from the client rate sheet.');
   return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,rateType:input.rateType,rentalRate:amount(input.rentalRate,'Rental rate'),deposit:amount(input.deposit,'Deposit'),latePenalty:amount(input.latePenalty,'Late penalty'),pricingProductId,imageData:validateImageData(input.imageData)};
 }
-export function itemCodePrefix(categoryName) {
-  const words=String(categoryName||'').toUpperCase().match(/[A-Z0-9]+/g)||[];
-  const prefix=(words.length>1?words.map(word=>word[0]).join(''):words[0]||'ITEM').slice(0,5);
-  return prefix.length>=2?prefix:'ITEM';
+export function equipmentItemCode(sequence) {
+  if(!Number.isSafeInteger(sequence)||sequence<1)fail(400,'Equipment code sequence must be a positive whole number.');
+  return `RENT-${String(sequence).padStart(3,'0')}`;
 }
 export function assertEditable(item,openRentals,action) {
-  if(openRentals>0||['RENTED','RESERVED_PENDING'].includes(item.status))fail(409,`Cannot ${action} equipment with an active or pending rental. Use the rental/return verification workflow.`);
+  if(openRentals>0||item.reserved_rental_id||['RENTED','RESERVED_PENDING'].includes(String(item.status).toUpperCase()))fail(409,`Cannot ${action} equipment with an active or pending rental. Use the rental/return verification workflow.`);
 }
 
 const currentRate=(rates,now=new Date())=>newest(rates.filter(rate=>rate.is_active!==false&&asDate(rate.effective_from)<=now&&(!rate.effective_to||asDate(rate.effective_to)>now)),'effective_from')[0];
-const openRentals=rentals=>rentals.filter(rental=>['ACTIVE','PENDING_VERIFICATION'].includes(rental.status));
+const openRentals=rentals=>rentals.filter(rental=>['ACTIVE','APPROVED','RETURN_PENDING_INSPECTION','PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','PENDING_ESP32_RENT'].includes(String(rental.status||'').toUpperCase()));
 const openMaintenance=records=>records.filter(record=>['OPEN','IN_PROGRESS'].includes(record.status));
 const mapItem=(item,category,rates,rentals,maintenance)=>{
   const rate=currentRate(rates)||{};
   const open=openRentals(rentals).length;
-  return serialize({...item,id:String(item.id),category_id:String(item.category_id),category:category?.name||'Uncategorized',rate_type:rate.rate_type??null,rental_rate:rate.rental_rate??null,deposit_amount:rate.deposit_amount??null,late_penalty_rate:rate.late_penalty_rate??null,pricing_product_id:item.pricing_product_id||null,open_rentals:open,open_maintenance:openMaintenance(maintenance).length,effective_status:item.is_active===false?'INACTIVE':item.status==='AVAILABLE'&&open>0?'RESERVED_PENDING':item.status});
+  const status=String(item.status||'UNAVAILABLE').toUpperCase();
+  return serialize({...item,id:String(item.id),status,category_id:String(item.category_id),category:category?.name||item.category||'Uncategorized',rate_type:rate.rate_type??null,rental_rate:rate.rental_rate??null,deposit_amount:rate.deposit_amount??null,late_penalty_rate:rate.late_penalty_rate??null,pricing_product_id:item.pricing_product_id||null,open_rentals:open,open_maintenance:openMaintenance(maintenance).length,effective_status:item.is_active===false?'INACTIVE':status==='AVAILABLE'&&(open>0||item.reserved_rental_id)?'RESERVED_PENDING':status});
 };
 
 export async function inventoryList(db) {
   const [itemSnap,categorySnap,rateSnap,rentalSnap,maintenanceSnap]=await Promise.all(['items','item_categories','item_rates','rentals','maintenance_records'].map(name=>db.collection(name).get()));
   const items=rows(itemSnap),categories=rows(categorySnap),rates=rows(rateSnap),rentals=rows(rentalSnap),maintenance=rows(maintenanceSnap);
   const byId=new Map(categories.map(category=>[category.id,category]));
-  return {items:items.map(item=>mapItem(item,byId.get(String(item.category_id)),rates.filter(r=>String(r.item_id)===item.id),rentals.filter(r=>String(r.item_id)===item.id),maintenance.filter(r=>String(r.item_id)===item.id))).sort((a,b)=>a.name.localeCompare(b.name)),categories:categories.sort((a,b)=>a.name.localeCompare(b.name))};
+  return {items:items.map(item=>mapItem(item,byId.get(String(item.category_id)),rates.filter(r=>String(r.item_id)===item.id),rentals.filter(r=>String(r.item_id??r.itemId)===item.id),maintenance.filter(r=>String(r.item_id)===item.id))).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))),categories:categories.sort((a,b)=>a.name.localeCompare(b.name))};
 }
 
 const categoryKey=name=>String(name||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('en-US');
@@ -107,7 +111,7 @@ async function itemParts(db,id) {
   id=idValue(id);
   const itemRef=db.collection('items').doc(id);
   const [itemDoc,rates,rentals,maintenance,history,categories]=await Promise.all([
-    itemRef.get(),db.collection('item_rates').where('item_id','==',id).get(),db.collection('rentals').where('item_id','==',id).get(),db.collection('maintenance_records').where('item_id','==',id).get(),db.collection('item_status_history').where('item_id','==',id).get(),db.collection('item_categories').get()
+    itemRef.get(),db.collection('item_rates').where('item_id','==',id).get(),itemRentalDocs(db,id),db.collection('maintenance_records').where('item_id','==',id).get(),db.collection('item_status_history').where('item_id','==',id).get(),db.collection('item_categories').get()
   ]);
   if(!itemDoc.exists)fail(404,'Equipment not found.');
   const item=docData(itemDoc),category=rows(categories).find(c=>c.id===String(item.category_id));
@@ -150,20 +154,20 @@ const rateRecord=(actor,id,item,now)=>({item_id:id,rate_type:item.rateType,renta
 export async function createItem(db,actor,input) {
   const item=validateItem(input,{codeRequired:false});
   if(!['GOOD','FAIR'].includes(item.condition))fail(400,'New equipment must be in good or fair condition. Record maintenance after adding damaged equipment.');
-  const itemRef=db.collection('items').doc(),categoryRef=db.collection('item_categories').doc(item.categoryId),rateRef=db.collection('item_rates').doc(),counterRef=db.collection('counters').doc('item_codes_'+item.categoryId);
+  const itemRef=db.collection('items').doc(),categoryRef=db.collection('item_categories').doc(item.categoryId),rateRef=db.collection('item_rates').doc(),counterRef=db.collection('counters').doc('item_codes_RENT');
   let generatedCode='';
   await db.runTransaction(async tx=>{
     const [categoryDoc,counterDoc]=await Promise.all([tx.get(categoryRef),tx.get(counterRef)]);
     if(!categoryDoc.exists)fail(400,'The selected category does not exist.');
-    const prefix=itemCodePrefix(categoryDoc.data().name),start=Math.max(1,Number(counterDoc.data()?.next_sequence||1));
-    const candidates=Array.from({length:25},(_,index)=>({sequence:start+index,code:`${prefix}-${String(start+index).padStart(4,'0')}`}));
+    const storedSequence=Number(counterDoc.data()?.next_sequence||1),start=Number.isSafeInteger(storedSequence)?Math.max(1,storedSequence):1;
+    const candidates=Array.from({length:25},(_,index)=>({sequence:start+index,code:equipmentItemCode(start+index)}));
     const codeRefs=candidates.map(candidate=>db.collection('item_codes').doc(candidate.code)),codeDocs=await Promise.all(codeRefs.map(ref=>tx.get(ref))),available=codeDocs.findIndex(doc=>!doc.exists);
     if(available<0)fail(409,'Could not allocate an equipment code. Try again.');
     const chosen=candidates[available],codeRef=codeRefs[available];generatedCode=chosen.code;
     const now=new Date(),id=itemRef.id;
     tx.create(codeRef,{item_id:id,created_at:now});
     tx.set(counterRef,{next_sequence:chosen.sequence+1,updated_at:now},{merge:true});
-    tx.create(itemRef,{item_code:generatedCode,category_id:item.categoryId,name:item.name,description:item.description,pricing_product_id:item.pricingProductId,...(item.imageData?{image_data:item.imageData}:{}),qr_token:'RENTPLAY:'+randomUUID(),condition_status:item.condition,status:'AVAILABLE',is_active:true,created_at:now,updated_at:now});
+    tx.create(itemRef,{item_code:generatedCode,qrCode:generatedCode,category_id:item.categoryId,name:item.name,description:item.description,pricing_product_id:item.pricingProductId,...(item.imageData?{image_data:item.imageData}:{}),qr_token:'RENTPLAY:'+randomUUID(),condition_status:item.condition,status:'AVAILABLE',is_active:true,created_at:now,updated_at:now});
     tx.create(rateRef,rateRecord(actor,id,item,now));
     const {imageData,...auditItem}=item,history=statusRecord(db,actor,id,null,'AVAILABLE','CREATED',now),log=audit(db,actor,id,'ITEM_CREATED',null,{...auditItem,code:generatedCode,imageAdded:!!imageData},now);
     tx.create(history.ref,history.data);tx.create(log.ref,log.data);
@@ -177,14 +181,14 @@ export async function updateItem(db,actor,id,input) {
     const itemDoc=await tx.get(itemRef);if(!itemDoc.exists)fail(404,'Equipment not found.');
     const current={id,...itemDoc.data()};
     const categoryRef=db.collection('item_categories').doc(next.categoryId);
-    const [categoryDoc,rentalsSnap,ratesSnap]=await Promise.all([tx.get(categoryRef),tx.get(db.collection('rentals').where('item_id','==',id)),tx.get(db.collection('item_rates').where('item_id','==',id))]);
+    const [categoryDoc,rentalsSnap,ratesSnap]=await Promise.all([tx.get(categoryRef),itemRentalDocs(db,id,tx),tx.get(db.collection('item_rates').where('item_id','==',id))]);
     if(typeof input.version!=='string'||input.version!==localDateTime(current.updated_at))fail(409,'This equipment changed since you opened it. Refresh and try again.');
     if(!categoryDoc.exists)fail(400,'The selected category does not exist.');
     if(current.is_active===false)fail(409,'Restore archived equipment before editing it.');
     const opened=openRentals(rows(rentalsSnap)).length;
     if(opened>0&&next.pricingProductId!==(current.pricing_product_id||null))fail(409,'Wait until the open rental is returned before changing its rate sheet product.');
     if(next.condition!==current.condition_status)assertEditable(current,opened,'change the condition of');
-    if(current.status==='AVAILABLE'&&!['GOOD','FAIR'].includes(next.condition))fail(400,'Start maintenance before marking equipment damaged or needing inspection.');
+    if(String(current.status).toUpperCase()==='AVAILABLE'&&!['GOOD','FAIR'].includes(next.condition))fail(400,'Start maintenance before marking equipment damaged or needing inspection.');
     const now=new Date(),rate=currentRate(rows(ratesSnap));
     const rateChanged=!rate||rate.rate_type!==next.rateType||Number(rate.rental_rate)!==next.rentalRate||Number(rate.deposit_amount)!==next.deposit||Number(rate.late_penalty_rate)!==next.latePenalty;
     if(rateChanged){for(const old of rows(ratesSnap).filter(r=>r.is_active!==false))tx.update(db.collection('item_rates').doc(old.id),{is_active:false,effective_to:now});tx.create(db.collection('item_rates').doc(),rateRecord(actor,id,next,now));}
@@ -203,11 +207,11 @@ export async function itemAction(db,actor,id,input) {
   await db.runTransaction(async tx=>{
     const itemDoc=await tx.get(itemRef);if(!itemDoc.exists)fail(404,'Equipment not found.');
     const item={id,...itemDoc.data()};
-    const [rentalsSnap,maintenanceSnap]=await Promise.all([tx.get(db.collection('rentals').where('item_id','==',id)),tx.get(db.collection('maintenance_records').where('item_id','==',id))]);
+    const [rentalsSnap,maintenanceSnap]=await Promise.all([itemRentalDocs(db,id,tx),tx.get(db.collection('maintenance_records').where('item_id','==',id))]);
     if(typeof input.version!=='string'||input.version!==localDateTime(item.updated_at))fail(409,'This equipment changed since you opened it. Refresh and try again.');
     const rentalCount=openRentals(rows(rentalsSnap)).length,maintenance=openMaintenance(rows(maintenanceSnap));
     assertEditable(item,rentalCount,input.action==='archive'?'archive':'change the availability of');
-    let status=item.status,active=item.is_active!==false,condition=item.condition_status;const now=new Date();
+    let status=String(item.status).toUpperCase(),active=item.is_active!==false,condition=item.condition_status;const now=new Date();
     if(input.action==='maintenance'){
       if(!active||status!=='AVAILABLE'||maintenance.length)fail(409,'Only available equipment without an open maintenance record can enter maintenance.');
       const reason=text(input.reason,255,'Maintenance reason');if(!conditions.includes(input.condition))fail(400,'Choose a valid condition.');
@@ -237,7 +241,7 @@ export async function deleteArchivedItem(db,actor,id,input) {
     const itemDoc=await tx.get(itemRef);
     if(!itemDoc.exists)fail(404,'Equipment not found.');
     const item={id,...itemDoc.data()};
-    const [rentalsSnap,maintenanceSnap]=await Promise.all([tx.get(db.collection('rentals').where('item_id','==',id)),tx.get(db.collection('maintenance_records').where('item_id','==',id))]);
+    const [rentalsSnap,maintenanceSnap]=await Promise.all([itemRentalDocs(db,id,tx),tx.get(db.collection('maintenance_records').where('item_id','==',id))]);
     if(input.version!==localDateTime(item.updated_at))fail(409,'This equipment changed since you opened it. Refresh and try again.');
     if(item.is_active!==false)fail(409,'Archive this equipment before permanently deleting it.');
     if(openRentals(rows(rentalsSnap)).length)fail(409,'Equipment with an active or pending rental cannot be deleted.');

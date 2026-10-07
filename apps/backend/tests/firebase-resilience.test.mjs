@@ -24,10 +24,10 @@ test('display models share collection reads, and saved equipment invalidates all
   const fixture = countedDatabase({ item_categories: { sports: { name: 'Sports equipment' } }, users: { admin: { full_name: 'Admin', role: 'ADMIN', is_active: true } } });
   const services = createFirebaseServices({ db: fixture.db });
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 15); // 14 unique display queries plus one expiry sweep.
+  assert.equal(fixture.reads.length, 18); // 14 unique display queries plus four expiry queries.
   for (const name of ['items', 'item_categories', 'item_rates', 'rentals', 'customers', 'verification_requests', 'terminals']) assert.equal(fixture.reads.filter(read => read.label === name).length, 1);
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 15);
+  assert.equal(fixture.reads.length, 18);
   const created = await services.createItem('admin', { categoryId: 'sports', name: 'Basketball', condition: 'GOOD', rateType: 'HOURLY', rentalRate: 50, deposit: 100, latePenalty: 10 });
   const [dashboard, workspace, inventory] = await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
   assert.equal(dashboard.items[0].id, created.id); assert.equal(workspace.items[0].id, created.id); assert.equal(inventory.items[0].id, created.id);

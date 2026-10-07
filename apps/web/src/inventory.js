@@ -3,12 +3,19 @@ import { createEquipmentQrLabel as qrLabelSvg, QR_LABEL_GEOMETRY as qrLabelGeome
 
 const printer = createMx10Printer();
 
+const archiveUnavailableReason = item => {
+  if (item.is_active === false) return 'Equipment is already archived.';
+  if (Number(item.open_rentals) > 0 || item.reserved_rental_id || [item.status, item.effective_status].some(status => ['RENTED', 'RESERVED_PENDING'].includes(status))) return 'Finish the active or pending rental before archiving.';
+  if (Number(item.open_maintenance) > 0 || [item.status, item.effective_status].includes('UNDER_MAINTENANCE')) return 'Complete maintenance before archiving.';
+  return '';
+};
+
 export function createInventory(h) {
   const { api, escape: e, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, confirmAction, confirmSubmit } = h;
   const cash = n => n == null ? 'Not configured' : new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2 }).format(Number(n));
   const unit = t => ({ DAILY: 'per day', HOURLY: 'per hour', FLAT: 'flat fee' })[t] || '';
   const label = s => String(s || 'Not recorded').toLowerCase().replaceAll('_', ' ').replace(/^./, c => c.toUpperCase());
-  const equipmentImages = [[/\bbike\b/i, 'Bike.png'], [/\bbadminton\b/i, 'Badminton_Set.png'], [/\bpickleball\b/i, 'Pickleball_Set.png'], [/\bbasketball\b/i, 'Basketball.png'], [/\bvolleyball\b/i, 'Volleyball.png'], [/\bps4\b|playstation\s*4/i, 'PS4.png'], [/\bnintendo\s*switch\b/i, 'Nintendo_Switch.png'], [/\buno\b/i, 'UNO_Cards.png'], [/\bbingo\b/i, 'Bingo.png'], [/\bjenga\b/i, 'Jenga.png'], [/\bscrabble\b/i, 'Scrabble.png'], [/\bchess\b/i, 'Chess.png'], [/\bdeck\s+of\s+cards?\b|\bplaying\s+cards?\b|\bcards?\b/i, 'Playing_Cards.png']];
+  const equipmentImages = [[/\bbike\b|\bbicycle\b/i, 'Bike.png'], [/\bbadminton\b/i, 'Badminton_Set.png'], [/\bpickleball\b/i, 'Pickleball_Set.png'], [/\bbasketball\b/i, 'Basketball.png'], [/\bvolleyball\b/i, 'Volleyball.png'], [/\bps4\b|playstation\s*[45]/i, 'PS4.png'], [/\bnintendo\s*switch\b/i, 'Nintendo_Switch.png'], [/\buno\b/i, 'UNO_Cards.png'], [/\bbingo\b/i, 'Bingo.png'], [/\bjenga\b/i, 'Jenga.png'], [/\bscrabble\b/i, 'Scrabble.png'], [/\bchess\b/i, 'Chess.png'], [/\bdeck\s+of\s+cards?\b|\bplaying\s+cards?\b|\bcards?\b/i, 'Playing_Cards.png']];
   const imageFilename = name => equipmentImages.find(([pattern]) => pattern.test(name || ''))?.[1] || '';
   async function prepareEquipmentImage(file) {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('Choose a JPG, PNG, or WebP image.');
@@ -109,7 +116,7 @@ export function createInventory(h) {
     if (!pricingRequest) {
       const version = sessionVersion;
       const pending = inventoryApi('/pricing').then(pricing => {
-        if (version === sessionVersion) { pricingProducts = pricing.products || []; pricingLoaded = true; }
+        if (version === sessionVersion) { pricingProducts = pricing.products || []; pricingLoaded = true; if (initialized) draw(); }
         return pricingProducts;
       }).finally(() => { if (pricingRequest === pending) pricingRequest = null; });
       pricingRequest = pending;
@@ -166,11 +173,11 @@ export function createInventory(h) {
       onPrevious: () => { offset = Math.max(0, offset - pageSize()); draw(); },
       onNext: () => { offset += pageSize(); draw(); },
       onAdd: () => form(), onReset: reset, onEmptyAction: () => scope === 'archived' ? switchScope('active') : records.some(isActive) ? reset() : form(),
-      onExport: exportInventory, onQrExport: () => saveQrSheet(records), onDetails: details
+      onExport: exportInventory, onQrExport: () => saveQrSheet(records), onDetails: details, onItemAction: quickAction
     });
     const rows = filtered(), currentPageSize = pageSize();
     offset = Math.min(offset, Math.max(0, Math.ceil(rows.length / currentPageSize) - 1) * currentPageSize);
-    inventoryView.update({ records, categories, rows, shown: rows.slice(offset, offset + currentPageSize), search, cat, status, scope, sort, view, offset, pageSize: currentPageSize, syncError });
+    inventoryView.update({ records, categories, pricingProducts, rows, shown: rows.slice(offset, offset + currentPageSize), search, cat, status, scope, sort, view, offset, pageSize: currentPageSize, syncError });
   }
   function switchScope(next) { scope = next; status = 'all'; offset = 0; draw(); }
   function reset() { search = ''; cat = ''; status = 'all'; scope = 'active'; offset = 0; draw(); }
@@ -181,6 +188,18 @@ export function createInventory(h) {
   }
   const errorBody = err => `<p role="alert">${e(err.message)}</p><p>Close this dialog and refresh to try again.</p>`;
   async function edit(id) { try { const { item } = await inventoryApi('/inventory/' + id); await form(item); } catch (err) { showModal('Unable to open equipment', errorBody(err)); } }
+  async function quickAction(id, action) {
+    if (action === 'view') return details(id);
+    if (action === 'edit') return edit(id);
+    if (!['qr', 'archive'].includes(action)) return;
+    try {
+      const { item } = await inventoryApi('/inventory/' + id);
+      if (action === 'qr') return qr(item);
+      const reason = archiveUnavailableReason(item);
+      if (reason) { toast(reason); return; }
+      actionForm(item, 'archive');
+    } catch (err) { showModal('Unable to open equipment', errorBody(err)); }
+  }
   async function form(item) {
     if (!pricingLoaded) {
       showModal('Opening equipment editor', '<p id="inv-editor-loading" role="status">Loading pricing options…</p>');
@@ -192,6 +211,7 @@ export function createInventory(h) {
     const options = (values, selected) => values.map(v => `<option value="${v}" ${v === selected ? 'selected' : ''}>${label(v)}</option>`).join('');
     const field = (name, title, type, value, extra = '') => `<label>${title}<input name="${name}" type="${type}" value="${e(value)}" ${extra} required/></label>`;
     const defaultImage = imageFilename(item?.name), initialImage = item?.image_data || (defaultImage ? `/public/images/${defaultImage}` : ''), placeholderCategory = item?.category || categories.find(c => String(c.id) === String(item?.category_id || cat))?.name || '';
+    const savedCondition = item?.condition_status || 'GOOD', conditionLocked = Boolean(item && (Number(item.open_rentals) > 0 || item.reserved_rental_id || ['RENTED', 'RESERVED_PENDING'].includes(item.status)));
     const imageEditor = `<section class="inv-image-editor"><div class="inv-image-preview" id="inv-form-image-preview">${initialImage ? `<img src="${e(initialImage)}" alt="${e(item?.name || 'Equipment image')}"/>` : `<span>${symbol(placeholderCategory)}</span>`}</div><div class="inv-image-editor-copy"><strong>Equipment image</strong><p>Upload a photo to use on this equipment card.</p><div class="inv-image-actions"><label class="secondary inv-image-picker">Choose image<input id="inv-image-file" type="file" accept="image/jpeg,image/png,image/webp"/></label><button type="button" class="secondary" id="inv-image-remove" ${item?.image_data ? '' : 'hidden'}>Remove image</button></div><small>JPG, PNG, or WebP · resized automatically</small><p class="inv-error" id="inv-image-error" role="alert"></p></div><input type="hidden" name="imageData" value="${e(item?.image_data || '')}"/></section>`;
     showModal(item ? 'Edit equipment' : 'Add equipment', `<form id="inv-form" class="inv-form inv-equipment-form">
       <p class="inv-form-intro">${item ? 'Update equipment details and pricing.' : 'Add a photo, equipment details, and rental pricing.'}</p>
@@ -214,7 +234,7 @@ export function createInventory(h) {
               </div>
             </div>
           </div>
-          <label>Condition<select name="condition" ${item && Number(item.open_rentals) > 0 ? 'disabled' : ''}>${options(item?.status === 'UNDER_MAINTENANCE' ? ['GOOD', 'FAIR', 'DAMAGED', 'NEEDS_INSPECTION'] : ['GOOD', 'FAIR'], item?.condition_status || 'GOOD')}</select></label>
+          <label>Condition<select name="condition" ${conditionLocked ? 'disabled aria-describedby="inv-condition-help"' : 'required'}>${options(item?.status === 'UNDER_MAINTENANCE' ? ['GOOD', 'FAIR', 'DAMAGED', 'NEEDS_INSPECTION'] : ['GOOD', 'FAIR'], savedCondition)}</select>${conditionLocked ? '<small id="inv-condition-help">Locked while a rental is open. Record the condition during return inspection.</small>' : ''}</label>
           <label class="inv-equipment-notes">Description / equipment notes<textarea name="description" maxlength="2000" rows="3" placeholder="Size, color, included accessories, or identifying marks">${e(item?.description || '')}</textarea></label>
         </div>
       </section>
@@ -250,7 +270,7 @@ export function createInventory(h) {
       pricingSelect.add(new Option('Current pricing product', item.pricing_product_id)); pricingSelect.value = item.pricing_product_id;
     }
     pricingSelect.onchange = () => { const product = pricingProducts.find(p => p.id === pricingSelect.value); if (!product || item) return; const rate = product.rate_options.find(row => row.kind === 'HOURLY') || product.rate_options.find(row => row.kind !== 'WHOLE_STAY'); if (rate) { formEl.elements.rateType.value = rate.kind === 'HOURLY' ? 'HOURLY' : rate.kind === 'BLOCK' ? 'FLAT' : 'HOURLY'; formEl.elements.rentalRate.value = rate.amount; } formEl.elements.deposit.value = product.deposit_amount; formEl.elements.latePenalty.value = product.overtime_rate_per_hour; };
-    if (item) { if (!Array.from(conditionSelect.options).some(o => o.value === item.condition_status)) conditionSelect.add(new Option(label(item.condition_status), item.condition_status)); conditionSelect.value = item.condition_status; conditionSelect.disabled = Number(item.open_rentals) > 0 || ['RENTED', 'RESERVED_PENDING'].includes(item.status); }
+    if (item) { if (!Array.from(conditionSelect.options).some(o => o.value === savedCondition)) conditionSelect.add(new Option(label(savedCondition), savedCondition)); conditionSelect.value = savedCondition; conditionSelect.disabled = conditionLocked; }
     const categoryPopover = modal.querySelector('#inv-category-popover'), categoryButton = modal.querySelector('#inv-add-category'), categoryRemoveButton = modal.querySelector('#inv-remove-category'), categoryInput = modal.querySelector('#inv-new-category-name'), categoryError = modal.querySelector('#inv-category-error'), categorySave = modal.querySelector('#inv-category-save'), categoryDiscard = modal.querySelector('#inv-category-discard'), categorySelect = formEl.elements.categoryId;
     const equipmentSave = formEl.querySelector('[type="submit"]');
     const syncCategoryRemoveButton = () => { categoryRemoveButton.disabled = categories.length <= 1; categoryRemoveButton.title = categories.length <= 1 ? 'Keep at least one equipment category.' : 'Remove the selected category'; };
@@ -296,7 +316,7 @@ export function createInventory(h) {
     syncCategoryRemoveButton();
     confirmSubmit(formEl, { title: item ? 'Save equipment changes?' : 'Add this equipment?', description: item ? 'The updated name, category, condition, notes, and rates will be saved.' : 'The equipment will be added to your active collection.', confirmLabel: item ? 'Yes, save changes' : 'Yes, add equipment' }, async () => {
       const values = Object.fromEntries(new FormData(formEl));
-      if (item && conditionSelect.disabled) values.condition = item.condition_status;
+      if (item && conditionSelect.disabled) values.condition = savedCondition;
       for (const key of ['rentalRate', 'deposit', 'latePenalty']) values[key] = Number(values[key]);
       if (item) values.version = item.updated_at;
       const saved = await submit(formEl, () => api('/inventory' + (item ? '/' + item.id : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(values) }), item ? 'Equipment updated.' : 'Equipment added.', item ? null : () => { scope = 'active'; status = 'all'; offset = 0; draw(); });
@@ -527,7 +547,7 @@ export function createInventory(h) {
 // Keep the inventory controls mounted while records change in the background.
 function createInventoryView(root, h) {
   const { escape: e, icon, symbol, badge, stateLabel, cash, unit, label, isActive, renderEquipmentImage } = h;
-  const statuses = [['all', 'All statuses'], ['AVAILABLE', 'Available'], ['RENTED', 'Rented'], ['RESERVED_PENDING', 'Pending verification'], ['UNDER_MAINTENANCE', 'Under maintenance'], ['archived', 'Archived']];
+  const statuses = [['all', 'All statuses'], ['AVAILABLE', 'Available'], ['RENTED', 'Rented'], ['RESERVED_PENDING', 'Reserved for booking'], ['UNDER_INSPECTION', 'Under inspection'], ['UNDER_MAINTENANCE', 'Under maintenance'], ['archived', 'Archived']];
   const sortOptions = [['name-asc', 'Name A–Z'], ['name-desc', 'Name Z–A'], ['newest', 'Newest first'], ['rate-asc', 'Rental rate: low to high'], ['rate-desc', 'Rental rate: high to low']];
   root.removeAttribute('aria-live'); root.removeAttribute('aria-busy');
   root.innerHTML = `<div class="inv-stats">${[['In collection', 'box'], ['Available', 'grid'], ['Out / reserved', 'clock'], ['In maintenance', 'settings']].map(([name, glyph], index) => `<div class="panel inv-stat"><span>${icon(glyph)}</span><div><small>${name}</small><strong data-inv-stat="${index}">0</strong></div></div>`).join('')}</div>
@@ -553,6 +573,7 @@ function createInventoryView(root, h) {
     const button = event.target.closest('button');
     if (button && root.contains(button)) {
       if (button.disabled) return;
+      if (button.dataset.invAction) return h.onItemAction(button.dataset.invId, button.dataset.invAction);
       if (button.dataset.invDetail) return h.onDetails(button.dataset.invDetail);
 
       const actions = { 'inv-add': h.onAdd, 'inv-clear': h.onReset, 'inv-empty-action': h.onEmptyAction, 'inv-export': h.onExport, 'inv-qr-export': h.onQrExport, 'inv-table': () => h.onView('table'), 'inv-grid': () => h.onView('grid'), 'inv-prev': h.onPrevious, 'inv-next': h.onNext };
@@ -573,16 +594,28 @@ function createInventoryView(root, h) {
   }
 
   const statusText = item => stateLabel(item.effective_status || item.status || 'Unknown');
-  const signature = item => JSON.stringify([item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.deposit_amount, item.image_data || '', isActive(item)]);
+  const itemProduct = item => (currentState?.pricingProducts || []).find(product => product.id === item.pricing_product_id);
+  const priceOptions = item => {
+    const product = itemProduct(item), rates = product?.rate_options?.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`) || [];
+    const salePrice = product?.sale_price ?? item.sale_price;
+    if (salePrice != null) rates.push(`Sale: ${cash(salePrice)}`);
+    return rates.length ? `<small class="inv-price-options">${rates.join(' · ')}</small>` : '';
+  };
+  const quickActions = item => {
+    const archiveReason = archiveUnavailableReason(item);
+    const actions = [['view', 'View', 'eye', ''], ['edit', 'Edit', 'edit', isActive(item) ? '' : 'Restore archived equipment before editing.'], ['qr', 'QR label', 'qr', ''], ['archive', 'Archive', 'archive', archiveReason]];
+    return `<div class="inv-item-actions" role="group" aria-label="Actions for ${e(item.name)}">${actions.map(([action, name, glyph, reason]) => `<button type="button" class="inv-quick-action${action === 'archive' ? ' inv-quick-archive' : ''}" data-inv-action="${action}" data-inv-id="${e(item.id)}" aria-label="${e(name)} for ${e(item.name)}" title="${e(reason || name)}" aria-haspopup="dialog" ${reason ? 'disabled' : ''}>${icon(glyph)}</button>`).join('')}</div>`;
+  };
+  const signature = item => JSON.stringify([item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.deposit_amount, item.pricing_product_id, item.sale_price, item.image_data || '', itemProduct(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id]);
   function itemNode(item, mode) {
     const node = document.createElement(mode === 'grid' ? 'article' : 'tr');
     node.dataset.invItem = String(item.id);
     if (mode === 'grid') {
       node.className = 'inv-card';
-      node.innerHTML = `<div class="inv-art">${symbol(item.category)}${badge(statusText(item))}</div><small>${e(item.category)} · ${e(item.item_code)}</small><h3><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button></h3><p>${label(item.condition_status)} condition</p><div class="inv-price"><strong>${cash(item.rental_rate)}</strong><small>${unit(item.rate_type)}</small></div>`;
+      node.innerHTML = `<div class="inv-art">${symbol(item.category)}${badge(statusText(item))}</div><small>${e(item.category)} · ${e(item.item_code)}</small><h3><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button></h3><p>${label(item.condition_status)} condition</p><div class="inv-price"><strong>${cash(item.rental_rate)}</strong><small>${unit(item.rate_type)}</small>${priceOptions(item)}</div>`;
       renderEquipmentImage(node.querySelector('.inv-art'), item, { keepBadge: true });
     } else {
-      node.innerHTML = `<td><div class="item-cell"><span class="item-symbol">${symbol(item.category)}</span><div><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button><small>${e(item.item_code)} · ${e(item.category)}</small></div></div></td><td>${badge(statusText(item))}<small>${label(item.condition_status)} condition</small></td><td><strong>${cash(item.rental_rate)}</strong><small>${unit(item.rate_type)}</small></td><td>${cash(item.deposit_amount)}</td>`;
+      node.innerHTML = `<td><div class="item-cell"><span class="item-symbol">${symbol(item.category)}</span><div><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button><small>${e(item.item_code)} · ${e(item.category)}</small></div></div></td><td>${badge(statusText(item))}<small>${label(item.condition_status)} condition</small></td><td><strong>${cash(item.rental_rate)}</strong><small>${unit(item.rate_type)}</small>${priceOptions(item)}</td><td>${cash(item.deposit_amount)}</td><td class="inv-actions-cell">${quickActions(item)}</td>`;
       renderEquipmentImage(node.querySelector('.item-symbol'), item);
     }
     signatures.set(node, signature(item));
@@ -608,7 +641,7 @@ function createInventoryView(root, h) {
 
   function update(state) {
     currentState = state;
-    const { records, rows, shown, search, cat, status, scope, sort, view, offset, pageSize, syncError } = state;
+    const { records, rows, shown, search, cat, status, scope, sort, view, offset, pageSize, syncError, pricingProducts = [] } = state;
     const text = (selector, value) => { const node = root.querySelector(selector); if (node.textContent !== value) node.textContent = value; };
     // Assign only differing values so typing, selection and composition stay intact.
     if (searchInput.value !== search) searchInput.value = search;
@@ -636,7 +669,7 @@ function createInventoryView(root, h) {
 
     const mode = shown.length ? view : scopedRecords.length ? 'filtered-empty' : 'empty';
     if (mode !== resultMode) {
-      if (mode === 'table') results.innerHTML = '<div class="table-scroll"><table class="inv-table"><thead><tr><th>EQUIPMENT</th><th>STATUS / CONDITION</th><th>RENTAL RATE</th><th>DEPOSIT</th></tr></thead><tbody></tbody></table></div>';
+      if (mode === 'table') results.innerHTML = '<div class="table-scroll"><table class="inv-table"><thead><tr><th scope="col">EQUIPMENT</th><th scope="col">STATUS / CONDITION</th><th scope="col">RENTAL RATE</th><th scope="col">DEPOSIT</th><th scope="col" class="inv-actions-cell">ACTIONS</th></tr></thead><tbody></tbody></table></div>';
       else if (mode === 'grid') results.innerHTML = '<div class="inv-card-grid"></div>';
       else results.innerHTML = `<div class="inv-empty"><span>${icon('box')}</span><h3>${scopedRecords.length ? 'No equipment matches this view' : scope === 'archived' ? 'Your archive is empty' : 'Your collection starts here'}</h3><p>${scopedRecords.length ? 'Try another category, status, or search.' : scope === 'archived' ? 'Archived equipment will appear here. You can restore it or permanently delete it.' : 'Add your first equipment with its rate and details.'}</p><button type="button" class="secondary" id="inv-empty-action">${scopedRecords.length ? 'Reset filters' : scope === 'archived' ? 'View equipment' : '＋ Add equipment'}</button></div>`;
       resultMode = mode;

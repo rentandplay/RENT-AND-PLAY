@@ -4,6 +4,7 @@ import { createConfirmationDialog } from './confirmation-dialog.js';
 import { bindRecordLinks, recordAttrs } from './record-links.js';
 import { pageRoutes, pageForPath, pageInfo } from './workspace-navigation.js';
 import { createApiClient } from './api-client.js';
+import { createRentalNotifications, renderRentalNotifications } from './notifications.js';
 const apiClient = createApiClient();
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
@@ -24,6 +25,8 @@ const icons = {
   arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', search: '<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',
   bell: '<path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3ZM10 21h4"/>', out: '<path d="M10 4H4v16h6M8 12h13m-4-4 4 4-4 4"/>',
   money: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 12h1M17 12h1"/>',
+  edit: '<path d="m16 3 5 5-12 12-6 1 1-6L16 3ZM14 5l5 5"/>',
+  archive: '<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v12h14V8M10 12h4"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>', qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v3M14 20h3M20 20h1"/>', menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   bluetooth: '<path d="m7 7 10 10-5 5V2l5 5L7 17"/>', print: '<path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/><path d="M17 11h.01"/>', download: '<path d="M12 3v12m-5-5 5 5 5-5M4 18v3h16v-3"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>'
@@ -126,7 +129,7 @@ async function api(path, options = {}) {
   let result;
   try { result = await apiClient.request(path, options); }
   catch (error) { if (error.status === 401 && user && !path.startsWith('/auth/')) endSession(); throw error; }
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(options.method || 'GET').toUpperCase()) && path !== '/pricing/quote') invalidateWorkspace();
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(options.method || 'GET').toUpperCase()) && path !== '/pricing/quote' && !path.startsWith('/notifications')) invalidateWorkspace();
   return result;
 }
 function toast(message) {
@@ -141,15 +144,25 @@ function goTo(next, replace = false, nextFilter = 'All rentals', nextCategory = 
   if (group) navGroupExpanded[group.id] = true;
   render(); window.scrollTo(0, 0); document.querySelector('#workspace-content')?.focus({ preventScroll: true });
 }
+function updateModalLayout() {
+  const form = modal.querySelector(':scope > .admin-form:not(.pricing-form):not(.customer-form):not(.rental-release-form)');
+  const fields = form ? [...form.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), select, textarea')].filter(field => !field.closest('[hidden]')) : [];
+  modal.classList.toggle('modal-compact', Boolean(form) && fields.length <= 4);
+}
+const modalLayoutObserver = new MutationObserver(updateModalLayout);
+modalLayoutObserver.observe(modal, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'type'] });
+
 function showModal(title, body) {
   confirmation.cancel();
   modal.innerHTML = `<div class="modal-heading"><h2>${escape(title)}</h2><button class="icon-button" id="close-modal" aria-label="Close dialog">✕</button></div>${body}`;
   modal.setAttribute('aria-label', title);
+  updateModalLayout();
   modal.showModal(); document.querySelector('#close-modal').onclick = () => modal.close();
 }
 function endSession() {
   if (!user) return;
   confirmation.cancel(); user = null; data = null; connectionError = '';
+  rentalNotifications.setAccount(null);
   inventoryController.reset(); workspaceUI.reset(); modal.close(); login('Your session ended. Please sign in again.');
 }
 function pageHeading() {
@@ -165,10 +178,11 @@ function notificationFingerprint() {
 }
 function notificationRows() {
   const overdue = data?.rentals.filter(r => r.displayStatus === 'Overdue') || [], pending = data?.pending || [];
-  return `${overdue.map(r => `<button type="button" data-notification-page="Rentals"><span class="notification-mark overdue-mark">!</span><span><strong>Overdue rental · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · Due ${escape(formatDate(r.due_at))}</small></span>${icon('arrow')}</button>`).join('')}${pending.map(r => `<button type="button" data-notification-page="ESP32 terminal"><span class="notification-mark pending-mark">•</span><span><strong>Verification waiting · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · ${escape(r.transaction_type)}</small></span>${icon('arrow')}</button>`).join('')}${!overdue.length && !pending.length ? '<div class="workspace-empty"><h3>You’re all caught up</h3><p>No overdue rentals or pending verifications.</p></div>' : ''}`;
+  const state = rentalNotifications.state();
+  return `${state.loading ? '<p class="notification-feedback">Loading rental updates…</p>' : ''}${state.error ? `<p class="notification-feedback" role="alert">${escape(state.error)} <button type="button" data-notification-retry>Retry</button></p>` : ''}${renderRentalNotifications(state, { escape, formatDate })}${overdue.map(r => `<button type="button" data-notification-page="Rentals"><span class="notification-mark overdue-mark">!</span><span><strong>Overdue rental · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · Due ${escape(formatDate(r.due_at))}</small></span>${icon('arrow')}</button>`).join('')}${pending.map(r => `<button type="button" data-notification-page="ESP32 terminal"><span class="notification-mark pending-mark">•</span><span><strong>Verification waiting · ${escape(r.item_name)}</strong><small>${escape(r.customer)} · ${escape(r.transaction_type)}</small></span>${icon('arrow')}</button>`).join('')}${state.nextCursor ? '<button type="button" class="notification-load-more" data-notification-older>Load older updates</button>' : ''}${!state.loading && !state.error && !state.notifications.length && !overdue.length && !pending.length ? '<div class="workspace-empty"><h3>You’re all caught up</h3><p>New booking and return updates will appear here.</p></div>' : ''}`;
 }
 function notificationsMenu(showDot) {
-  return `<div class="notification-menu"><button type="button" class="icon-button notification" id="notifications" aria-label="View notifications" aria-expanded="false" aria-controls="notification-dropdown">${icon('bell')}${showDot ? '<i></i>' : ''}</button><section class="notification-dropdown" id="notification-dropdown" aria-label="Notifications" hidden><header class="notification-dropdown-heading"><h2>Notifications</h2><span id="notification-count"></span></header><div class="notification-list"></div></section></div>`;
+  return `<div class="notification-menu"><button type="button" class="icon-button notification" id="notifications" aria-label="View notifications" aria-expanded="false" aria-controls="notification-dropdown">${icon('bell')}${showDot ? '<i></i>' : ''}</button><section class="notification-dropdown" id="notification-dropdown" aria-label="Notifications" hidden><header class="notification-dropdown-heading"><h2>Notifications</h2><span id="notification-count"></span></header><div class="notification-toolbar"><button type="button" class="text-button" data-notification-mark-read>Mark shown as read</button></div><div class="notification-list"></div></section></div>`;
 }
 function closeNotifications(restoreFocus = false) {
   const dropdown = document.querySelector('#notification-dropdown'), button = document.querySelector('#notifications');
@@ -179,19 +193,27 @@ function closeNotifications(restoreFocus = false) {
 function syncNotifications() {
   const dropdown = document.querySelector('#notification-dropdown'), list = dropdown?.querySelector('.notification-list');
   if (!list) return;
-  const snapshot = JSON.stringify([data?.rentals.filter(r => r.displayStatus === 'Overdue') || [], data?.pending || []]);
+  const state = rentalNotifications.state();
+  const snapshot = JSON.stringify([state, data?.rentals.filter(r => r.displayStatus === 'Overdue') || [], data?.pending || []]);
   // Keep a focused notification in place until the user leaves it.
   if (list.dataset.snapshot !== snapshot && !list.contains(document.activeElement)) {
     list.innerHTML = notificationRows(); list.dataset.snapshot = snapshot;
   }
-  const count = (data?.rentals.filter(r => r.displayStatus === 'Overdue').length || 0) + (data?.pending.length || 0);
-  dropdown.querySelector('#notification-count').textContent = count ? `${count} alert${count === 1 ? '' : 's'}` : 'All caught up';
+  dropdown.querySelector('#notification-count').textContent = state.unreadCount ? `${state.unreadCount} unread` : 'No unread updates';
+  dropdown.querySelector('[data-notification-mark-read]').disabled = !state.unreadCount;
+  const bell = document.querySelector('#notifications');
+  bell.querySelector('.notification-count-badge')?.remove();
+  if (state.unreadCount) {
+    bell.querySelector('i')?.remove();
+    bell.insertAdjacentHTML('beforeend', `<span class="notification-count-badge" aria-label="${state.unreadCount} unread updates">${state.unreadCount > 99 ? '99+' : state.unreadCount}</span>`);
+  }
 }
 function openNotifications() {
   const dropdown = document.querySelector('#notification-dropdown');
   if (!dropdown) return;
   if (!dropdown.hidden) { closeNotifications(); return; }
   syncNotifications(); dropdown.hidden = false;
+  rentalNotifications.refresh();
   document.querySelector('#notifications').setAttribute('aria-expanded', 'true');
   try { localStorage.setItem('rent-play-notifications-seen', notificationFingerprint()); } catch { }
   document.querySelector('.notification i')?.remove();
@@ -269,7 +291,7 @@ function syncLiveWorkspaceChrome() {
   const status = document.querySelector('.demo-status');
   if (status) { status.querySelector('strong').textContent = connectionError ? 'Connection interrupted' : 'Connected workspace'; status.querySelector('small').textContent = data ? 'Cloud Firestore records' : 'Waiting for database'; }
   const rentalCount = document.querySelector('.nav-count');
-  if (rentalCount) rentalCount.textContent = data?.stats.active ?? '–';
+  if (rentalCount) rentalCount.textContent = data?.rentals?.length ?? '–';
   const notifications = document.querySelector('#notifications'), seen = (() => { try { return localStorage.getItem('rent-play-notifications-seen') || ''; } catch { return ''; } })();
   if (notifications) {
     const shouldShow = !!notificationFingerprint() && notificationFingerprint() !== seen, dot = notifications.querySelector('i');
@@ -294,7 +316,7 @@ function chart() {
 }
 function terminal() {
   const t = data.terminals[0]; const queue = t ? data.pending.filter(p => p.terminal_code === t.terminal_code) : [];
-  return `<section class="panel terminal-panel"><div class="panel-title"><h3>${icon('chip')} Counter terminal</h3><span class="offline-dot">${t?.online ? 'Online' : 'Offline'}</span></div><div class="device"><span>${escape(t?.terminal_code || 'NO TERMINAL REGISTERED')}</span><strong>${t?.online ? escape(queue[0]?.display_status || 'WAITING FOR REQUEST') : 'OFFLINE'}</strong><small>${escape(t?.name || 'Register your counter terminal')}</small><div class="device-led"></div></div><div class="terminal-meta"><span>Pending verification</span><strong>${queue.length}</strong></div><p class="terminal-note">${icon('chip')} Final confirmation requires the physical terminal button. Last seen: ${escape(formatDate(t?.last_seen_at))}.</p><button class="secondary wide" data-page="ESP32 terminal">View verification activity ${icon('arrow')}</button></section>`;
+  return `<section class="panel terminal-panel"><div class="panel-title"><h3>${icon('chip')} ESP32 terminal</h3><span class="offline-dot">Standby</span></div><div class="device"><span>${escape(t?.terminal_code || 'HARDWARE NOT CONNECTED')}</span><strong>ON STANDBY</strong><small>${escape(t?.name || 'Ready for future hardware setup')}</small><div class="device-led"></div></div><div class="terminal-meta"><span>Saved pending attempts</span><strong>${queue.length}</strong></div><p class="terminal-note">${icon('chip')} Admin confirms current releases and returns. The terminal is reserved for later hardware integration.</p><button class="secondary wide" data-page="ESP32 terminal">View terminal records ${icon('arrow')}</button></section>`;
 }
 function dashboard() {
   const s = data.stats;
@@ -318,6 +340,7 @@ function profile() {
 }
 function render() {
   if (!user) return;
+  rentalNotifications.setAccount(user.id);
   const existingInventory = page === 'Inventory' ? document.querySelector('#inventory-root') : null;
   const previousFocus = app.contains(document.activeElement) ? document.activeElement : null;
   const focusId = previousFocus?.id || '';
@@ -327,7 +350,7 @@ function render() {
   const body = !data ? `<section class="panel">${empty('Waiting for your database', 'Check the backend connection, then select Refresh.')}</section>` : page === 'Dashboard' ? dashboard() : page === 'Inventory' ? inventory() : page === 'Profile' ? profile() : workspacePages.has(page) ? workspaceUI.render(page, user, appearanceSettings()) : `<section class="panel">${empty('Page unavailable', 'Choose another workspace section.')}</section>`;
   const groupedNav = navGroups.map(group => {
     const expanded = navGroupExpanded[group.id];
-    return `<section class="nav-section"><button type="button" id="nav-group-toggle-${group.id}" class="nav-section-title" data-nav-group="${group.id}" aria-expanded="${expanded}" aria-controls="nav-group-${group.id}"><span class="nav-emoji" aria-hidden="true">${group.emoji}</span><span class="sidebar-label">${group.label}</span><span class="nav-group-chevron">${icon('chevron')}</span></button><div class="nav-section-items" id="nav-group-${group.id}" ${expanded ? '' : 'hidden'}>${group.items.map(([label, target]) => `<button data-page="${target}" class="nav-child ${page === target ? 'active' : ''}"><span class="sidebar-label">${label}</span>${target === 'Rentals' ? `<span class="nav-count">${data?.stats.active ?? '–'}</span>` : ''}</button>`).join('')}</div></section>`;
+    return `<section class="nav-section"><button type="button" id="nav-group-toggle-${group.id}" class="nav-section-title" data-nav-group="${group.id}" aria-expanded="${expanded}" aria-controls="nav-group-${group.id}"><span class="nav-emoji" aria-hidden="true">${group.emoji}</span><span class="sidebar-label">${group.label}</span><span class="nav-group-chevron">${icon('chevron')}</span></button><div class="nav-section-items" id="nav-group-${group.id}" ${expanded ? '' : 'hidden'}>${group.items.map(([label, target]) => `<button data-page="${target}" class="nav-child ${page === target ? 'active' : ''}"><span class="sidebar-label">${label}</span>${target === 'Rentals' ? `<span class="nav-count">${data?.rentals?.length ?? '–'}</span>` : ''}</button>`).join('')}</div></section>`;
   }).join('');
   const displayPage = pageLabels[page] || page;
   document.title = `${displayPage} · Rent & Play`;
@@ -390,7 +413,7 @@ function bind() {
     closeAccountMenu(); closeNotifications();
     try {
       if (!await confirmAction({ title: 'Log out of Rent & Play?', description: 'Your session will end. You will need to sign in again to access the workspace.', confirmLabel: 'Yes, log out', cancelLabel: 'No, stay signed in' })) return;
-      await api('/auth/logout', { method: 'POST' }); user = null; data = null; connectionError = ''; inventoryController.reset(); workspaceUI.reset(); history.replaceState({}, '', pageRoutes.Dashboard); modal.close(); login();
+      await api('/auth/logout', { method: 'POST' }); user = null; data = null; connectionError = ''; rentalNotifications.setAccount(null); inventoryController.reset(); workspaceUI.reset(); history.replaceState({}, '', pageRoutes.Dashboard); modal.close(); login();
     }
     catch (error) { toast(error.message); }
     finally { logoutPending = false; }
@@ -399,8 +422,22 @@ function bind() {
   document.querySelector('[data-action="logout"]').onclick = logout;
   configureSidebar();
   const notificationMenu = document.querySelector('.notification-menu'), notificationDropdown = document.querySelector('#notification-dropdown');
-  notificationMenu.onclick = event => {
+  notificationMenu.onclick = async event => {
     event.stopPropagation();
+    const entry = event.target.closest('[data-rental-notification]');
+    if (entry) {
+      closeNotifications();
+      try { await rentalNotifications.markRead([entry.dataset.rentalNotification]); await workspaceUI.openTransaction(entry.dataset.notificationRental); }
+      catch (error) { toast(error.message); }
+      return;
+    }
+    if (event.target.closest('[data-notification-mark-read]')) {
+      try { await rentalNotifications.markRead(rentalNotifications.state().notifications.map(row => row.id)); }
+      catch (error) { toast(error.message); }
+      return;
+    }
+    if (event.target.closest('[data-notification-retry]')) { rentalNotifications.refresh(); return; }
+    if (event.target.closest('[data-notification-older]')) { rentalNotifications.refresh({ older: true }); return; }
     const target = event.target.closest('[data-notification-page]');
     if (target) { closeNotifications(); goTo(target.dataset.notificationPage); }
   };
@@ -460,6 +497,10 @@ async function boot() {
 }
 const inventoryController = createInventory({ api, escape, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, confirmAction, confirmSubmit });
 const workspaceUI = createWorkspaceUI({ api, escape, icon, showModal, modal, toast, money, formatDate, confirmAction, confirmSubmit, showEquipmentDetails: id => inventoryController.details(id), navigate: goTo });
+const rentalNotifications = createRentalNotifications({ api, onChange: syncNotifications,
+  onAlert: (notification, count) => toast(count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`) });
+setInterval(() => { if (user && !logoutPending && apiClient.canRefresh() && document.visibilityState === 'visible') rentalNotifications.refresh(); }, 15000);
+document.addEventListener('visibilitychange', () => { if (user && document.visibilityState === 'visible') rentalNotifications.refresh(); });
 invalidateWorkspace = () => workspaceUI.invalidate();
 window.addEventListener('popstate', () => { page = pageForPath(location.pathname); if (workspacePages.has(page)) invalidateWorkspace(); if (user) { render(); document.querySelector('#workspace-content')?.focus({ preventScroll: true }); } });
 setInterval(async () => {

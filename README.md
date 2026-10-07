@@ -1,18 +1,16 @@
 # Rent & Play
 
-Scalable monorepo structure for the Rent & Play system.
+Web dashboard, shared API backend, and ESP32 verification terminal. The native Android app source is maintained separately in the sibling `AndroidFiles` project.
 
 ## Main architecture
 
-Web / Mobile / ESP32 -> Backend REST API -> Firebase Authentication + Cloud Firestore
+Web dashboard / Android app / ESP32 -> Backend REST API -> Firebase Authentication + Cloud Firestore
 
-The Web, Mobile, Backend, and ESP32 firmware are separate applications/projects
-inside one main repository.
+The Android app source is outside this repository. It and the web dashboard use the shared backend API.
 
 ## Main folders
 
 - `apps/web` - Owner/Operator web dashboard
-- `apps/mobile` - Mobile QR rental/return workflow
 - `apps/backend` - Shared REST API and business rules
 - `firmware/esp32-terminal` - ESP32 verification terminal firmware
 - `packages/api-contracts` - Shared API schemas/examples
@@ -27,9 +25,9 @@ Developer 1 (Web):
 - Inventory, customers, rates, dashboard, reports
 - Shared database/API coordination
 
-Developer 2 (Mobile):
-- Mobile QR workflow
-- Rental/return screens
+Developer 2 (Android):
+- Customer workflows in the separate `AndroidFiles` project
+- Rental/return screens and shared API integration
 - ESP32 terminal / verification integration
 
 Backend ownership should be divided by module so that every API area has a clear owner.

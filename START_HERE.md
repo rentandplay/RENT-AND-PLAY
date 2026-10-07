@@ -29,11 +29,11 @@ This scaffold is intentionally framework-light so you can choose/install the exa
 
 ## Important rule
 
-Do NOT let Web, Mobile, or ESP32 connect directly to Cloud Firestore with privileged access.
+Do NOT let the Web app, the Android app maintained in `../AndroidFiles`, or ESP32 connect directly to Cloud Firestore with privileged access.
 
 Use:
 
-Web / Mobile / ESP32 -> Backend REST API -> Firebase Authentication + Cloud Firestore
+Web / Android app / ESP32 -> Backend REST API -> Firebase Authentication + Cloud Firestore
 
 ## Shared statuses to agree on early
 

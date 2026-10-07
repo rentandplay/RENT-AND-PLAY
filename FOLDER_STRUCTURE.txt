@@ -1,7 +1,6 @@
 rent-and-play/
 ├── apps/
 │   ├── web/
-│   ├── mobile/
 │   └── backend/
 ├── firmware/
 │   └── esp32-terminal/
@@ -12,3 +11,5 @@ rent-and-play/
 ├── tests/
 ├── scripts/
 └── .github/
+
+The native Android app source is maintained in the sibling AndroidFiles project, outside this repository.

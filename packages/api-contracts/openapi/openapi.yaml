@@ -1,18 +1,273 @@
 openapi: 3.0.3
 info:
   title: Rent & Play API
-  version: 0.2.0
+  version: 0.4.0
+  description: Admin-confirmed pickup and physical return. ESP32 routes default to standby (ENABLE_ESP32=false).
 paths:
+  /api/notifications:
+    get:
+      summary: Read the authenticated rental notification inbox
+      description: Staff share an inbox with individual read status. Customers see only their own inbox. Pages contain up to 60 messages.
+      security: [{adminSession: []}, {mobileAdminToken: []}, {customerFirebaseToken: []}]
+      parameters:
+        - {in: query, name: before, schema: {type: string, pattern: '^n_[a-f0-9]{40}$'}, description: Last message ID of the previous page}
+        - {in: query, name: since, schema: {type: string}, description: Previous inbox revision; returns unchanged when no update exists}
+      responses:
+        '200': {description: Notifications with next_cursor and revision, or unchanged with revision}
+        '401': {description: Authentication required}
+        '403': {description: Inactive or missing account}
+        '404': {description: Cursor does not belong to this inbox}
+  /api/notifications/read:
+    post:
+      summary: Mark loaded inbox messages read for the authenticated account
+      security: [{adminSession: []}, {mobileAdminToken: []}, {customerFirebaseToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: {type: array, maxItems: 60, items: {type: string, pattern: '^n_[a-f0-9]{40}$'}}
+      responses:
+        '200': {description: Read markers persisted}
+        '400': {description: Invalid notification IDs}
+        '404': {description: A notification does not belong to this inbox}
+  /api/notifications/device:
+    post:
+      summary: Register or transfer an Android push token to the authenticated account
+      security: [{adminSession: []}, {mobileAdminToken: []}, {customerFirebaseToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NotificationDevice'}
+      responses:
+        '200': {description: Android device registered}
+        '400': {description: Invalid push token}
+    delete:
+      summary: Unregister an Android token only when the authenticated account owns it
+      security: [{adminSession: []}, {mobileAdminToken: []}, {customerFirebaseToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NotificationDevice'}
+      responses:
+        '200': {description: Owned registration removed}
   /api/workspace:
     get:
       summary: Full administration history including every verification attempt
-      security: [{adminSession: []}]
+      security: [{adminSession: []}, {mobileAdminToken: []}]
       responses:
         '200': {description: Workspace records with saved inspections and fees}
         '401': {description: Active administrator session required}
+  /api/customer-accounts:
+    post:
+      summary: Create an active mobile customer Firebase account and linked customer profile
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fullName, code, email, password, confirmPassword]
+              properties:
+                fullName: {type: string, minLength: 2, maxLength: 150}
+                code: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{1,49}$'}
+                email: {type: string, format: email, maxLength: 191}
+                phone: {type: string, maxLength: 40}
+                address: {type: string, maxLength: 500}
+                password: {type: string, minLength: 12, maxLength: 128, writeOnly: true}
+                confirmPassword: {type: string, minLength: 12, maxLength: 128, writeOnly: true}
+      responses:
+        '201': {description: Firebase USER account and customer profile created with the same UID}
+        '400': {description: Invalid name, customer code, contact details, or password}
+        '401': {description: Administrator authentication required}
+        '409': {description: Email or customer code already in use}
+  /api/customers/{customerId}:
+    delete:
+      summary: Permanently delete an archived customer and linked mobile account
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - in: path
+          name: customerId
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: {type: string, description: Current updated_at value, or created_at for legacy records}
+      responses:
+        '200': {description: Customer removed; completed rental history and audit logs remain}
+        '400': {description: Missing or invalid customer version}
+        '401': {description: Administrator authentication required}
+        '404': {description: Customer not found}
+        '409': {description: Customer is active, changed, or has an active or pending rental}
+        '503': {description: Linked mobile account deletion is unavailable}
+  /api/customers/{customerId}/password:
+    patch:
+      summary: Change the password for a linked customer mobile account
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - in: path
+          name: customerId
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newPassword, confirmNewPassword]
+              properties:
+                newPassword: {type: string, minLength: 12, maxLength: 128, writeOnly: true}
+                confirmNewPassword: {type: string, minLength: 12, maxLength: 128, writeOnly: true}
+      responses:
+        '200': {description: Linked Firebase password changed; the audit log records no password value}
+        '400': {description: Password does not meet length requirements or confirmation differs}
+        '401': {description: Administrator authentication required}
+        '404': {description: Customer not found}
+        '409': {description: No valid linked mobile account}
+        '503': {description: Mobile account password changes are unavailable}
+  /api/rental-bookings:
+    post:
+      summary: Reserve a counter booking as APPROVED without starting its timer
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CounterBooking'}
+      responses:
+        '201': {description: Approved booking held for pickup or existing identical retry}
+        '409': {description: Unit unavailable or reused key has different details}
+  /api/rentals/lookup:
+    post:
+      summary: Find a transaction or the unique active borrower of a physical unit
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: {type: string, minLength: 1, maxLength: 256}
+                kind: {type: string, enum: [BOOKING, INVENTORY], default: BOOKING}
+      responses:
+        '200': {description: Rental and assigned physical item}
+        '404': {description: No unique booking or equipment matches}
+        '409': {description: Inventory has no unique active rental}
+  /api/rentals/{rentalId}/release:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Verify transaction and inventory QR and start the timer at physical release
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdminRelease'}
+      responses:
+        '200': {description: ACTIVE rental and RENTED unit; identical retry is a duplicate}
+        '400': {description: Missing payment, customer, deposit or inspection verification}
+        '409': {description: Wrong QR, reused key, or unavailable state}
+  /api/rentals/{rentalId}/receipt:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Record server physical receipt and stop overtime before inspection
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdminReceipt'}
+      responses:
+        '200': {description: RETURN_PENDING_INSPECTION rental and UNDER_INSPECTION unit}
+        '409': {description: Wrong inventory QR, reused key or inconsistent active rental}
+  /api/rentals/{rentalId}/complete-return:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Inspect a received unit and finalize charges from original rates and receipt time
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdminCompleteReturn'}
+      responses:
+        '200': {description: COMPLETED rental; available unit or linked maintenance with separate money balances}
+        '400': {description: Missing inspection, explicit penalty or positive penalty reason}
+        '409': {description: Physical receipt missing, reused key or original pricing unknown}
+  /api/rentals/{rentalId}/assignment:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Atomically move an approved hold to an available unit of the same product and price
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inventoryCode, reason]
+              properties:
+                inventoryCode: {type: string}
+                reason: {type: string, minLength: 1, maxLength: 1000}
+      responses:
+        '200': {description: Assigned unit and both hold pointers updated with audit}
+        '409': {description: Different pricing, unavailable unit or booking already released}
+  /api/rentals/{rentalId}/settlement:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Record actual collection, deposit application and refunds after rental completion or closure
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RentalSettlement'}
+      responses:
+        '200': {description: Audited money movement and recalculated balances, or identical duplicate}
+        '400': {description: Amounts exceed balances or no positive amount supplied}
+        '409': {description: Rental still open, legacy receipts unknown or reused key changed}
+  /api/rental-inspection-photos/{photoId}:
+    parameters:
+      - {name: photoId, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Read an admin-only inspection JPEG separately from rental lists
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      responses:
+        '200': {description: Photo with data URL and inspection metadata}
+        '404': {description: Photo missing}
+  /api/mobile/rentals/{rentalId}/ticket:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Read own transaction QR token and PNG image for pickup
+      security: [{customerFirebaseToken: []}]
+      responses:
+        '200': {description: Ticket with value, image_data_url, booking ID/code, status and hold expiry}
+        '403': {description: Another customer owns the ticket}
+        '409': {description: Legacy booking has no transaction QR}
   /api/rentals:
     post:
-      summary: Save a quote and reserve equipment for terminal verification
+      summary: Legacy terminal reservation; disabled while ESP32 is on standby
       security: [{adminSession: []}, {mobileAdminToken: []}]
       requestBody:
         required: true
@@ -24,9 +279,166 @@ paths:
         '400': {description: Invalid pricing or request details}
         '401': {description: Administrator authentication required}
         '409': {description: Equipment unavailable or terminal unconfigured}
+  /api/mobile/catalog:
+    get:
+      summary: Actual active inventory IDs, public rates, availability, QR labels, and Firebase project ID
+      security: []
+      responses:
+        '200': {description: Public catalog without customer or staff records}
+  /api/mobile/catalog/resolve:
+    post:
+      summary: Resolve a unique actual equipment QR token, item code, or ID
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: {type: string, minLength: 1, maxLength: 512}
+      responses:
+        '200': {description: Actual public item and Firebase project ID}
+        '404': {description: Unknown or ambiguous QR label}
+  /api/mobile/profile:
+    get:
+      summary: Read own profile using verified Firebase identity
+      security: [{customerFirebaseToken: []}]
+      responses:
+        '200': {description: Own profile and Firebase project ID}
+        '403': {description: Account inactive}
+    post:
+      summary: Bootstrap a regular USER profile from verified Firebase claims
+      security: [{customerFirebaseToken: []}]
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MobileProfile'}
+      responses:
+        '200': {description: Existing or created regular user profile}
+    patch:
+      summary: Edit own contact details, profile photo, ID reference, and terms acceptance
+      security: [{customerFirebaseToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MobileProfile'}
+      responses:
+        '200': {description: Updated own profile; payload cannot change role or token identity}
+  /api/mobile/quote:
+    post:
+      summary: Quote an available actual inventory item using the shared saved rates
+      security: [{customerFirebaseToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itemId, durationMinutes]
+              properties:
+                itemId: {type: string}
+                durationMinutes: {type: integer, minimum: 1, maximum: 10080}
+      responses:
+        '200': {description: Authoritative quote with package components, billed duration, fee, deposit, and total}
+        '400': {description: Rate or required deposit needs configuration}
+        '409': {description: Equipment unavailable or reserved}
+  /api/mobile/rentals:
+    get:
+      summary: Own rental records with canonical fields, UTC dates, actual QR labels, and saved charges
+      security: [{customerFirebaseToken: []}]
+      responses:
+        '200': {description: Owned canonical and legacy records without duplicates}
+    post:
+      summary: Submit a customer rental request for web admin review without a terminal
+      security: [{customerFirebaseToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MobileRentalRequest'}
+      responses:
+        '201': {description: Rental saved with PENDING_ADMIN_APPROVAL status}
+        '400': {description: Invalid quote, payment method, or request details}
+        '401': {description: Valid Firebase customer ID token required}
+        '409': {description: Equipment unavailable or already reserved}
+  /api/mobile/rentals/{rentalId}/review:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Approve or reject a mobile customer rental request from the admin workspace
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MobileRentalReview'}
+      responses:
+        '200': {description: APPROVED and awaiting pickup without a running timer, or rejected with hold released}
+        '400': {description: Invalid review or payment confirmation}
+        '401': {description: Active administrator session required}
+        '409': {description: Request already reviewed or equipment unavailable}
+  /api/mobile/rentals/{rentalId}:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Read an owned rental record
+      security: [{customerFirebaseToken: []}]
+      responses:
+        '200': {description: Owned rental with canonical fields and UTC dates}
+        '403': {description: Another customer owns the record}
+        '404': {description: Record missing}
+  /api/mobile/rentals/{rentalId}/return:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Request staff receipt of own active mobile rental; equipment stays rented
+      security: [{customerFirebaseToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                condition: {type: string, enum: [GOOD, FAIR, DAMAGED, NEEDS_INSPECTION]}
+                notes: {type: string, maxLength: 2000}
+      responses:
+        '200': {description: Pending return request or existing duplicate; rental remains ACTIVE}
+        '403': {description: Another customer owns the rental}
+        '409': {description: Rental not active or requires a counter return}
+  /api/mobile/rentals/{rentalId}/return/review:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Complete inspection after physical receipt or reject the customer request
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MobileReturnReview'}
+      responses:
+        '200': {description: Completion and original-rate fees committed with inspection and availability or maintenance; rejection leaves rental active}
+        '400': {description: Missing official inspection or explicit penalty amount}
+        '409': {description: Inconsistent state or incomplete original fee snapshot}
+  /api/mobile/rentals/{rentalId}/cancel:
+    parameters:
+      - {name: rentalId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Cancel an owned pending or approved booking before physical release
+      security: [{customerFirebaseToken: []}]
+      responses:
+        '200': {description: Rental request cancelled and equipment reservation released}
+        '401': {description: Valid Firebase customer ID token required}
+        '403': {description: Rental request belongs to another customer}
+        '404': {description: Rental request not found}
+        '409': {description: Booking is already released or closed}
   /api/returns:
     post:
-      summary: Prepare a return while equipment remains Rented
+      summary: Legacy terminal return; disabled while ESP32 is on standby
       security: [{adminSession: []}, {mobileAdminToken: []}]
       requestBody:
         required: true
@@ -71,6 +483,7 @@ paths:
       responses:
         '200': {description: Requests with saved fees, inspection revisions, and deadlines}
         '401': {description: Invalid or inactive device credential}
+        '409': {description: ESP32 is on standby}
   /api/terminals/{terminalId}/confirm:
     parameters:
       - {name: terminalId, in: path, required: true, schema: {type: string}}
@@ -100,9 +513,80 @@ paths:
 components:
   securitySchemes:
     adminSession: {type: apiKey, in: cookie, name: rent_play_session}
-    mobileAdminToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active ADMIN user profile}
+    mobileAdminToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active ADMIN operator or OWNER super admin profile}
+    customerFirebaseToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active USER customer profile in the same Firebase project}
     terminalDeviceKey: {type: http, scheme: bearer, description: Separately provisioned terminal key; never a Firebase token or web cookie}
   schemas:
+    NotificationDevice:
+      type: object
+      required: [token]
+      properties:
+        token: {type: string, minLength: 20, maxLength: 4096, writeOnly: true}
+    OperationKey:
+      type: string
+      pattern: '^[a-f0-9]{32}$'
+      description: Preserve this key when retrying the same operation; changed details are rejected
+    CounterBooking:
+      type: object
+      required: [itemId, customerId, requestKey]
+      properties:
+        itemId: {type: string}
+        customerId: {type: string}
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        mode: {type: string, enum: [TIMED, WHOLE_STAY], default: TIMED}
+        durationMinutes: {type: integer, minimum: 1, maximum: 10080, description: Required for TIMED}
+        resortCheckoutAt: {type: string, format: date-time, description: Required for WHOLE_STAY}
+        deliveryLocation: {type: string, maxLength: 255, default: Shop pickup}
+        paymentMethod: {type: string, enum: [CASH, QR], default: CASH}
+    AdminInspection:
+      allOf:
+        - {$ref: '#/components/schemas/Inspection'}
+        - type: object
+          required: [accessoriesChecked]
+          properties:
+            accessoriesChecked: {type: boolean, enum: [true]}
+            photos:
+              type: array
+              maxItems: 2
+              items: {type: string, maxLength: 150000, description: Valid JPEG base64 data URL}
+    AdminRelease:
+      type: object
+      required: [requestKey, transactionCode, inventoryCode, customerVerified, inspection]
+      properties:
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        transactionCode: {type: string, maxLength: 256}
+        inventoryCode: {type: string, maxLength: 256}
+        customerVerified: {type: boolean, enum: [true]}
+        paymentVerified: {type: boolean, description: Required true unless saved full payment was already received}
+        depositReceived: {type: boolean, description: Required true unless saved required deposit was already collected}
+        manualReason: {type: string, minLength: 1, maxLength: 1000}
+        inspection: {$ref: '#/components/schemas/AdminInspection'}
+    AdminReceipt:
+      type: object
+      required: [requestKey, inventoryCode, physicalReceiptConfirmed]
+      properties:
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        inventoryCode: {type: string, maxLength: 256}
+        physicalReceiptConfirmed: {type: boolean, enum: [true]}
+        manualReason: {type: string, minLength: 1, maxLength: 1000}
+    AdminCompleteReturn:
+      type: object
+      required: [requestKey, inspection, penaltyAmount]
+      properties:
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        inspection: {$ref: '#/components/schemas/AdminInspection'}
+        penaltyAmount: {type: number, minimum: 0, multipleOf: 0.01, description: Explicit zero when none applies}
+        penaltyReason: {type: string, maxLength: 1000, description: Required for positive penalty}
+    RentalSettlement:
+      type: object
+      required: [requestKey, notes]
+      properties:
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        paymentAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0}
+        depositAppliedAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0}
+        depositRefundAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0}
+        rentalRefundAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0, description: Only for cancelled/rejected/expired bookings}
+        notes: {type: string, minLength: 1, maxLength: 1000}
     Inspection:
       type: object
       required: [condition, notes]
@@ -122,6 +606,50 @@ components:
         resortCheckoutAt: {type: string, format: date-time, description: Required for whole-stay rentals}
         startAt: {type: string, format: date-time, description: Defaults to server time; must be within five minutes of now}
         inspection: {$ref: '#/components/schemas/Inspection'}
+    MobileRentalRequest:
+      type: object
+      required: [itemId, durationMinutes, requestKey]
+      properties:
+        itemId: {type: string}
+        durationMinutes: {type: integer, minimum: 1, maximum: 10080}
+        startAt: {type: string, format: date-time, description: Defaults to server time; must be within five minutes of now}
+        deliveryLocation: {type: string, minLength: 1, maxLength: 255}
+        paymentMethod: {type: string, enum: [QR, CASH], default: CASH}
+        requestKey: {type: string, pattern: '^[a-f0-9]{32}$', description: Same key and details return the existing owned request without a second reservation}
+        expectedQuote:
+          type: object
+          required: [rentalFee, depositAmount, billedMinutes]
+          properties:
+            rentalFee: {type: number, minimum: 0}
+            depositAmount: {type: number, minimum: 0}
+            billedMinutes: {type: integer, minimum: 1}
+    MobileRentalReview:
+      type: object
+      required: [action]
+      properties:
+        action: {type: string, enum: [APPROVE, REJECT]}
+        paymentVerified: {type: boolean, description: Optional actual rental payment already received; timer stays stopped}
+        depositReceived: {type: boolean, description: Optional actual refundable deposit already collected}
+        notes: {type: string, maxLength: 1000}
+        reason: {type: string, maxLength: 1000, description: Optional when rejecting; omitted or blank values record no reason}
+    MobileProfile:
+      type: object
+      properties:
+        name: {type: string, maxLength: 150}
+        phone: {type: string, maxLength: 40}
+        profileImageUrl: {type: string, maxLength: 2048}
+        validIdUrl: {type: string, maxLength: 2048}
+        hasAcceptedTerms: {type: boolean}
+    MobileReturnReview:
+      type: object
+      required: [action]
+      properties:
+        action: {type: string, enum: [APPROVE, REJECT]}
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        inspection: {$ref: '#/components/schemas/AdminInspection'}
+        penaltyAmount: {type: number, minimum: 0, multipleOf: 0.01, description: Required explicitly when approving, including zero}
+        penaltyReason: {type: string, maxLength: 1000, description: Required for a positive penalty}
+        reason: {type: string, minLength: 1, maxLength: 1000, description: Required when rejecting}
     ReturnRequest:
       type: object
       required: [rentalId, terminalId]

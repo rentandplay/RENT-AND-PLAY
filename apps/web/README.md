@@ -6,7 +6,7 @@ Responsive admin login and dashboard using the supplied logo. Built with HTML, C
 
 Configure and start the backend first; see `../backend/README.md` for database setup and first-account creation. In a second VS Code terminal, from `apps/web`, run `npm run dev`, then open http://127.0.0.1:5173.
 
-Sign in with an active Firebase Authentication account that has a matching active `users/{uid}` Firestore profile with the `ADMIN` role. Other account roles cannot access the website. There are no default passwords or demo access.
+Sign in with a separate, active staff account. `ADMIN` is the operator role and `OWNER` is the super admin role. `USER` accounts are customers for the mobile app and cannot sign in to the web workspace. Set backend `SUPER_ADMIN_UID` to bootstrap the initial owner from an existing Firebase Auth account.
 
 `npm run check` checks JavaScript syntax. `npm test` checks analytics calculations, settings and MX10 printer commands/transfer behavior.
 

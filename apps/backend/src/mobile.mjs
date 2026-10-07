@@ -46,7 +46,13 @@ export async function mobileCatalog(db) {
   const [inventory, pricing] = await Promise.all([inventoryList(db), loadPricing(db)]);
   const products = new Map(pricing.products.map(product => [product.id, product]));
   const items = inventory.items.filter(item => item.is_active !== false && typeof item.name === 'string' && item.name.trim()).flatMap(item => {
-    const product = products.get(item.pricing_product_id);
+    const linkedProduct = products.get(item.pricing_product_id);
+    const customOptions = Array.isArray(item.custom_rate_options) ? item.custom_rate_options : [];
+    const product = customOptions.length ? {
+      id: `custom-${item.id}`, name: item.name, rate_options: customOptions,
+      deposit_amount: item.deposit_amount, overtime_rate_per_hour: item.late_penalty_rate,
+      high_value: false, sale_price: null
+    } : linkedProduct;
     const validRate = ['HOURLY', 'DAILY', 'FLAT'].includes(item.rate_type) && [item.rental_rate, item.deposit_amount, item.late_penalty_rate].every(validAmount);
     const options = product?.rate_options.filter(rate => rate.kind !== 'WHOLE_STAY') || [];
     const configured = product ? options.length > 0 && !(product.high_value && pricing.rules.high_value_deposit_required && product.deposit_amount <= 0) : validRate;
@@ -63,12 +69,24 @@ export async function mobileCatalog(db) {
       rate_type: product ? 'RATE_SHEET' : item.rate_type,
       rental_rate: product?.overtime_rate_per_hour ?? item.rental_rate,
       deposit_amount: product?.deposit_amount ?? item.deposit_amount,
-      pricing_product_id: item.pricing_product_id, rate_options: product?.rate_options || [],
+      late_penalty_rate: product?.overtime_rate_per_hour ?? item.late_penalty_rate,
+      pricing_product_id: customOptions.length ? null : item.pricing_product_id, rate_options: product?.rate_options || [],
       can_rent: status === 'AVAILABLE',
       unavailable_reason: status === 'AVAILABLE' ? null : 'This equipment is currently unavailable.'
     }];
   });
   return { items, categories: [...new Set(items.map(item => item.category))].sort() };
+}
+
+export async function mobilePaymentInstructions(db) {
+  const snapshot = await db.collection('settings').doc('business').get();
+  const settings = snapshot.exists ? snapshot.data() : {};
+  return {
+    instapay_qr_data_url: settings.instapay_qr_data_url || null,
+    account_name: settings.instapay_account_name || null,
+    account_number: settings.instapay_account_number || null,
+    instructions: settings.instapay_instructions || 'Pay the exact amount shown and upload a screenshot of the successful transfer.'
+  };
 }
 
 export async function resolveMobileItem(db, input) {

@@ -88,15 +88,24 @@ export async function frozenQuote(tx, db, item, input, now) {
   const grace = Number(businessDoc.exists ? businessDoc.data().default_late_grace_hours ?? 0 : 0);
   if (!Number.isFinite(grace) || grace < 0 || grace > 168) fail(400, 'Correct the business grace period before requesting a rental.');
   const start = input.startAt ? dateValue(input.startAt, 'Rental start time') : now;
+  const activeRate = rows(rateDocs).filter(row => row.is_active !== false && asDate(row.effective_from) <= now && (!row.effective_to || asDate(row.effective_to) > now)).sort((a, b) => asDate(b.effective_from) - asDate(a.effective_from))[0];
   let saved;
-  if (item.pricing_product_id) {
+  if (Array.isArray(item.custom_rate_options) && item.custom_rate_options.length) {
+    if (!activeRate || !amount(activeRate.deposit_amount) || !amount(activeRate.late_penalty_rate)) fail(400, 'Configure a valid deposit and late penalty for this equipment.');
+    const pricing = pricingDoc.exists ? validatePricing(pricingDoc.data()) : structuredClone(DEFAULT_PRICING);
+    const customProductId = `custom-${item.id}`;
+    pricing.products.push({ id: customProductId, name: item.name, group: 'Custom equipment', rate_options: item.custom_rate_options, deposit_amount: activeRate.deposit_amount, overtime_rate_per_hour: activeRate.late_penalty_rate, high_value: false, included_items: [], sale_price: null });
+    const checkout = input.mode === 'WHOLE_STAY' ? dateValue(input.resortCheckoutAt, 'Resort checkout time').toISOString() : undefined;
+    const q = quoteRental(pricing, { ...input, ...(checkout ? { resortCheckoutAt: checkout } : {}), productId: customProductId, startAt: start.toISOString(), actualReturnAt: null }, now);
+    saved = { pricing_source: 'ITEM_CUSTOM_RATES', product_id: null, product_name: item.name, rate_id: q.rate_id, rate_label: q.rate_label, rate_kind: q.rate_kind, rate_components: q.rate_components, mode: input.mode === 'WHOLE_STAY' ? 'WHOLE_STAY' : 'TIMED', requested_minutes: q.requested_minutes, billed_minutes: q.billed_minutes, rental_fee: q.rental_fee, deposit_amount: q.deposit_amount, start_at: start, due_at: new Date(q.due_at), overtime_rate: q.overtime_rate_per_hour, overtime_unit_minutes: 60, lost_piece_fee: q.lost_piece_fee, overtime_basis: q.overtime_basis, after_hours_return_note: q.after_hours_return_note };
+  } else if (item.pricing_product_id) {
     const pricing = pricingDoc.exists ? validatePricing(pricingDoc.data()) : structuredClone(DEFAULT_PRICING);
     const checkout = input.mode === 'WHOLE_STAY' ? dateValue(input.resortCheckoutAt, 'Resort checkout time').toISOString() : undefined;
     const q = quoteRental(pricing, { ...input, ...(checkout ? { resortCheckoutAt: checkout } : {}), productId: item.pricing_product_id, startAt: start.toISOString(), actualReturnAt: null }, now);
     if (!q.deposit_configured) fail(400, 'Configure the required refundable deposit before requesting this rental.');
     saved = { pricing_source: 'RATE_SHEET', product_id: q.product_id, product_name: q.product_name, rate_id: q.rate_id, rate_label: q.rate_label, rate_kind: q.rate_kind, rate_components: q.rate_components, mode: input.mode === 'WHOLE_STAY' ? 'WHOLE_STAY' : 'TIMED', requested_minutes: q.requested_minutes, billed_minutes: q.billed_minutes, rental_fee: q.rental_fee, deposit_amount: q.deposit_amount, start_at: start, due_at: new Date(q.due_at), overtime_rate: q.overtime_rate_per_hour, overtime_unit_minutes: 60, lost_piece_fee: q.lost_piece_fee, overtime_basis: q.overtime_basis, after_hours_return_note: q.after_hours_return_note };
   } else {
-    const rate = rows(rateDocs).filter(row => row.is_active !== false && asDate(row.effective_from) <= now && (!row.effective_to || asDate(row.effective_to) > now)).sort((a, b) => asDate(b.effective_from) - asDate(a.effective_from))[0];
+    const rate = activeRate;
     if (!rate || !['HOURLY', 'DAILY', 'FLAT'].includes(rate.rate_type) || ![rate.rental_rate, rate.deposit_amount, rate.late_penalty_rate].every(amount)) fail(400, 'Configure a valid equipment rate or link a rate sheet product.');
     const minutes = Number(input.durationMinutes);
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080 || input.mode === 'WHOLE_STAY') fail(400, 'Choose a timed rental duration between 1 minute and 7 days.');

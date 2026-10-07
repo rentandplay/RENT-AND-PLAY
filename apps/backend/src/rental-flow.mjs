@@ -1,8 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { allocateCustomerCode } from './customer-codes.mjs';
 import QRCode from 'qrcode';
 import { asDate, docData } from './firebase.mjs';
 import { frozenQuote, rentalsForItem, validateInspection, validatePenalty, finalCharges } from './transactions.mjs';
 import { queueRentalNotification } from './notifications.mjs';
+import { validatePaymentProof } from './payment-proof.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const details = input => { if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Rental details are required.'); return input; };
@@ -58,7 +60,7 @@ function transactionScanCheck(input, rental) {
   const manual = Boolean(input.manualReason?.trim());
   if (manual) requiredText(input.manualReason, 'Manual lookup reason');
   const code = requiredText(input.transactionCode, 'Customer transaction QR', 256);
-  if (!(code === rental.booking_qr_token || manual && [rental.id, rental.rental_code].includes(code))) fail(409, 'This transaction QR does not match this customer booking. Scan the customer\'s transaction QR first.');
+  if (!(code === rental.booking_qr_token || manual && [rental.id, rental.rental_code].includes(code))) fail(409, 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.');
 }
 
 function scanCheck(input, item, rental = null) {
@@ -67,7 +69,7 @@ function scanCheck(input, item, rental = null) {
   const manual = Boolean(input.manualReason?.trim());
   if (manual) requiredText(input.manualReason, 'Manual lookup reason');
   const inventory = requiredText(input.inventoryCode, 'Inventory QR or item code', 256);
-  if (!(inventory === item.qr_token || manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(inventory))) fail(409, `Equipment mismatch. This booking requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan the QR sticker on that exact unit.`);
+  if (!(inventory === item.qr_token || manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(inventory))) fail(409, `Equipment mismatch. This rental request requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan the QR sticker on that exact unit.`);
   return { verification_method: manual ? 'MANUAL' : 'QR', manual_reason: manual ? input.manualReason.trim() : null };
 }
 
@@ -109,14 +111,23 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
   const itemId = idValue(input.itemId), customerId = staff ? idValue(input.customerId) : actorId(actor);
   const key = operationKey(input.requestKey), requestSource = staff ? 'COUNTER_ADMIN' : 'MOBILE_APP';
   const rentalRef = record(db, 'rentals', `booking_${createHash('sha256').update(`${customerId}:${actorId(actor)}:${key}`).digest('hex').slice(0, 40)}`);
+  const customerRef = record(db, 'customers', customerId);
+  const customerBeforeBooking = await customerRef.get();
+  const generatedCustomerCode = customerBeforeBooking.exists ? null : await allocateCustomerCode(db, now);
   const paymentMethod = String(input.paymentMethod || 'CASH').toUpperCase();
   if (!['QR', 'CASH'].includes(paymentMethod)) fail(400, 'Choose QR or cash as the payment method.');
   const location = requiredText(input.deliveryLocation || 'Shop pickup', 'Pickup location', 255);
+  const paymentProof = !staff && paymentMethod === 'QR' ? validatePaymentProof(input.paymentProof || {}) : null;
+  if (paymentProof) {
+    const settings = await db.collection('settings').doc('business').get();
+    if (!settings.exists || !settings.data().instapay_qr_data_url) fail(409, 'QR payment is not available yet. Choose cash or contact the owner.');
+  }
+  const proofRef = paymentProof ? record(db, 'rental_payment_proofs', rentalRef.id) : null;
   const result = await db.runTransaction(async tx => {
     const [existing, itemDoc, customerDoc, related] = await Promise.all([tx.get(rentalRef), tx.get(record(db, 'items', itemId)), tx.get(record(db, 'customers', customerId)), rentalsForItem(tx, db, itemId)]);
     if (existing.exists) {
       const saved = docData(existing);
-      if (saved.item_id !== itemId || saved.customer_id !== customerId || saved.delivery_location !== location || saved.payment_method !== paymentMethod || saved.booking_mode !== (input.mode || 'TIMED') || saved.fee_breakdown?.requested_minutes !== Number(input.durationMinutes) && saved.booking_mode === 'TIMED' || saved.resort_checkout_input !== (input.resortCheckoutAt || null)) fail(409, 'This operation key belongs to different booking details.');
+      if (saved.item_id !== itemId || saved.customer_id !== customerId || saved.delivery_location !== location || saved.payment_method !== paymentMethod || saved.booking_mode !== (input.mode || 'TIMED') || saved.fee_breakdown?.requested_minutes !== Number(input.durationMinutes) && saved.booking_mode === 'TIMED' || saved.resort_checkout_input !== (input.resortCheckoutAt || null)) fail(409, 'This operation key belongs to different rental details.');
       return { rental: saved, duplicate: true };
     }
     if (!itemDoc.exists) fail(404, 'Equipment not found.');
@@ -128,11 +139,12 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
     const fee = await frozenQuote(tx, db, item, { ...input, mode: input.mode || 'TIMED' }, now);
     if (input.expectedQuote && (input.expectedQuote.rentalFee !== fee.rental_fee || input.expectedQuote.depositAmount !== fee.deposit_amount || input.expectedQuote.billedMinutes !== fee.billed_minutes)) fail(409, 'The rates changed. Refresh the quote and review the new total.');
     const rental = { rental_code: `R-${rentalRef.id.slice(-10).toUpperCase()}`, item_id: itemId, item_name: item.name, item_code: item.item_code || item.qrCode || '', customer_id: customerId, customer_name: customer.full_name || customer.name || customer.email || 'Customer', customer_email: customer.email || null, customer_phone: customer.phone || null,
-      status: staff ? 'APPROVED' : 'PENDING_ADMIN_APPROVAL', booking_mode: input.mode || 'TIMED', resort_checkout_input: input.resortCheckoutAt || null, booking_qr_token: `rp-booking-${randomBytes(24).toString('hex')}`, hold_expires_at: new Date(now.getTime() + ttl(staff ? 'RENTAL_PICKUP_HOLD_SECONDS' : 'RENTAL_REQUEST_HOLD_SECONDS', staff ? 1800 : 900)),
-      rental_fee: fee.rental_fee, deposit_amount: fee.deposit_amount, fee_breakdown: fee, estimated_due_at: fee.due_at, start_at: null, due_at: null, confirmed_rental_at: null, confirmed_return_at: null, received_at: null, delivery_location: location, payment_method: paymentMethod, payment_confirmed_by_admin: false, rental_paid_amount: 0, deposit_collected_amount: 0, deposit_applied_amount: 0, deposit_refunded_amount: 0, rental_refunded_amount: 0, request_source: requestSource, release_condition: null, return_condition: null, created_at: now, updated_at: now, created_by: actorId(actor), ...(staff ? { admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_at: now } } : {}) };
+      status: staff ? 'APPROVED' : 'PENDING_ADMIN_APPROVAL', booking_mode: input.mode || 'TIMED', resort_checkout_input: input.resortCheckoutAt || null, booking_qr_token: `rp-rental-${randomBytes(24).toString('hex')}`, hold_expires_at: new Date(now.getTime() + ttl(staff ? 'RENTAL_PICKUP_HOLD_SECONDS' : 'RENTAL_REQUEST_HOLD_SECONDS', staff ? 1800 : 900)),
+      rental_fee: fee.rental_fee, deposit_amount: fee.deposit_amount, fee_breakdown: fee, estimated_due_at: fee.due_at, start_at: null, due_at: null, confirmed_rental_at: null, confirmed_return_at: null, received_at: null, delivery_location: location, payment_method: paymentMethod, payment_confirmed_by_admin: false, payment_proof_status: paymentProof ? 'PENDING_REVIEW' : 'NOT_REQUIRED', payment_proof_reference: paymentProof?.reference || null, payment_proof_note: null, payment_proof_revision: 0, rental_paid_amount: 0, deposit_collected_amount: 0, deposit_applied_amount: 0, deposit_refunded_amount: 0, rental_refunded_amount: 0, delivery_status: 'NOT_PREPARED', delivery_preparation: null, request_source: requestSource, release_condition: null, return_condition: null, created_at: now, updated_at: now, created_by: actorId(actor), ...(staff ? { admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_at: now } } : {}) };
     Object.assign(rental, paymentSummary(rental));
-    if (!customerDoc.exists) tx.create(record(db, 'customers', customerId), { full_name: rental.customer_name, customer_code: `APP-${customerId.toUpperCase()}`, email: rental.customer_email, phone: rental.customer_phone, auth_uid: customerId, is_active: true, created_at: now, updated_at: now });
+    if (!customerDoc.exists) tx.create(record(db, 'customers', customerId), { full_name: rental.customer_name, customer_code: generatedCustomerCode, email: rental.customer_email, phone: rental.customer_phone, auth_uid: customerId, is_active: true, created_at: now, updated_at: now });
     tx.create(rentalRef, rental);
+    if (proofRef) tx.create(proofRef, { rental_id: rentalRef.id, customer_id: customerId, image_data_url: paymentProof.image_data_url, reference: paymentProof.reference, status: 'PENDING_REVIEW', submitted_at: now, updated_at: now });
     // Physical availability and the reservation are separate. The catalog derives Reserved from this pointer.
     tx.update(itemDoc.ref, { reserved_rental_id: rentalRef.id, updated_at: now });
     audit(tx, db, actor, 'RENTAL_BOOKED', rentalRef.id, now, { actor_type: staff ? 'USER' : 'CUSTOMER' });
@@ -148,15 +160,16 @@ export async function reviewBooking(db, actor, id, input, now = new Date()) {
   if (!['APPROVE', 'REJECT'].includes(action)) fail(400, 'Choose approve or reject.');
   const result = await db.runTransaction(async tx => {
     const rentalDoc = await tx.get(record(db, 'rentals', idValue(id)));
-    if (!rentalDoc.exists) fail(404, 'Booking not found.');
+    if (!rentalDoc.exists) fail(404, 'Rental request not found.');
     const rental = docData(rentalDoc), itemDoc = await tx.get(record(db, 'items', rental.item_id || rental.itemId));
-    if (!pendingStatuses.includes(state(rental))) fail(409, 'This booking is already released or closed.');
-    if (holdElapsed(rental, now)) return { rental: closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Booking hold expired before pickup.', now, 'expiry-worker'), expired: true };
+    if (!pendingStatuses.includes(state(rental))) fail(409, 'This rental request is already handed off or closed.');
+    if (holdElapsed(rental, now)) return { rental: closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Rental request expired before handoff.', now, 'expiry-worker'), expired: true };
     if (action === 'REJECT') return { rental: closeHold(tx, db, rentalDoc, itemDoc, 'REJECTED', optionalText(input.reason, 'Rejection reason'), now, actor) };
     if (state(rental) === 'APPROVED') return { rental, duplicate: true };
-    if (!itemDoc.exists || itemDoc.data().is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(itemDoc.data().status) || itemDoc.data().reserved_rental_id !== id) fail(409, 'This unit is no longer reserved for the booking.');
+    if (rental.payment_method === 'QR' && rental.request_source === 'MOBILE_APP' && rental.payment_proof_status !== 'VERIFIED') fail(409, 'Review and verify the customer’s QR payment proof before approving this rental request.');
+    if (!itemDoc.exists || itemDoc.data().is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(itemDoc.data().status) || itemDoc.data().reserved_rental_id !== id) fail(409, 'This unit is no longer reserved for the rental request.');
     const payment = collectPayment(rental, input);
-    const changes = { status: 'APPROVED', ...payment, booking_qr_token: rental.booking_qr_token || `rp-booking-${randomBytes(24).toString('hex')}`, hold_expires_at: new Date(now.getTime() + ttl('RENTAL_PICKUP_HOLD_SECONDS', 1800)), admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_by_name: actor.full_name || actor.name || actorId(actor), reviewed_at: now, notes: String(input.notes || '').trim().slice(0, 1000) }, updated_at: now };
+    const changes = { status: 'APPROVED', ...payment, booking_qr_token: rental.booking_qr_token || `rp-rental-${randomBytes(24).toString('hex')}`, hold_expires_at: new Date(now.getTime() + ttl('RENTAL_PICKUP_HOLD_SECONDS', 1800)), admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_by_name: actor.full_name || actor.name || actorId(actor), reviewed_at: now, notes: String(input.notes || '').trim().slice(0, 1000) }, updated_at: now };
     Object.assign(changes, paymentSummary(rental, changes));
     tx.update(rentalDoc.ref, changes); audit(tx, db, actor, 'BOOKING_APPROVED', id, now);
     queueRentalNotification(tx, db, { ...rental, ...changes }, 'BOOKING_APPROVED', now);
@@ -166,24 +179,131 @@ export async function reviewBooking(db, actor, id, input, now = new Date()) {
   return serializeFlow(result);
 }
 
-// Read-only preflight for the transaction-first release wizard. Release rechecks
-// both codes and the reservation atomically; preflight never starts the timer.
+export async function submitRentalPaymentProof(db, actor, id, input, now = new Date()) {
+  details(input);
+  const proof = validatePaymentProof(input), rentalId = idValue(id);
+  const rentalRef = record(db, 'rentals', rentalId), proofRef = record(db, 'rental_payment_proofs', rentalId);
+  const result = await db.runTransaction(async tx => {
+    const [rentalDoc, proofDoc] = await Promise.all([tx.get(rentalRef), tx.get(proofRef)]);
+    if (!rentalDoc.exists) fail(404, 'Rental request not found.');
+    const rental = docData(rentalDoc);
+    if (String(rental.customer_id || rental.customerId) !== actorId(actor)) fail(403, 'You can only upload proof for your own rental request.');
+    if (rental.payment_method !== 'QR' || state(rental) !== 'PENDING_ADMIN_APPROVAL') fail(409, 'Payment proof can only be uploaded for a QR rental request awaiting review.');
+    if (rental.payment_proof_status !== 'REJECTED') fail(409, 'Payment proof can only be replaced after the owner rejects the previous screenshot.');
+    if (holdElapsed(rental, now)) fail(409, 'This rental request expired. Send a new request before uploading payment proof.');
+    const proofRecord = { rental_id: rentalId, customer_id: actorId(actor), image_data_url: proof.image_data_url, reference: proof.reference, status: 'PENDING_REVIEW', submitted_at: now, updated_at: now };
+    if (proofDoc.exists) tx.set(proofRef, proofRecord); else tx.create(proofRef, proofRecord);
+    const revision = Number(rental.payment_proof_revision || 0) + 1;
+    const changes = { payment_proof_status: 'PENDING_REVIEW', payment_proof_reference: proof.reference || null, payment_proof_note: null, payment_proof_revision: revision, updated_at: now };
+    tx.update(rentalRef, changes);
+    queueRentalNotification(tx, db, { ...rental, ...changes }, 'PAYMENT_PROOF_SUBMITTED', now, { audience: 'STAFF', revision });
+    audit(tx, db, actor, 'RENTAL_PAYMENT_PROOF_SUBMITTED', rentalId, now, { reference: proof.reference || null });
+    return { rental: { ...rental, ...changes } };
+  });
+  return serializeFlow(result);
+}
+
+export async function rentalPaymentProof(db, id) {
+  const rentalId = idValue(id), [rentalDoc, proofDoc] = await Promise.all([
+    record(db, 'rentals', rentalId).get(), record(db, 'rental_payment_proofs', rentalId).get()
+  ]);
+  if (!rentalDoc.exists) fail(404, 'Rental request not found.');
+  if (!proofDoc.exists) fail(404, 'This customer has not uploaded payment proof.');
+  const proof = proofDoc.data();
+  return { proof: { rental_id: rentalId, image_data_url: proof.image_data_url, reference: proof.reference || null, status: proof.status, submitted_at: serializeFlow(proof.submitted_at), review_note: proof.review_note || null } };
+}
+
+export async function reviewRentalPaymentProof(db, actor, id, input, now = new Date()) {
+  details(input);
+  const action = String(input.action || '').toUpperCase();
+  if (!['VERIFY', 'REJECT'].includes(action)) fail(400, 'Choose verify or reject for the payment proof.');
+  const note = action === 'REJECT' ? requiredText(input.reason, 'Reason for rejecting payment proof', 1000) : optionalText(input.notes, 'Review note', 1000);
+  const rentalId = idValue(id), rentalRef = record(db, 'rentals', rentalId), proofRef = record(db, 'rental_payment_proofs', rentalId);
+  const result = await db.runTransaction(async tx => {
+    const [rentalDoc, proofDoc] = await Promise.all([tx.get(rentalRef), tx.get(proofRef)]);
+    if (!rentalDoc.exists) fail(404, 'Rental request not found.');
+    if (!proofDoc.exists) fail(404, 'This customer has not uploaded payment proof.');
+    const rental = docData(rentalDoc), proof = proofDoc.data();
+    if (state(rental) !== 'PENDING_ADMIN_APPROVAL' || rental.payment_method !== 'QR') fail(409, 'Only an open QR rental request can be reviewed.');
+    if (proof.status !== 'PENDING_REVIEW') fail(409, 'This payment proof has already been reviewed.');
+    const itemDoc = await tx.get(record(db, 'items', rental.item_id || rental.itemId));
+    if (holdElapsed(rental, now)) {
+      const closed = closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Rental request expired before payment review.', now, 'expiry-worker');
+      tx.update(proofRef, { status: 'EXPIRED', reviewed_at: now, updated_at: now });
+      return { rental: closed, expired: true };
+    }
+    if (action === 'REJECT') {
+      tx.update(proofRef, { status: 'REJECTED', review_note: note, reviewed_by: actorId(actor), reviewed_at: now, updated_at: now });
+      const changes = { payment_proof_status: 'REJECTED', payment_proof_note: note, updated_at: now };
+      tx.update(rentalRef, changes);
+      audit(tx, db, actor, 'RENTAL_PAYMENT_PROOF_REJECTED', rentalId, now, { reason: note });
+      queueRentalNotification(tx, db, { ...rental, ...changes }, 'PAYMENT_PROOF_REJECTED', now, { audience: 'CUSTOMER', reason: note, revision: Number(rental.payment_proof_revision || 0) });
+      return { rental: { ...rental, ...changes } };
+    }
+    if (!itemDoc.exists || itemDoc.data().is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(itemDoc.data().status) || itemDoc.data().reserved_rental_id !== rentalId) fail(409, 'This equipment is no longer reserved for this rental request.');
+    const expectedAmount = round(Number(rental.rental_fee || 0) + Number(rental.deposit_amount || 0));
+    if (!money(expectedAmount)) fail(409, 'The saved rental total is invalid. Review the price before approving payment.');
+    const changes = {
+      status: 'APPROVED', payment_proof_status: 'VERIFIED', payment_proof_note: note || null,
+      payment_confirmed_by_admin: true, rental_paid_amount: Number(rental.rental_fee || 0),
+      deposit_collected_amount: Number(rental.deposit_amount || 0),
+      hold_expires_at: new Date(now.getTime() + ttl('RENTAL_PICKUP_HOLD_SECONDS', 1800)),
+      booking_qr_token: rental.booking_qr_token || `rp-rental-${randomBytes(24).toString('hex')}`,
+      admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_by_name: actor.full_name || actor.name || actorId(actor), reviewed_at: now, notes: note || 'QR payment proof verified.' }, updated_at: now
+    };
+    Object.assign(changes, paymentSummary(rental, changes));
+    tx.update(rentalRef, changes);
+    tx.update(proofRef, { status: 'VERIFIED', review_note: note || null, reviewed_by: actorId(actor), reviewed_at: now, verified_amount: expectedAmount, updated_at: now });
+    audit(tx, db, actor, 'RENTAL_PAYMENT_PROOF_VERIFIED', rentalId, now, { verified_amount: expectedAmount });
+    queueRentalNotification(tx, db, { ...rental, ...changes }, 'BOOKING_APPROVED', now);
+    return { rental: { ...rental, ...changes } };
+  });
+  if (result.expired) fail(409, 'This rental request expired before its payment proof was reviewed.');
+  return serializeFlow(result);
+}
+
+export async function prepareRentalDelivery(db, actor, id, input, now = new Date()) {
+  details(input);
+  const code = requiredText(input.inventoryCode, 'Equipment QR', 256), manualReason = optionalText(input.manualReason, 'Manual lookup reason');
+  const manual = Boolean(manualReason);
+  const rentalId = idValue(id);
+  return serializeFlow(await db.runTransaction(async tx => {
+    const rentalDoc = await tx.get(record(db, 'rentals', rentalId));
+    if (!rentalDoc.exists) fail(404, 'Rental request not found.');
+    const rental = docData(rentalDoc), itemId = rental.item_id || rental.itemId;
+    const [itemDoc, related] = await Promise.all([tx.get(record(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
+    if (state(rental) !== 'APPROVED' || holdElapsed(rental, now)) fail(409, 'Only an approved rental request within its handoff hold can be prepared for delivery.');
+    if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
+    const item = docData(itemDoc);
+    if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== rentalId || rows(related).some(row => row.id !== rentalId && open(row))) fail(409, 'The assigned equipment is no longer reserved for this rental request.');
+    if (manual) requiredText(manualReason, 'Manual lookup reason');
+    if (!(code === item.qr_token || manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(code))) fail(409, `Equipment mismatch. This rental requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan that unit’s printed QR at the shop.`);
+    const prepared = { status: 'PREPARED', prepared_at: now, prepared_by: actorId(actor), item_id: itemId, item_code: item.item_code || item.qrCode || '', verification_method: manual ? 'MANUAL' : 'QR', manual_reason: manual ? manualReason : null };
+    const changes = { delivery_status: 'PREPARED', delivery_preparation: prepared, hold_expires_at: new Date(now.getTime() + ttl('RENTAL_DELIVERY_HOLD_SECONDS', 7200)), updated_at: now };
+    tx.update(rentalDoc.ref, changes);
+    audit(tx, db, actor, 'RENTAL_PREPARED_FOR_DELIVERY', rentalId, now, { item_id: itemId, verification_method: prepared.verification_method });
+    queueRentalNotification(tx, db, { ...rental, ...changes }, 'DELIVERY_PREPARED', now);
+    return { rental: { ...rental, ...changes }, item: { id: itemId, name: item.name, item_code: item.item_code || item.qrCode || '' } };
+  }));
+}
+
+// Read-only handoff preflight. Equipment is scanned and marked prepared at the
+// shop; the customer scans their rental QR at the resort to start the timer.
 export async function verifyReleaseCodes(db, actor, id, input, now = new Date()) {
   details(input);
   return serializeFlow(await db.runTransaction(async tx => {
     const rentalDoc = await tx.get(record(db, 'rentals', idValue(id)));
-    if (!rentalDoc.exists) fail(404, 'Booking not found.');
+    if (!rentalDoc.exists) fail(404, 'Rental request not found.');
     const rental = docData(rentalDoc), itemId = rental.item_id || rental.itemId;
-    if (state(rental) !== 'APPROVED') fail(409, 'Only an approved booking can be verified for pickup.');
-    if (holdElapsed(rental, now)) fail(409, 'The pickup deadline expired. Prepare a new booking.');
+    if (state(rental) !== 'APPROVED') fail(409, 'Only an approved rental request can be handed off.');
+    if (rental.delivery_status !== 'PREPARED' || rental.delivery_preparation?.item_id !== itemId) fail(409, 'Scan and prepare the assigned equipment at the shop before delivery.');
+    if (holdElapsed(rental, now)) fail(409, 'The handoff deadline expired. Ask the customer to send a new rental request.');
     transactionScanCheck(input, rental);
     const [itemDoc, related] = await Promise.all([tx.get(record(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
     const item = docData(itemDoc);
-    if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== id || rows(related).some(row => row.id !== id && open(row))) fail(409, 'The assigned equipment is no longer available for release. Refresh this booking.');
-    const inventoryVerified = input.inventoryCode != null;
-    if (inventoryVerified) scanCheck(input, item, rental);
-    return { booking_verified: true, inventory_verified: inventoryVerified, rental: { id: rental.id, status: rental.status, rental_code: rental.rental_code, item_id: itemId, customer_id: rental.customer_id || rental.customerId }, item: { id: item.id, name: item.name, item_code: item.item_code || item.qrCode || '' } };
+    if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== id || rows(related).some(row => row.id !== id && open(row))) fail(409, 'The assigned equipment is no longer reserved for handoff. Refresh this rental request.');
+    return { booking_verified: true, inventory_verified: true, delivery_prepared: true, rental: { id: rental.id, status: rental.status, rental_code: rental.rental_code, item_id: itemId, customer_id: rental.customer_id || rental.customerId }, item: { id: item.id, name: item.name, item_code: item.item_code || item.qrCode || '' } };
   }));
 }
 
@@ -192,22 +312,26 @@ export async function releaseBooking(db, actor, id, input, now = new Date()) {
   const key = operationKey(input.requestKey);
   const result = await db.runTransaction(async tx => {
     const rentalDoc = await tx.get(record(db, 'rentals', idValue(id)));
-    if (!rentalDoc.exists) fail(404, 'Booking not found.');
+    if (!rentalDoc.exists) fail(404, 'Rental request not found.');
     const rental = docData(rentalDoc), itemId = rental.item_id || rental.itemId;
     const [itemDoc, related] = await Promise.all([tx.get(record(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
     if (state(rental) === 'ACTIVE' && rental.release_operation_key === key) return { rental, duplicate: true };
-    if (state(rental) !== 'APPROVED') fail(409, 'Approve this booking before confirming physical release.');
-    if (holdElapsed(rental, now)) return { rental: closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Pickup deadline elapsed.', now, 'expiry-worker'), expired: true };
+    if (state(rental) !== 'APPROVED') fail(409, 'Approve this rental request before confirming the handoff.');
+    if (rental.delivery_status !== 'PREPARED' || rental.delivery_preparation?.item_id !== itemId) fail(409, 'Prepare the assigned equipment at the shop before the customer handoff.');
+    if (holdElapsed(rental, now)) return { rental: closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Handoff deadline elapsed.', now, 'expiry-worker'), expired: true };
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
-    const item = docData(itemDoc), verification = scanCheck(input, item, rental);
-    if (input.customerVerified !== true) fail(400, 'Verify that the person collecting the equipment matches the booking customer.');
+    const item = docData(itemDoc);
+    transactionScanCheck(input, rental);
+    const manualHandoff = Boolean(input.manualReason?.trim());
+    const verification = { verification_method: manualHandoff ? 'MANUAL' : 'QR', manual_reason: manualHandoff ? input.manualReason.trim() : null };
+    if (input.customerVerified !== true) fail(400, 'Verify that the person receiving the equipment matches the rental customer.');
     if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== id || rows(related).some(row => row.id !== id && open(row))) fail(409, 'The assigned equipment is no longer available for release.');
     const payment = collectPayment(rental, input, true), fee = rental.fee_breakdown;
     if (!fee || !Number.isInteger(fee.billed_minutes) || fee.billed_minutes <= 0) fail(409, 'Review the saved duration before release.');
     const due = fee.mode === 'WHOLE_STAY' ? asDate(fee.due_at) : new Date(now.getTime() + fee.billed_minutes * 60000);
-    if (!due || due <= now) fail(409, 'The fixed checkout deadline has passed. Cancel this booking and prepare a new one.');
+    if (!due || due <= now) fail(409, 'The selected checkout deadline has passed. Cancel this rental request and prepare a new one.');
     const condition = inspectionRecord(tx, db, actor, id, itemId, input.inspection, 'RELEASE', now);
-    const changes = { status: 'ACTIVE', ...payment, ...verification, release_operation_key: key, start_at: now, due_at: due, confirmed_rental_at: now, confirmed_rental_by: actorId(actor), payment_confirmed_by_admin: true, fee_breakdown: { ...fee, start_at: now, due_at: due }, release_condition: condition, release_condition_record_id: condition.id, updated_at: now };
+    const changes = { status: 'ACTIVE', delivery_status: 'HANDED_OFF', delivery_handoff: { handed_off_at: now, handed_off_by: actorId(actor), verification_method: verification.verification_method, manual_reason: verification.manual_reason }, ...payment, handoff_verification: verification, release_operation_key: key, start_at: now, due_at: due, confirmed_rental_at: now, confirmed_rental_by: actorId(actor), payment_confirmed_by_admin: true, fee_breakdown: { ...fee, start_at: now, due_at: due }, release_condition: condition, release_condition_record_id: condition.id, updated_at: now };
     Object.assign(changes, paymentSummary(rental, changes));
     tx.update(rentalDoc.ref, changes); tx.update(itemDoc.ref, { status: 'RENTED', condition_status: condition.condition, reserved_rental_id: null, current_rental_id: id, updated_at: now });
     tx.create(db.collection('item_status_history').doc(), { item_id: itemId, old_status: item.status, new_status: 'RENTED', changed_at: now, changed_by: actorId(actor), source: 'ADMIN', reference_type: 'RENTAL', rental_id: id });
@@ -215,7 +339,7 @@ export async function releaseBooking(db, actor, id, input, now = new Date()) {
     queueRentalNotification(tx, db, { ...rental, ...changes }, 'RENTAL_RELEASED', now);
     return { rental: { ...rental, ...changes } };
   });
-  if (result.expired) fail(409, 'The pickup deadline expired. Prepare a new booking.');
+  if (result.expired) fail(409, 'The handoff deadline expired. Ask the customer to send a new rental request.');
   return serializeFlow(result);
 }
 
@@ -284,11 +408,11 @@ async function rejectReturnRequest(db, actor, id, input, now) {
 export async function cancelBooking(db, actor, id, now = new Date()) {
   return serializeFlow(await db.runTransaction(async tx => {
     const rentalDoc = await tx.get(record(db, 'rentals', idValue(id)));
-    if (!rentalDoc.exists) fail(404, 'Booking not found.');
+    if (!rentalDoc.exists) fail(404, 'Rental request not found.');
     const rental = docData(rentalDoc);
-    if (String(rental.customer_id || rental.customerId) !== actorId(actor)) fail(403, 'You can only cancel your own booking.');
+    if (String(rental.customer_id || rental.customerId) !== actorId(actor)) fail(403, 'You can only cancel your own rental request.');
     if (state(rental) === 'CANCELLED') return { rental, duplicate: true };
-    if (!pendingStatuses.includes(state(rental))) fail(409, 'Only a booking waiting for approval or pickup can be cancelled.');
+    if (!pendingStatuses.includes(state(rental))) fail(409, 'Only a rental request waiting for approval or handoff can be cancelled.');
     const itemDoc = await tx.get(record(db, 'items', rental.item_id || rental.itemId));
     return { rental: closeHold(tx, db, rentalDoc, itemDoc, 'CANCELLED', 'Cancelled by customer before release.', now, actor) };
   }));
@@ -302,7 +426,7 @@ export async function expireRentalHolds(db, now = new Date()) {
       const rentalDoc = await tx.get(candidate.ref);
       if (!rentalDoc.exists || !holdElapsed(rentalDoc.data(), now)) return false;
       const rental = docData(rentalDoc), itemDoc = await tx.get(record(db, 'items', rental.item_id || rental.itemId));
-      closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Booking hold expired before pickup.', now, 'expiry-worker');
+      closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Rental request expired before handoff.', now, 'expiry-worker');
       return true;
     });
     if (changed) expired++;
@@ -312,10 +436,10 @@ export async function expireRentalHolds(db, now = new Date()) {
 
 export async function rentalTicket(db, actor, id) {
   const doc = await record(db, 'rentals', idValue(id)).get();
-  if (!doc.exists) fail(404, 'Booking not found.');
+  if (!doc.exists) fail(404, 'Rental request not found.');
   const rental = docData(doc);
-  if (String(rental.customer_id || rental.customerId) !== actorId(actor)) fail(403, 'You can only view your own booking ticket.');
-  if (!rental.booking_qr_token) fail(409, 'This legacy booking does not have a transaction QR. Ask the admin to use its booking code.');
+  if (String(rental.customer_id || rental.customerId) !== actorId(actor)) fail(403, 'You can only view your own rental handoff QR.');
+  if (!rental.booking_qr_token) fail(409, 'This older rental does not have a handoff QR. Ask the operator to find it by rental code.');
   return { ticket: { rental_id: id, rental_code: rental.rental_code, status: state(rental), value: rental.booking_qr_token, image_data_url: await QRCode.toDataURL(rental.booking_qr_token, { errorCorrectionLevel: 'M', margin: 4, width: 360 }), hold_expires_at: serializeFlow(rental.hold_expires_at || null) } };
 }
 
@@ -328,7 +452,7 @@ export async function lookupRental(db, input) {
     const matches = (await Promise.all(fields.map(field => db.collection('rentals').where(field, '==', code).get()))).flatMap(snap => rows(snap));
     if (/^[A-Za-z0-9_-]{1,128}$/.test(code)) { const doc = await record(db, 'rentals', code).get(); if (doc.exists) matches.push(docData(doc)); }
     const unique = [...new Map(matches.map(row => [row.id, row])).values()];
-    if (unique.length !== 1) fail(404, 'No unique booking matches that transaction QR or code.');
+    if (unique.length !== 1) fail(404, 'No unique rental request matches that QR or rental code.');
     rental = unique[0];
   } else if (kind === 'INVENTORY') {
     const item = await lookupInventory(db, code);
@@ -354,18 +478,18 @@ export async function changeAssignedUnit(db, actor, id, input, now = new Date())
   const reason = requiredText(input.reason, 'Unit change reason'), target = await lookupInventory(db, requiredText(input.inventoryCode, 'Replacement inventory QR', 256));
   return serializeFlow(await db.runTransaction(async tx => {
     const rentalDoc = await tx.get(record(db, 'rentals', idValue(id)));
-    if (!rentalDoc.exists) fail(404, 'Booking not found.');
+    if (!rentalDoc.exists) fail(404, 'Rental request not found.');
     const rental = docData(rentalDoc), oldId = rental.item_id || rental.itemId;
     const [oldDoc, newDoc, related] = await Promise.all([tx.get(record(db, 'items', oldId)), tx.get(record(db, 'items', target.id)), rentalsForItem(tx, db, target.id)]);
-    if (state(rental) !== 'APPROVED' || holdElapsed(rental, now)) fail(409, 'Only an approved booking within its pickup deadline can change units.');
+    if (state(rental) !== 'APPROVED' || holdElapsed(rental, now)) fail(409, 'Only an approved rental request within its handoff hold can change units.');
     if (oldId === target.id) return { rental, duplicate: true };
     if (!oldDoc.exists || oldDoc.data().reserved_rental_id !== id || !newDoc.exists) fail(409, 'Refresh the assigned equipment before changing units.');
     const before = oldDoc.data(), after = newDoc.data();
     const sameProduct = before.pricing_product_id ? after.pricing_product_id === before.pricing_product_id : after.name === before.name && after.category_id === before.category_id;
     if (!sameProduct || after.is_active === false || after.status !== 'AVAILABLE' || after.reserved_rental_id || rows(related).some(open)) fail(409, 'Choose an available unit of the same equipment product.');
     const quote = await frozenQuote(tx, db, docData(newDoc), { durationMinutes: rental.fee_breakdown?.requested_minutes, mode: rental.booking_mode || 'TIMED', ...(rental.resort_checkout_input ? { resortCheckoutAt: rental.resort_checkout_input } : {}) }, now);
-    if (quote.rental_fee !== rental.rental_fee || quote.deposit_amount !== rental.deposit_amount || quote.overtime_rate !== rental.fee_breakdown?.overtime_rate) fail(409, 'This unit has different pricing. Cancel and prepare a new booking so the customer can review the price.');
-    const changes = { item_id: target.id, item_name: after.name, item_code: after.item_code || after.qrCode || '', updated_at: now };
+    if (quote.rental_fee !== rental.rental_fee || quote.deposit_amount !== rental.deposit_amount || quote.overtime_rate !== rental.fee_breakdown?.overtime_rate) fail(409, 'This unit has different pricing. Cancel and prepare a new rental request so the customer can review the price.');
+    const changes = { item_id: target.id, item_name: after.name, item_code: after.item_code || after.qrCode || '', delivery_status: 'NOT_PREPARED', delivery_preparation: null, updated_at: now };
     tx.update(oldDoc.ref, { reserved_rental_id: null, ...(before.status === 'RESERVED_PENDING' ? { status: 'AVAILABLE' } : {}), updated_at: now });
     tx.update(newDoc.ref, { reserved_rental_id: id, updated_at: now }); tx.update(rentalDoc.ref, changes);
     audit(tx, db, actor, 'BOOKING_UNIT_CHANGED', id, now, { reason, previous_item_id: oldId, item_id: target.id });
@@ -387,7 +511,7 @@ export async function settleRentalPayment(db, actor, id, input, now = new Date()
       if (saved.payment_amount !== received || saved.deposit_applied_amount !== depositApplied || saved.deposit_refund_amount !== refunded || saved.rental_refund_amount !== rentalRefund || saved.notes !== note) fail(409, 'This settlement key belongs to different amounts.');
       return { rental, duplicate: true };
     }
-    if (!['COMPLETED', 'CANCELLED', 'REJECTED', 'EXPIRED'].includes(state(rental))) fail(409, 'Complete the physical return or close the booking before settling its final balance.');
+    if (!['COMPLETED', 'CANCELLED', 'REJECTED', 'EXPIRED'].includes(state(rental))) fail(409, 'Complete the physical return or close the rental request before settling its final balance.');
     if (!Object.hasOwn(rental, 'rental_paid_amount')) fail(409, 'Legacy payment receipts were not recorded. Review them before using settlement.');
     const current = paymentSummary(rental), closed = state(rental) !== 'COMPLETED';
     if (received + depositApplied > current.balance_due || depositApplied + refunded > current.deposit_remaining || rentalRefund > Number(rental.rental_paid_amount || 0) - Number(rental.rental_refunded_amount || 0) || !closed && rentalRefund > 0 || closed && received + depositApplied > 0) fail(400, 'The entered amounts exceed the outstanding balance or refundable payments.');

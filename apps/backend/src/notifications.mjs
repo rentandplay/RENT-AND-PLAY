@@ -21,16 +21,21 @@ function content(type, rental, reason) {
   const location = rental.delivery_location ? ` Location: ${rental.delivery_location}.` : '';
   const extra = reason ? ` Reason: ${reason}` : '';
   return ({
-    BOOKING_REQUESTED: ['New rental request', `${customer} requested ${item}.${location} Review the booking to approve or reject it.`],
-    BOOKING_APPROVED: ['Booking approved', `Your booking for ${item} is approved. Keep your transaction QR ready for equipment handoff. The rental timer starts at physical release.`],
-    BOOKING_REJECTED: ['Booking rejected', `Your booking for ${item} was rejected.${extra} The equipment reservation has been released.`],
-    BOOKING_CANCELLED: ['Customer cancelled a booking', `${customer} cancelled the booking for ${item}. The equipment reservation has been released.`],
-    BOOKING_EXPIRED: ['Booking hold expired', `The pickup hold for ${item} expired. Make a new booking if you still need the equipment.`],
-    RENTAL_RELEASED: ['Rental started', `${item} has been handed over. Your rental timer is now running. Check your booking for the return time.`],
+    BOOKING_REQUESTED: ['New rental request', rental.payment_method === 'QR'
+      ? `${customer} requested ${item} and uploaded an InstaPay screenshot.${location} Review the payment proof and rental request.`
+      : `${customer} requested ${item}.${location} Review the rental request.`],
+    BOOKING_APPROVED: ['Rental request approved', `Your rental request for ${item} is approved. Keep your rental handoff QR ready. The timer starts when the equipment reaches you.`],
+    BOOKING_REJECTED: ['Rental request rejected', `Your rental request for ${item} was rejected.${extra} The equipment reservation has been released.`],
+    BOOKING_CANCELLED: ['Customer cancelled a rental request', `${customer} cancelled the rental request for ${item}. The equipment reservation has been released.`],
+    BOOKING_EXPIRED: ['Rental request expired', `The handoff hold for ${item} expired. Send a new rental request if you still need the equipment.`],
+    PAYMENT_PROOF_SUBMITTED: ['Payment proof submitted', `${customer} uploaded QR payment proof for ${item}. Review the screenshot before approving the rental request.`],
+    PAYMENT_PROOF_REJECTED: ['Payment proof needs attention', `The QR payment proof for ${item} could not be verified.${extra} Upload a clear, successful transfer screenshot or contact the owner.`],
+    DELIVERY_PREPARED: ['Equipment ready for delivery', `${item} was verified at the shop and marked ready for delivery.${location}`],
+    RENTAL_RELEASED: ['Rental started', `${item} has been handed over to you. Your rental timer is now running. Check your rental details for the return time.`],
     RETURN_REQUESTED: ['New return request', `${customer} requested to return ${item}. Arrange collection or receive the equipment at the desk. The timer stops at physical receipt.`],
     RETURN_REQUEST_REJECTED: ['Return request rejected', `Your return request for ${item} was rejected.${extra} The rental remains active until the admin physically receives the equipment.`],
     RETURN_RECEIVED: ['Equipment received', `The admin received ${item}. Your rental timer has stopped. Inspection is still pending.`],
-    RETURN_COMPLETED: ['Return confirmed', `The return of ${item} is confirmed after inspection. Check your booking for any balance or deposit refund.`],
+    RETURN_COMPLETED: ['Return confirmed', `The return of ${item} is confirmed after inspection. Check your rental details for any balance or deposit refund.`],
   })[type];
 }
 

@@ -1,23 +1,26 @@
 # Rental notifications
 
-Rental notifications use the same authenticated backend as bookings. ESP32 remains on standby and has no part in this flow.
+Rental notifications use the same authenticated backend as rental requests. ESP32 remains on standby and has no part in this flow.
 
 | Event | Recipient | Next step |
 | --- | --- | --- |
-| Customer submits a booking | Active operators and owners | Open the booking and approve or reject |
-| Admin approves or prepares a counter booking | That booking's customer | Keep the transaction QR ready for handoff |
-| Admin rejects a booking | That booking's customer | Read the reason, when supplied, and make another booking |
-| Customer cancels before release | Active operators and owners | Reservation is released |
-| Booking or pickup hold expires | That booking's customer | Make a new booking |
-| Equipment is physically released | That booking's customer | Rental clock starts |
+| Customer submits a cash rental request | Active operators and owners | Review and approve or reject |
+| Customer submits QR payment proof | Active operators and owners | Check the screenshot against the saved total |
+| Owner rejects QR payment proof | That customer | Upload a corrected successful-transfer screenshot |
+| Admin approves a rental request or prepares a counter rental | That rental's customer | Keep the rental handoff QR ready |
+| Admin rejects a rental request | That rental's customer | Read the reason, when supplied, and submit another request |
+| Customer cancels before handoff | Active operators and owners | Reservation is released |
+| Review or handoff hold expires | That rental's customer | Submit a new rental request |
+| Equipment is prepared at the shop | That rental's customer | Expect delivery of the assigned unit at the selected location |
+| Operator scans customer rental QR and confirms handoff | That rental's customer | Rental clock starts |
 | Customer submits a return request | Active operators and owners | Arrange collection or physical receipt |
-| Admin rejects a return request | That booking's customer | Rental stays active; customer can request again |
-| Admin receives the equipment | That booking's customer | Clock stops; inspection is pending |
-| Admin completes return inspection | That booking's customer | Check final balance and deposit refund |
+| Admin rejects a return request | That rental's customer | Rental stays active; customer can request again |
+| Admin receives the equipment | That rental's customer | Clock stops; inspection is pending |
+| Admin completes return inspection | That rental's customer | Check final balance and deposit refund |
 
 Notifications are saved in the same Firestore transaction as the rental change. Failed actions create no alert. Event IDs identify the rental, recipient inbox, event type and return-request revision, so retries do not create duplicate inbox messages. No previous rental events are backfilled on upgrade.
 
-The staff inbox is shared, but read status belongs to each signed-in staff account. Customer inboxes belong to the authenticated customer's Firebase UID; recipient IDs supplied by clients are ignored. `ADMIN` is the operator role and `OWNER` is the super admin role; both receive staff alerts. `USER` customers receive only their own booking decisions and return updates. Opening the bell does not clear unread messages. Opening a message marks it read and opens the specific booking, including completed or rejected bookings. “Mark shown as read” covers loaded entries; older history loads in pages of 60. Badges count unread entries currently loaded. A failed refresh preserves the displayed history. Changing accounts clears local inbox state and ignores late responses from the old session.
+The staff inbox is shared, but read status belongs to each signed-in staff account. Customer inboxes belong to the authenticated customer's Firebase UID; recipient IDs supplied by clients are ignored. `ADMIN` is the operator role and `OWNER` is the super admin role; both receive staff alerts. `USER` customers receive only their own rental decisions and return updates. Opening the bell does not clear unread messages. Opening a message marks it read and opens the specific rental, including completed or rejected records. “Mark shown as read” covers loaded entries; older history loads in pages of 60. Badges count unread entries currently loaded. A failed refresh preserves the displayed history. Changing accounts clears local inbox state and ignores late responses from the old session.
 
 Web polls while visible every 15 seconds. Android polls every 20 seconds while active and refreshes on foreground Firebase messages. Initial history shows a badge without replaying old alerts. A revision check avoids rereading all message documents when the inbox has not changed.
 

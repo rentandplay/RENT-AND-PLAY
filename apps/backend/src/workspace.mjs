@@ -3,6 +3,8 @@ import { loadPricing, savePricing as persistPricing } from './pricing.mjs';
 import { publicTerminal, serializeTransaction } from './transactions.mjs';
 import { auditFields, stageAudit } from './audit.mjs';
 import { isStaffRole, normalizeRole } from './roles.mjs';
+import { allocateCustomerCode } from './customer-codes.mjs';
+import { validateInstapayQr } from './payment-proof.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const rows = snapshot => snapshot.docs.map(docData);
@@ -100,8 +102,7 @@ export async function loadWorkspace(db, role = 'ADMIN', now = new Date(), { owne
 }
 
 export async function createCustomer(db, actor, input, now = new Date()) {
-  const value = validateCustomer(input);
-  if (!(await db.collection('customers').where('customer_code', '==', value.customer_code).limit(1).get()).empty) fail(409, 'That customer code is already in use.');
+  const value = { ...validateCustomer(input), customer_code: await allocateCustomerCode(db, now) };
   const ref = db.collection('customers').doc(), batch = db.batch();
   batch.create(ref, { ...value, is_active: true, created_at: now, updated_at: now, created_by: String(actor) });
   stageAudit(batch, db, actor, 'CUSTOMER_CREATED', 'CUSTOMER', ref.id, { after: { ...value, is_active: true }, now });
@@ -110,15 +111,15 @@ export async function createCustomer(db, actor, input, now = new Date()) {
 }
 
 export async function createMobileCustomerAccount(auth, db, actor, input, now = new Date()) {
-  const value = validateCustomer(input), password = typeof input?.password === 'string' ? input.password : '', confirmPassword = typeof input?.confirmPassword === 'string' ? input.confirmPassword : '';
+  const validated = validateCustomer(input), password = typeof input?.password === 'string' ? input.password : '', confirmPassword = typeof input?.confirmPassword === 'string' ? input.confirmPassword : '';
   if (!actor) fail(401, 'An authenticated administrator is required.');
-  if (!value.email) fail(400, 'An email address is required for mobile app sign-in.');
+  if (!validated.email) fail(400, 'An email address is required for mobile app sign-in.');
   if (password.length < 12 || password.length > 128 || !password.trim()) fail(400, 'Password must be 12–128 characters.');
   if (confirmPassword !== password) fail(400, 'Passwords do not match.');
-  if (!(await db.collection('customers').where('customer_code', '==', value.customer_code).limit(1).get()).empty) fail(409, 'That customer code is already in use.');
-  if (!(await db.collection('users').where('email', '==', value.email).limit(1).get()).empty) fail(409, 'An account with that email already exists. Activate or recover the existing account instead.');
-  if (!(await db.collection('customers').where('email', '==', value.email).limit(1).get()).empty) fail(409, 'A customer with that email already exists. Edit the existing customer or use another email.');
+  if (!(await db.collection('users').where('email', '==', validated.email).limit(1).get()).empty) fail(409, 'An account with that email already exists. Activate or recover the existing account instead.');
+  if (!(await db.collection('customers').where('email', '==', validated.email).limit(1).get()).empty) fail(409, 'A customer with that email already exists. Edit the existing customer or use another email.');
 
+  const value = { ...validated, customer_code: await allocateCustomerCode(db, now) };
   let created;
   try {
     created = await auth.createUser({ displayName: value.full_name, email: value.email, password, emailVerified: false, disabled: false });
@@ -315,6 +316,23 @@ export async function saveSettings(db, actor, input, now = new Date()) {
   await batch.commit(); return serial(value);
 }
 
+export async function savePaymentSettings(db, actor, input, now = new Date()) {
+  const value = validateInstapayQr(input);
+  const ref = db.collection('settings').doc('business'), current = await ref.get();
+  const before = current.exists ? current.data() : {};
+  const safeAudit = fields => ({
+    qr_configured: Boolean(fields.instapay_qr_data_url),
+    account_name: fields.instapay_account_name || null,
+    account_number_last_four: fields.instapay_account_number ? fields.instapay_account_number.slice(-4) : null,
+    instructions: fields.instapay_instructions || null
+  });
+  const batch = db.batch();
+  batch.set(ref, { ...value, updated_at: now }, { merge: true });
+  stageAudit(batch, db, actor, 'PAYMENT_INSTRUCTIONS_UPDATED', 'SETTINGS', 'business', { before: safeAudit(before), after: safeAudit(value), now });
+  await batch.commit();
+  return { ...value };
+}
+
 export async function createWorkspaceUser(auth, db, actor, input, now = new Date()) {
   const full_name = clean(input.fullName, 150), email = clean(input.email, 191).toLowerCase(), password = String(input.password || ''), role = clean(input.role, 20).toUpperCase();
   if (full_name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12 || !['ADMIN', 'OWNER'].includes(role)) fail(400, 'Enter a valid name, email, operator or owner role, and password of at least 12 characters.');
@@ -348,12 +366,14 @@ export async function updateWorkspaceUser(auth, db, actor, id, input, now = new 
       const full_name = clean(account.full_name, 150) || 'Customer';
       const email = clean(account.email, 191).toLowerCase();
       const phone = clean(account.phone, 40);
-      const customer_code = `APP-${String(id).replace(/[^a-z0-9_-]/gi, '').toUpperCase().slice(0, 45)}`;
+      const customer_code = /^CUST-\d+$/i.test(currentCustomer.customer_code || '')
+        ? currentCustomer.customer_code
+        : await allocateCustomerCode(db, now);
       const customerPatch = customerSnap.exists
         ? { ...(currentCustomer.auth_uid !== String(id) ? { auth_uid: String(id) } : {}),
             ...(currentCustomer.is_active !== true ? { is_active: true } : {}),
             ...(!currentCustomer.full_name ? { full_name } : {}),
-            ...(!currentCustomer.customer_code ? { customer_code } : {}),
+            ...(!/^CUST-\d+$/i.test(currentCustomer.customer_code || '') ? { customer_code } : {}),
             ...(!currentCustomer.email && email ? { email } : {}),
             ...(!currentCustomer.phone && phone ? { phone } : {}) }
         : { full_name, customer_code, email: email || null, phone: phone || null, address: null, auth_uid: String(id), is_active: true, created_at: now, updated_at: now };

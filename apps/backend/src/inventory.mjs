@@ -36,12 +36,38 @@ export function validateItem(input,{codeRequired=true}={}) {
   const name=text(input.name,150,'Equipment name');
   if(input.description!==undefined&&(typeof input.description!=='string'||input.description.length>2000))fail(400,'Description must be 2,000 characters or fewer.');
   if(!conditions.includes(input.condition))fail(400,'Choose a valid equipment condition.');
-  if(!['DAILY','HOURLY','FLAT'].includes(input.rateType))fail(400,'Choose a valid rental rate type.');
   const amount=(value,label)=>{if(typeof value!=='number'||!Number.isFinite(value)||value<0||value>9999999999.99||Math.abs(value*100-Math.round(value*100))>.0001)fail(400,`${label} must be a nonnegative amount with at most two decimal places.`);return value;};
+  let customRateOptions=null;
+  if(input.customRateOptions!==undefined&&input.customRateOptions!==null){
+    if(!Array.isArray(input.customRateOptions)||input.customRateOptions.length>8)fail(400,'Add no more than eight custom rental rates.');
+    if(input.customRateOptions.length){
+    const ids=new Set(),labels=new Set();
+    customRateOptions=input.customRateOptions.map((row,index)=>{
+      if(!row||typeof row!=='object'||Array.isArray(row))fail(400,'Each custom rental rate must include a label, duration, type, and price.');
+      const label=text(row.label,80,'Rate label'),normalizedLabel=label.toLocaleLowerCase('en-US');
+      if(labels.has(normalizedLabel))fail(400,'Rate labels must be unique.');labels.add(normalizedLabel);
+      const id=typeof row.id==='string'&&/^[a-z0-9-]{1,80}$/.test(row.id)?row.id:`rate-${index+1}`;
+      if(ids.has(id))fail(400,'Rate option IDs must be unique.');ids.add(id);
+      if(!['SHORT','HOURLY','BLOCK','PACKAGE'].includes(row.kind))fail(400,'Choose a valid custom rate method.');
+      const durationMinutes=Number(row.duration_minutes??row.durationMinutes);
+      if(!Number.isInteger(durationMinutes)||durationMinutes<1||durationMinutes>10080)fail(400,'Each custom rate duration must be between 1 minute and 7 days.');
+      return {id,label,kind:row.kind,duration_minutes:durationMinutes,amount:amount(row.amount,'Custom rental rate')};
+    });
+    if(!customRateOptions.some(row=>row.kind==='HOURLY'||row.kind==='BLOCK'))fail(400,'Add a standard duration rate or a fixed-duration block.');
+    if(customRateOptions.some(row=>row.kind==='PACKAGE')&&!customRateOptions.some(row=>row.kind==='HOURLY'))fail(400,'Add a standard duration rate before using package rates.');
+    }
+  }
+  const customRateType=customRateOptions?.some(row=>row.kind==='HOURLY')?'HOURLY':customRateOptions?.some(row=>row.duration_minutes===1440)?'DAILY':customRateOptions?'FLAT':null;
+  const rateType=customRateOptions?customRateType:['DAILY','HOURLY','FLAT'].includes(input.rateType)?input.rateType:null;
+  if(!rateType)fail(400,'Choose a valid rental rate type.');
+  const fallbackRate=customRateOptions?.find(row=>row.kind==='HOURLY')||customRateOptions?.find(row=>row.kind!=='PACKAGE')||customRateOptions?.[0];
+  const rentalRateValue=customRateOptions?fallbackRate.amount:input.rentalRate;
+  const rentalRate=amount(rentalRateValue,'Rental rate');
   const pricingProductId=input.pricingProductId==null||input.pricingProductId===''?null:String(input.pricingProductId);
   if(pricingProductId&&!/^[a-z0-9-]{1,80}$/.test(pricingProductId))fail(400,'Choose a valid client rate sheet product.');
   if(pricingProductId&&!DEFAULT_PRICING.products.some(product=>product.id===pricingProductId))fail(400,'Choose a product from the client rate sheet.');
-  return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,rateType:input.rateType,rentalRate:amount(input.rentalRate,'Rental rate'),deposit:amount(input.deposit,'Deposit'),latePenalty:amount(input.latePenalty,'Late penalty'),pricingProductId,imageData:validateImageData(input.imageData)};
+  if(pricingProductId&&customRateOptions)fail(400,'Choose either custom rates or a shared pricing product.');
+  return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,rateType,rentalRate,deposit:amount(input.deposit,'Deposit'),latePenalty:amount(input.latePenalty,'Late penalty'),pricingProductId,customRateOptions,imageData:validateImageData(input.imageData)};
 }
 export function equipmentItemCode(sequence) {
   if(!Number.isSafeInteger(sequence)||sequence<1)fail(400,'Equipment code sequence must be a positive whole number.');
@@ -149,7 +175,7 @@ export async function inventoryQrLabels(db) {
 
 const audit=(db,actor,id,action,before,after,now)=>({ref:db.collection('audit_logs').doc(),data:{user_id:String(actor),actor_type:'USER',action,entity_type:'ITEM',entity_id:id,old_values:before||null,new_values:after,created_at:now}});
 const statusRecord=(db,actor,id,oldStatus,newStatus,reference,now)=>oldStatus===newStatus?null:{ref:db.collection('item_status_history').doc(),data:{item_id:id,old_status:oldStatus||null,new_status:newStatus,source:'WEB',reference_type:reference,changed_by:String(actor),changed_at:now}};
-const rateRecord=(actor,id,item,now)=>({item_id:id,rate_type:item.rateType,rental_rate:item.rentalRate,deposit_amount:item.deposit,late_penalty_rate:item.latePenalty,created_by:String(actor),is_active:true,effective_from:now,effective_to:null});
+const rateRecord=(actor,id,item,now)=>({item_id:id,rate_type:item.rateType,rental_rate:item.rentalRate,deposit_amount:item.deposit,late_penalty_rate:item.latePenalty,custom_rate_options:item.customRateOptions||[],created_by:String(actor),is_active:true,effective_from:now,effective_to:null});
 
 export async function createItem(db,actor,input) {
   const item=validateItem(input,{codeRequired:false});
@@ -167,7 +193,7 @@ export async function createItem(db,actor,input) {
     const now=new Date(),id=itemRef.id;
     tx.create(codeRef,{item_id:id,created_at:now});
     tx.set(counterRef,{next_sequence:chosen.sequence+1,updated_at:now},{merge:true});
-    tx.create(itemRef,{item_code:generatedCode,qrCode:generatedCode,category_id:item.categoryId,name:item.name,description:item.description,pricing_product_id:item.pricingProductId,...(item.imageData?{image_data:item.imageData}:{}),qr_token:'RENTPLAY:'+randomUUID(),condition_status:item.condition,status:'AVAILABLE',is_active:true,created_at:now,updated_at:now});
+    tx.create(itemRef,{item_code:generatedCode,qrCode:generatedCode,category_id:item.categoryId,name:item.name,description:item.description,pricing_product_id:item.pricingProductId,...(item.customRateOptions?.length?{custom_rate_options:item.customRateOptions}:{}),...(item.imageData?{image_data:item.imageData}:{}),qr_token:'RENTPLAY:'+randomUUID(),condition_status:item.condition,status:'AVAILABLE',is_active:true,created_at:now,updated_at:now});
     tx.create(rateRef,rateRecord(actor,id,item,now));
     const {imageData,...auditItem}=item,history=statusRecord(db,actor,id,null,'AVAILABLE','CREATED',now),log=audit(db,actor,id,'ITEM_CREATED',null,{...auditItem,code:generatedCode,imageAdded:!!imageData},now);
     tx.create(history.ref,history.data);tx.create(log.ref,log.data);
@@ -190,9 +216,10 @@ export async function updateItem(db,actor,id,input) {
     if(next.condition!==current.condition_status)assertEditable(current,opened,'change the condition of');
     if(String(current.status).toUpperCase()==='AVAILABLE'&&!['GOOD','FAIR'].includes(next.condition))fail(400,'Start maintenance before marking equipment damaged or needing inspection.');
     const now=new Date(),rate=currentRate(rows(ratesSnap));
-    const rateChanged=!rate||rate.rate_type!==next.rateType||Number(rate.rental_rate)!==next.rentalRate||Number(rate.deposit_amount)!==next.deposit||Number(rate.late_penalty_rate)!==next.latePenalty;
+    const customRatesChanged=JSON.stringify(next.customRateOptions||[])!==JSON.stringify(current.custom_rate_options||[]);
+    const rateChanged=!rate||rate.rate_type!==next.rateType||Number(rate.rental_rate)!==next.rentalRate||Number(rate.deposit_amount)!==next.deposit||Number(rate.late_penalty_rate)!==next.latePenalty||customRatesChanged;
     if(rateChanged){for(const old of rows(ratesSnap).filter(r=>r.is_active!==false))tx.update(db.collection('item_rates').doc(old.id),{is_active:false,effective_to:now});tx.create(db.collection('item_rates').doc(),rateRecord(actor,id,next,now));}
-    const changes={category_id:next.categoryId,name:next.name,description:next.description,pricing_product_id:next.pricingProductId,condition_status:next.condition,updated_at:now};
+    const changes={category_id:next.categoryId,name:next.name,description:next.description,pricing_product_id:next.pricingProductId,custom_rate_options:next.customRateOptions||[],condition_status:next.condition,updated_at:now};
     if(next.imageData!==undefined)changes.image_data=next.imageData;
     tx.update(itemRef,changes);
     const {image_data:currentImage,...auditCurrent}=current,{imageData,...auditNext}=next,imageChanged=imageData!==undefined&&(imageData||null)!==(currentImage||null);

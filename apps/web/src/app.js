@@ -29,6 +29,7 @@ const icons = {
   archive: '<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v12h14V8M10 12h4"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>', qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v3M14 20h3M20 20h1"/>', menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   bluetooth: '<path d="m7 7 10 10-5 5V2l5 5L7 17"/>', print: '<path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/><path d="M17 11h.01"/>', download: '<path d="M12 3v12m-5-5 5 5 5-5M4 18v3h16v-3"/>',
+  more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>'
 };
 const icon = name => `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icons[name] || icons.box}</svg>`;
@@ -167,7 +168,7 @@ function endSession() {
 }
 function pageHeading() {
   const [caption, description, glyph] = pageInfo[page] || pageInfo.Dashboard;
-  return `<header class="page-heading"><div class="page-heading-copy"><span class="page-eyebrow">${escape(caption)}</span><h1>${escape(pageLabels[page] || page)}</h1><p>${escape(description)}</p></div><span class="page-heading-icon" aria-hidden="true">${icon(glyph)}</span></header>`;
+  return `<header class="page-heading"><div class="page-heading-copy"><span class="page-eyebrow">${escape(caption)}</span><h1>${escape(pageLabels[page] || page)}</h1>${description ? `<p>${escape(description)}</p>` : ''}</div><span class="page-heading-icon" aria-hidden="true">${icon(glyph)}</span></header>`;
 }
 function sessionLoading() {
   app.innerHTML = `<main class="session-loading" aria-live="polite"><div class="session-loading-card"><img class="session-logo" src="/public/logo.png" alt="Rent and Play"/><div class="session-brand-copy"><strong>rent<span class="orange">&</span>play</strong><small>RENTAL MANAGEMENT</small></div><span class="session-spinner" aria-hidden="true"></span><p>Opening your workspace…</p></div></main>`;
@@ -499,7 +500,7 @@ const inventoryController = createInventory({ api, escape, icon, symbol, badge, 
 const workspaceUI = createWorkspaceUI({ api, escape, icon, showModal, modal, toast, money, formatDate, confirmAction, confirmSubmit, showEquipmentDetails: id => inventoryController.details(id), navigate: goTo });
 const rentalNotifications = createRentalNotifications({ api, onChange: syncNotifications,
   onAlert: (notification, count) => toast(count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`) });
-setInterval(() => { if (user && !logoutPending && apiClient.canRefresh() && document.visibilityState === 'visible') rentalNotifications.refresh(); }, 15000);
+setInterval(() => { if (user && !logoutPending && apiClient.canRefresh() && document.visibilityState === 'visible') rentalNotifications.refresh(); }, 120000);
 document.addEventListener('visibilitychange', () => { if (user && document.visibilityState === 'visible') rentalNotifications.refresh(); });
 invalidateWorkspace = () => workspaceUI.invalidate();
 window.addEventListener('popstate', () => { page = pageForPath(location.pathname); if (workspacePages.has(page)) invalidateWorkspace(); if (user) { render(); document.querySelector('#workspace-content')?.focus({ preventScroll: true }); } });
@@ -513,5 +514,5 @@ setInterval(async () => {
     const refreshedPage = page;
     if (user && workspacePages.has(refreshedPage) && refreshedPage !== 'Settings' && await workspaceUI.refresh() && page === refreshedPage && user && !modal.open) render();
   } catch (problem) { if (user && workspacePages.has(page) && !modal.open) render(); if (problem.status !== 401) toast(problem.message); }
-}, 30000);
+}, 120000);
 boot();

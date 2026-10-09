@@ -8,6 +8,17 @@ Temporary database failures return HTTP `503` with code `FIREBASE_UNAVAILABLE`; 
 
 ## Core endpoints
 
+- GET `/api/mobile/admin-workspace` — active ADMIN/OWNER account. Returns the staff workspace, dashboard summary, and inventory view in one response; used by the Android staff app. `Cache-Control: no-cache` requests an explicit fresh snapshot.
+- GET `/api/analytics` — active ADMIN/OWNER account. Returns only rental and catalog summary metrics. The Android report uses this cached summary instead of opening whole-collection realtime listeners.
+
+## Mobile registration and email verification
+
+- POST `/api/mobile/registration/email-code` — public JSON `{email}`. Sends a six-digit code that expires after 10 minutes. Requests are limited to one email and source address; each email can request at most five codes per 15 minutes and must wait 30 seconds between sends. The response does not reveal whether the address already has an account.
+- POST `/api/mobile/registration/verify-email-code` — public JSON `{email, code}`. Checks a six-digit code with at most five guesses and returns a short-lived `verificationToken` on success.
+- POST `/api/mobile/registration/complete` — Firebase bearer token plus `{email, verificationToken, name, phone}`. The email must match the authenticated Firebase account; the backend marks that address verified and creates its customer profile only after the proof is accepted. Names are limited to letters and common name punctuation, and phone numbers must normalize to a Philippine mobile number.
+
+The backend sends mail over Gmail SMTP using `SMTP_USER`, `SMTP_PASSWORD`, and `REGISTRATION_OTP_PEPPER`. The Firestore index configuration enables TTL cleanup for expired OTP records; deploy it with `firebase deploy --only firestore:indexes`.
+
 The current rental desk uses the rental request, payment review, equipment preparation, resort handoff, and receipt endpoints described below. These legacy/proposal endpoints remain documented:
 
 - POST `/api/rentals`

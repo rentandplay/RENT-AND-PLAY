@@ -63,6 +63,21 @@ paths:
       responses:
         '200': {description: Workspace records with saved inspections and fees}
         '401': {description: Active administrator session required}
+  /api/analytics:
+    get:
+      summary: Return cached aggregate rental and catalog metrics for the Android report
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      responses:
+        '200': {description: Rental totals and catalog count without returning full records}
+        '401': {description: Active administrator session required}
+  /api/mobile/admin-workspace:
+    get:
+      summary: Load the Android staff workspace, dashboard, and inventory using shared cached reads
+      description: An explicit Cache-Control no-cache request invalidates display snapshots before loading.
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      responses:
+        '200': {description: Workspace records plus _dashboard and _inventory views}
+        '401': {description: Active administrator session required}
   /api/customer-accounts:
     post:
       summary: Create an active mobile customer Firebase account and linked customer profile

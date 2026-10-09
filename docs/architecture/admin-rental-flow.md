@@ -26,7 +26,7 @@ The Android customer app, Android admin app, web admin, and backend use the same
 
 ## Holds, security, and recovery
 
-Customer review holds last 15 minutes by default (`RENTAL_REQUEST_HOLD_SECONDS=900`). An approved request has 30 minutes to be prepared (`RENTAL_PICKUP_HOLD_SECONDS=1800`); after the equipment QR is scanned at the shop, the delivery window resets to 2 hours (`RENTAL_DELIVERY_HOLD_SECONDS=7200`) so the operator has time to reach the selected resort. Each setting accepts 60–86400 seconds. A startup/30-second sweep and mutation-time checks expire holds and release only the matching unit reservation.
+Customer review holds last 15 minutes by default (`RENTAL_REQUEST_HOLD_SECONDS=900`). An approved request has 30 minutes to be prepared (`RENTAL_PICKUP_HOLD_SECONDS=1800`); after the equipment QR is scanned at the shop, the delivery window resets to 2 hours (`RENTAL_DELIVERY_HOLD_SECONDS=7200`) so the operator has time to reach the selected resort. Each setting accepts 60–86400 seconds. A startup/60-second sweep and mutation-time checks expire holds and release only the matching unit reservation.
 
 Rental creation, handoff, receipt, inspection completion, and settlement use stable 32-character lowercase hexadecimal `requestKey` values. Retries return the saved operation without creating another rental, restarting the timer, or recording a duplicate payment/refund. Payment proof images are restricted to valid PNG/JPEG files up to 350 KB. Owner payment QR images are restricted to valid PNG/JPEG files up to 250 KB. Admin payment review, equipment preparation, handoff, inspections, and money movements are audited.
 
@@ -38,4 +38,4 @@ Legacy active rentals can still be received and inspected. Missing historical pr
 
 The system supports rentals that start at physical handoff, not future calendar reservations. Android checkout supports duration-based rentals; web and Android admin counter rentals can also use whole-stay board-game pricing with a resort checkout. InstaPay handling is manual: the app displays the owner's QR and the owner verifies the uploaded screenshot. No payment gateway processes the transfer.
 
-Camera scanning needs Android permission or a browser camera on HTTPS/localhost. Manual lookup with a reason is available when a camera is unavailable. Deploy the backend and web app, configure the owner's payment QR, then rebuild the Android app before using the flow against the hosted API. See [deployment instructions](../deployment/render-mobile-integration.md) and [endpoint details](../api/endpoints.md).
+Camera scanning needs Android permission or a browser camera on HTTPS/localhost. Manual lookup with a reason is available when a camera is unavailable. For local use, start the backend and web server, configure the owner's payment QR, then run Android with its local API address. See the [local integration guide](../development/local-integration.md) and [endpoint details](../api/endpoints.md).

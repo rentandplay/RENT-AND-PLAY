@@ -278,11 +278,17 @@ export async function prepareRentalDelivery(db, actor, id, input, now = new Date
     const item = docData(itemDoc);
     if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== rentalId || rows(related).some(row => row.id !== rentalId && open(row))) fail(409, 'The assigned equipment is no longer reserved for this rental request.');
     if (!(code === item.qr_token || lookup.manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(code))) fail(409, `Equipment mismatch. This rental requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan that unit’s printed QR at the shop.`);
-    const prepared = { status: 'PREPARED', prepared_at: now, prepared_by: actorId(actor), item_id: itemId, item_code: item.item_code || item.qrCode || '', verification_method: lookup.manual ? 'MANUAL' : 'QR', manual_reason: lookup.reason || null };
-    const changes = { delivery_status: 'PREPARED', delivery_preparation: prepared, hold_expires_at: new Date(now.getTime() + ttl('RENTAL_DELIVERY_HOLD_SECONDS', 7200)), updated_at: now };
+    if (rental.delivery_status === 'PREPARED' && rental.delivery_preparation?.item_id === itemId) {
+      return { rental, item: { id: itemId, name: item.name, item_code: item.item_code || item.qrCode || '' }, duplicate: true };
+    }
+    const previousRevision = Number.isSafeInteger(Number(rental.delivery_preparation_revision))
+      ? Number(rental.delivery_preparation_revision) : 0;
+    const revision = previousRevision + 1;
+    const prepared = { status: 'PREPARED', prepared_at: now, prepared_by: actorId(actor), item_id: itemId, item_code: item.item_code || item.qrCode || '', verification_method: lookup.manual ? 'MANUAL' : 'QR', manual_reason: lookup.reason || null, revision };
+    const changes = { delivery_status: 'PREPARED', delivery_preparation: prepared, delivery_preparation_revision: revision, hold_expires_at: new Date(now.getTime() + ttl('RENTAL_DELIVERY_HOLD_SECONDS', 7200)), updated_at: now };
     tx.update(rentalDoc.ref, changes);
     audit(tx, db, actor, 'RENTAL_PREPARED_FOR_DELIVERY', rentalId, now, { item_id: itemId, verification_method: prepared.verification_method });
-    queueRentalNotification(tx, db, { ...rental, ...changes }, 'DELIVERY_PREPARED', now);
+    queueRentalNotification(tx, db, { ...rental, ...changes }, 'DELIVERY_PREPARED', now, { revision });
     return { rental: { ...rental, ...changes }, item: { id: itemId, name: item.name, item_code: item.item_code || item.qrCode || '' } };
   }));
 }
@@ -296,8 +302,8 @@ export async function verifyReleaseCodes(db, actor, id, input, now = new Date())
     if (!rentalDoc.exists) fail(404, 'Rental request not found.');
     const rental = docData(rentalDoc), itemId = rental.item_id || rental.itemId;
     if (state(rental) !== 'APPROVED') fail(409, 'Only an approved rental request can be handed off.');
-    if (rental.delivery_status !== 'PREPARED' || rental.delivery_preparation?.item_id !== itemId) fail(409, 'Scan and prepare the assigned equipment at the shop before delivery.');
     if (holdElapsed(rental, now)) fail(409, 'The handoff deadline expired. Ask the customer to send a new rental request.');
+    if (rental.delivery_status !== 'PREPARED' || rental.delivery_preparation?.item_id !== itemId) fail(409, 'Scan and prepare the assigned equipment at the shop before delivery.');
     transactionScanCheck(input, rental);
     const [itemDoc, related] = await Promise.all([tx.get(record(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
@@ -317,8 +323,8 @@ export async function releaseBooking(db, actor, id, input, now = new Date()) {
     const [itemDoc, related] = await Promise.all([tx.get(record(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
     if (state(rental) === 'ACTIVE' && rental.release_operation_key === key) return { rental, duplicate: true };
     if (state(rental) !== 'APPROVED') fail(409, 'Approve this rental request before confirming the handoff.');
-    if (rental.delivery_status !== 'PREPARED' || rental.delivery_preparation?.item_id !== itemId) fail(409, 'Prepare the assigned equipment at the shop before the customer handoff.');
     if (holdElapsed(rental, now)) return { rental: closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Handoff deadline elapsed.', now, 'expiry-worker'), expired: true };
+    if (rental.delivery_status !== 'PREPARED' || rental.delivery_preparation?.item_id !== itemId) fail(409, 'Prepare the assigned equipment at the shop before the customer handoff.');
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
     const item = docData(itemDoc);
     transactionScanCheck(input, rental);
@@ -419,9 +425,9 @@ export async function cancelBooking(db, actor, id, now = new Date()) {
 }
 
 export async function expireRentalHolds(db, now = new Date()) {
-  const snapshots = await Promise.all(pendingStatuses.map(status => db.collection('rentals').where('status', '==', status).get()));
+  const snapshot = await db.collection('rentals').where('status', 'in', pendingStatuses).where('hold_expires_at', '<=', now).get();
   let expired = 0;
-  for (const candidate of snapshots.flatMap(snap => snap.docs).filter(doc => holdElapsed(doc.data(), now))) {
+  for (const candidate of snapshot.docs.filter(doc => holdElapsed(doc.data(), now))) {
     const changed = await db.runTransaction(async tx => {
       const rentalDoc = await tx.get(candidate.ref);
       if (!rentalDoc.exists || !holdElapsed(rentalDoc.data(), now)) return false;

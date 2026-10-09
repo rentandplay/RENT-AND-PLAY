@@ -16,12 +16,12 @@ export function bindQrReaders(form, modal, { onCapture } = {}) {
     generation++; running = false; clearTimeout(timer);
     stream?.getTracks().forEach(track => track.stop()); stream = null;
     if (video) { video.srcObject = null; video = null; }
-    form.querySelector('.qr-scanner-frame')?.remove();
-    activeOutput?.classList.remove('is-scanning'); activeOutput = null;
+    form.querySelector('.qr-scanner-frame')?.remove?.();
+    activeOutput?.classList?.remove?.('is-scanning'); activeOutput = null;
     if (activeButton) {
       activeButton.innerHTML = buttonLabel;
-      activeButton.classList.remove('is-scanning');
-      activeButton.removeAttribute('aria-pressed');
+      activeButton.classList?.remove?.('is-scanning');
+      activeButton.removeAttribute?.('aria-pressed');
       activeButton = null;
     }
   };

@@ -33,7 +33,9 @@ test('API protects dashboard, uses Firebase session cookies, checks profiles, an
     assert.equal((await fetch(base + '/api/dashboard', { headers: { Cookie: cookie } })).status, 401);
     assert.equal((await login('test-password-with-length')).status, 403);
     row.role = 'OWNER';
-    assert.equal((await login('test-password-with-length')).status, 403);
+    const ownerLogin = await login('test-password-with-length');
+    assert.equal(ownerLogin.status, 200);
+    assert.equal((await ownerLogin.json()).user.role, 'OWNER');
     row.role = 'admin';
     const lowercaseLogin = await login('test-password-with-length');
     assert.equal(lowercaseLogin.status, 200);

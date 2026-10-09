@@ -75,8 +75,23 @@ export async function loadWorkspace(db, role = 'ADMIN', now = new Date(), { owne
   const [settingsDoc, pricing] = await Promise.all([db.collection('settings').doc('business').get(), loadPricing(db, { allowInvalidFallback: true })]);
   const settings = settingsDoc.exists ? settingsDoc.data() : { business_name: 'Rent & Play', location: 'Los Baños, Laguna', currency: 'PHP', timezone: 'Asia/Manila', default_late_grace_hours: 0 };
   let users = [];
-  if (role === 'OWNER') users = rows(await db.collection('users').get()).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(user => serial({ ...user, role: String(user.id) === String(ownerUid) ? 'OWNER' : normalizeRole(user.role) || user.role }));
-  const userNames = new Map(users.map(user => [String(user.id), user.full_name]));
+  const userProfiles = new Map();
+  if (role === 'OWNER') {
+    users = rows(await db.collection('users').get()).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(user => serial({ ...user, role: String(user.id) === String(ownerUid) ? 'OWNER' : normalizeRole(user.role) || user.role }));
+    for (const user of users) userProfiles.set(String(user.id), user);
+  }
+  // Keep legacy customer/profile records and audit actor labels current. These
+  // document reads go through the shared read cache in production, so repeated
+  // workspace refreshes reuse them instead of rereading each profile.
+  const neededProfileIds = new Set([
+    ...source.customers.map(customer => customer.auth_uid).filter(Boolean).map(String),
+    ...source.audit_logs.map(log => log.user_id).filter(Boolean).map(String)
+  ]);
+  await Promise.all([...neededProfileIds].filter(id => !userProfiles.has(id)).map(async id => {
+    const profile = await db.collection('users').doc(id).get();
+    if (profile.exists) userProfiles.set(id, { id, ...profile.data() });
+  }));
+  const userNames = new Map([...userProfiles].map(([id, user]) => [String(id), user.full_name || user.name || '']));
   const terminalNames = new Map(source.terminals.map(terminal => [String(terminal.id), terminal.name || terminal.terminal_code]));
   const auditLabel = log => {
     const before = log.old_values || {}, after = log.new_values || {}, id = String(log.entity_id);
@@ -98,12 +113,6 @@ export async function loadWorkspace(db, role = 'ADMIN', now = new Date(), { owne
     action: log.action || 'UNKNOWN_ACTION', entity_type: log.entity_type || '', entity_id: log.entity_id || '', entity_label: auditLabel(log), created_at: log.created_at || null
   })).sort((a, b) => (asDate(b.created_at) || 0) - (asDate(a.created_at) || 0)).slice(0, 200) : [];
   const statusHistory = source.item_status_history.map(({ id, item_id, old_status, new_status, changed_at }) => serial({ id, item_id, old_status, new_status, changed_at }));
-  const linkedUids = [...new Set(source.customers.map(customer => customer.auth_uid).filter(Boolean).map(String))];
-  const linkedProfiles = await Promise.all(linkedUids.map(async uid => {
-    const profile = await db.collection('users').doc(uid).get();
-    return profile.exists ? { id: uid, ...profile.data() } : null;
-  }));
-  const userProfiles = new Map(linkedProfiles.filter(Boolean).map(user => [String(user.id), user]));
   const customers = source.customers.map(customer => {
     const linkedProfile = customer.auth_uid ? userProfiles.get(String(customer.auth_uid)) : null;
     return linkedProfile && normalizeRole(linkedProfile.role) === 'USER'

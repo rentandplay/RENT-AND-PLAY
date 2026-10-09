@@ -24,10 +24,10 @@ test('display models share collection reads, and saved equipment invalidates all
   const fixture = countedDatabase({ item_categories: { sports: { name: 'Sports equipment' } }, users: { admin: { full_name: 'Admin', role: 'ADMIN', is_active: true } } });
   const services = createFirebaseServices({ db: fixture.db });
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 18); // 14 unique display queries plus four expiry queries.
+  assert.equal(fixture.reads.length, 15); // Shared display reads plus two due-only expiry queries.
   for (const name of ['items', 'item_categories', 'item_rates', 'rentals', 'customers', 'verification_requests', 'terminals']) assert.equal(fixture.reads.filter(read => read.label === name).length, 1);
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 18);
+  assert.equal(fixture.reads.length, 15);
   const created = await services.createItem('admin', { categoryId: 'sports', name: 'Basketball', condition: 'GOOD', rateType: 'HOURLY', rentalRate: 50, deposit: 100, latePenalty: 10 });
   const [dashboard, workspace, inventory] = await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
   assert.equal(dashboard.items[0].id, created.id); assert.equal(workspace.items[0].id, created.id); assert.equal(inventory.items[0].id, created.id);
@@ -38,6 +38,28 @@ test('display models share collection reads, and saved equipment invalidates all
   await assert.rejects(services.pricingQuote({ itemId: created.id, mode: 'HOURLY', hours: 1 }), error => error.status === 409);
   await fixture.raw.collection('users').doc('admin').update({ is_active: false });
   assert.equal((await services.getUser('admin')).is_active, false);
+});
+
+test('manual dashboard refresh clears every display snapshot, including workspace-only data', async () => {
+  const invalidations = [];
+  const server = createApi({
+    sessions: { verify: async token => token === 'admin-session' ? { uid: 'admin' } : null },
+    services: {
+      getUser: async id => ({ id, role: 'ADMIN', is_active: true }),
+      dashboard: async () => ({ stats: {} }),
+      invalidateReadCache: (...args) => invalidations.push(args)
+    }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/dashboard`, {
+      headers: { Cookie: 'rent_play_session=admin-session', 'Cache-Control': 'no-cache' }
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(invalidations, [[]]);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 test('invalidating an in-flight read cannot repopulate stale data, and expired entries refresh', async () => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { renderSettings, settingsTabs } from '../src/settings-ui.js';
 import { readPreferences, writePreferences, normalizePreferences, preferenceDefaults } from '../src/preferences.js';
 const escape = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-const render = (overrides = {}) => renderSettings({ model: { settings: { business_name: 'Rent & Play' } }, user: { name: 'Test Admin', email: 'admin@example.invalid', role: 'ADMIN' }, appearance: '<div>Theme controls</div>', tab: 'business', draft: null, dirty: false, saving: false, preferences: { ...preferenceDefaults }, users: () => '<div>Team management</div>', ...overrides }, { escape, icon: () => '<svg></svg>' });
+const render = (overrides = {}) => renderSettings({ model: { settings: { business_name: 'Rent & Play' } }, user: { name: 'Test Owner', email: 'owner@example.invalid', role: 'OWNER' }, appearance: '<div>Theme controls</div>', tab: 'business', draft: null, dirty: false, saving: false, preferences: { ...preferenceDefaults }, users: () => '<div>Team management</div>', ...overrides }, { escape, icon: () => '<svg></svg>' });
 
 test('settings has horizontal accessible tabs and displays one section at a time', () => {
   const html = render();
@@ -16,13 +16,13 @@ test('settings has horizontal accessible tabs and displays one section at a time
   assert.ok(!html.includes('Theme controls'));
   assert.ok(!html.includes('Team management'));
 });
-test('non-admin cannot see user management or edit business settings', () => {
-  const html = render({ user: { role: 'USER' }, tab: 'users' });
+test('operators and customers cannot see user management or edit business settings', () => {
+  const html = render({ user: { role: 'ADMIN' }, tab: 'users' });
   assert.equal(settingsTabs(false).length, 4);
   assert.ok(!html.includes('data-settings-tab="users"'));
   assert.ok(!html.includes('Team management'));
   assert.ok(!html.includes('id="business-form"'));
-  assert.ok(html.includes('Only admins can edit'));
+  assert.ok(html.includes('Only owners can edit business settings'));
 });
 test('business drafts are escaped and save progress disables editing', () => {
   const html = render({ draft: { businessName: '<script>bad</script>', location: 'Test', currency: 'PHP', timezone: 'Asia/Manila', defaultLateGraceHours: 0 }, dirty: true, saving: true });

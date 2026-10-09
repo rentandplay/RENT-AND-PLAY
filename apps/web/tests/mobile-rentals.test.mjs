@@ -61,9 +61,9 @@ test('approved and received bookings stay visible without reporting a running ti
   const data = { ...fixture(), transactions: [{ ...active, status: 'APPROVED', due_at: null, hold_expires_at: '2026-10-06T06:30:00Z' }, { ...active, id: 'received', status: 'RETURN_PENDING_INSPECTION' }] };
   const ui = createWorkspaceUI({ ...helpers, api: async () => data }); await ui.load();
   const rentals = ui.render('Rentals', {}), returns = ui.render('Returns', {});
-  assert.match(rentals, /Awaiting pickup/); assert.match(rentals, /Starts at release/);
+  assert.match(rentals, /Awaiting delivery/); assert.match(rentals, /Starts at handoff/);
   assert.match(rentals, /All open[^<]*<[^>]*>2</);
-  assert.match(rentals, /data-transaction-filter="Awaiting pickup"/);
+  assert.match(rentals, /data-transaction-filter="Awaiting delivery"/);
   assert.match(rentals, /data-transaction-filter="Inspection pending"/);
   assert.match(returns, /Inspection pending/); assert.match(returns, /received/);
   assert.doesNotMatch(returns, /Awaiting terminal/);

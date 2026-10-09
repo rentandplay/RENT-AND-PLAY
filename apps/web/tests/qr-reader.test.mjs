@@ -23,8 +23,9 @@ test('camera acquisition cancelled by a closed dialog releases all tracks', asyn
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { mediaDevices: { getUserMedia: () => new Promise(resolve => { acquire = resolve; }) } } });
   Object.defineProperty(globalThis, 'isSecureContext', { configurable: true, value: true });
   globalThis.jsQR = () => null;
-  const button = { dataset: { scanField: 'code' } }, output = { textContent: '' };
-  const form = { isConnected: true, elements: { code: { value: '' } }, querySelectorAll: () => [button], querySelector: () => output };
+  const button = { dataset: { scanField: 'code' }, classList: { add() {}, remove() {} }, setAttribute() {}, removeAttribute() {} };
+  const output = { textContent: '', classList: { add() {}, remove() {} } };
+  const form = { isConnected: true, elements: { code: { value: '', disabled: false } }, querySelectorAll: () => [button], querySelector: selector => selector === '.qr-scanner-frame' ? null : output };
   const modal = { open: true, addEventListener: (_event, handler) => { close = handler; } };
   try {
     bindQrReaders(form, modal); const pending = button.onclick(); await Promise.resolve(); await Promise.resolve();
@@ -51,18 +52,25 @@ test('a camera capture updates the QR field and calls its verification hook afte
   let stopped = 0, removed = 0, inputEvent;
   const captured = [], value = 'rp-booking-camera-test';
   const field = { value: '', dispatchEvent(event) { inputEvent = event.type; } };
-  const button = { dataset: { scanField: 'transactionCode' } };
-  const output = { textContent: '', after() {} };
-  const video = { readyState: 2, videoWidth: 2, videoHeight: 2, play: async () => {}, remove() { removed++; } };
+  const button = { dataset: { scanField: 'transactionCode' }, innerHTML: 'Scan', classList: { add() {}, remove() {} }, setAttribute() {}, removeAttribute() {} };
+  let scannerFrame;
+  const output = { textContent: '', classList: { add() {}, remove() {} }, after(frame) { scannerFrame = frame; } };
+  const video = { readyState: 2, videoWidth: 2, videoHeight: 2, play: async () => {} };
   const canvas = { getContext: () => ({ drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(16) }) }) };
+  const element = () => ({ className: '', setAttribute() {}, append() {}, remove() { removed++; scannerFrame = null; } });
   const values = {
-    navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() { stopped++; } }] }) } },
+    navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() { stopped++; } }], getVideoTracks: () => [] }) } },
     isSecureContext: true, jsQR: () => ({ data: value }),
-    document: { hidden: false, createElement: tag => tag === 'video' ? video : canvas },
+    document: { hidden: false, createElement: tag => tag === 'video' ? video : tag === 'canvas' ? canvas : element() },
   };
   for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: values[key] });
   try {
-    const form = { isConnected: true, elements: { transactionCode: field }, querySelectorAll: () => [button], querySelector: () => output };
+    const form = {
+      isConnected: true,
+      elements: { transactionCode: field },
+      querySelectorAll: () => [button],
+      querySelector: selector => selector === '.qr-scanner-frame' ? scannerFrame : output,
+    };
     bindQrReaders(form, { open: true }, { onCapture: name => captured.push({ name, value: field.value, stopped }) });
     await button.onclick();
     assert.equal(inputEvent, 'input'); assert.equal(stopped, 1); assert.equal(removed, 1);

@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "firebase-admin": "^14.4.0",
+    "nodemailer": "^10.0.16",
     "qrcode": "^1.5.4"
   }
 }

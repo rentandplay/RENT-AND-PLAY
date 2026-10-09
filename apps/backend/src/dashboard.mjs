@@ -24,6 +24,22 @@ export function revenueWeeks(rows,now=new Date()) {
 }
 
 const rows=snapshot=>snapshot.docs.map(docData);
+export async function loadAnalyticsSummary(db, now = new Date()) {
+  const [rentalSnapshot, itemSnapshot] = await Promise.all([
+    db.collection('rentals').get(), db.collection('items').get()
+  ]);
+  let confirmedFees = 0, confirmedRentals = 0, activeCount = 0;
+  for (const rental of rows(rentalSnapshot)) {
+    const status = String(rental.status || '').toUpperCase();
+    if (status === 'COMPLETED' || status === 'ACTIVE') {
+      confirmedFees += Number(rental.rental_fee ?? rental.rateFee ?? 0) + Number(rental.late_penalty ?? rental.latePenalty ?? 0);
+      confirmedRentals++;
+    }
+    if (status === 'ACTIVE') activeCount++;
+  }
+  return { confirmed_fees: confirmedFees, confirmed_rentals: confirmedRentals, active_count: activeCount, total_catalog: itemSnapshot.size, refreshedAt: now.toISOString() };
+}
+
 export async function loadDashboard(db,now=new Date()) {
   const names=['items','item_categories','item_rates','customers','rentals','verification_requests','terminals'];
   const snapshots=await Promise.all(names.map(name=>db.collection(name).get()));

@@ -11,14 +11,18 @@ test('customer validation rejects unsafe or incomplete records', () => {
   for (const value of [{ fullName: '', code: 'C-1' }, { fullName: 'Customer', code: 'bad code' }, { fullName: 'Customer', code: 'CUST-1', email: 'invalid' }]) assert.throws(() => validateCustomer(value), error => error.status === 400);
 });
 
-test('workspace account creation permits only ADMIN role', async () => {
+test('workspace account creation permits staff roles and rejects customer or legacy roles', async () => {
   const auth = { createUser: async input => ({ uid: 'admin-uid', ...input }), deleteUser: async () => { } };
   const db = memoryFirestore();
-  for (const role of ['OWNER', 'OPERATOR', 'USER']) await assert.rejects(() => createWorkspaceUser(auth, db, 'actor-admin', { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role }), error => error.status === 400);
+  for (const role of ['OPERATOR', 'USER', 'CUSTOMER']) await assert.rejects(() => createWorkspaceUser(auth, db, 'actor-admin', { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role }), error => error.status === 400);
   const result = await createWorkspaceUser(auth, db, 'actor-admin', { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role: 'ADMIN' });
   assert.equal(result.role, 'ADMIN');
   assert.equal(db.data('users', 'admin-uid').role, 'ADMIN');
   assert.equal(db.data('users', 'admin-uid').is_active, true);
+  const ownerDb = memoryFirestore();
+  const owner = await createWorkspaceUser(auth, ownerDb, 'actor-owner', { fullName: 'Test Owner', email: 'owner@example.test', password: 'test-password-with-length', role: 'OWNER' });
+  assert.equal(owner.role, 'OWNER');
+  assert.equal(ownerDb.data('users', 'admin-uid').role, 'OWNER');
 });
 
 test('workspace analytics serializes terminal confirmations and collection history', async () => {

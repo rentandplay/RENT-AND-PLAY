@@ -7,7 +7,7 @@ import { DEFAULT_PRICING, savePricing } from '../src/pricing.mjs';
 import { updateProfile } from '../src/profile.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
-const admin = { full_name: 'Test Admin', email: 'admin@example.test', role: 'ADMIN', is_active: true };
+const admin = { full_name: 'Test Owner', email: 'owner@example.test', role: 'OWNER', is_active: true };
 const customerInput = { fullName: 'Ana Reyes', code: 'CUST-001', email: 'ana@example.test' };
 const equipmentInput = { categoryId: 'sports', name: 'New basketball', condition: 'GOOD', rateType: 'DAILY', rentalRate: 50, deposit: 0, latePenalty: 5 };
 const businessInput = { businessName: 'Rent & Play', location: 'Los Baños', currency: 'PHP', timezone: 'Asia/Manila', defaultLateGraceHours: 0 };

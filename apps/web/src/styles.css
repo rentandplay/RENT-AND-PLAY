@@ -9030,15 +9030,51 @@ dialog:has(.inv-details-modal-content) > .modal-heading {
   height: 14px;
 }
 .rentals-table-panel .rental-actions-toggle {
+  min-height: 32px;
+}
+.rentals-table-panel .transaction-actions-cell {
+  width: 1%;
+  text-align: right;
+}
+.rentals-table-panel .admin-table th:last-child {
+  text-align: right;
+}
+.rentals-table-panel .transaction-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: max-content;
+  margin-left: auto;
+}
+.rentals-table-panel .transaction-icon-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 8px 12px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-surface);
+  color: var(--ui-muted);
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.rentals-table-panel .transaction-icon-action:hover {
+  border-color: var(--orange);
+  background: #fff1e5;
+  color: #b55d20;
+}
+.rentals-table-panel .transaction-icon-action svg {
+  width: 16px;
+  height: 16px;
+}
+.rentals-table-panel .rental-quick-action {
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 12px;
   white-space: nowrap;
 }
-.rental-actions-toggle svg,
 .rental-action-choices svg {
   width: 14px;
   height: 14px;
@@ -10311,24 +10347,24 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 
 /* Transaction details keep the next action visible while records scroll. */
 @media (max-width: 600px) {
-  .admin-table-scroll:has(.rental-actions-toggle) { overflow: visible; border: 0; background: transparent; }
-  .admin-table:has(.rental-actions-toggle) { display: block; width: 100%; min-width: 0; border: 0; }
-  .admin-table:has(.rental-actions-toggle) thead { display: none; }
-  .admin-table:has(.rental-actions-toggle) tbody { display: grid; gap: 14px; }
-  .admin-table:has(.rental-actions-toggle) tbody > tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 8px; padding: 16px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); min-width: 0; }
-  .admin-table:has(.rental-actions-toggle) tbody > tr > td { min-width: 0; padding: 0; border: 0; width: auto; white-space: normal; overflow-wrap: anywhere; background: transparent; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(2) { order: 1; grid-column: 1 / -1; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(2) strong { font-size: 17px; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(5) { order: 2; grid-column: 1 / -1; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(3) { order: 3; grid-column: 1 / -1; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(4) { order: 4; grid-column: 1 / -1; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(6) { order: 5; grid-column: 1 / -1; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(1) { order: 6; grid-column: 1; padding-top: 6px; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(7) { order: 6; grid-column: 2; padding-top: 6px; align-self: center; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(3)::before { content: 'Customer'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(4)::before { content: 'Deadline'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
-  .admin-table:has(.rental-actions-toggle) td:nth-child(6)::before { content: 'Charges'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
-  .admin-table:has(.rental-actions-toggle) button { min-height: 44px; }
+  .admin-table-scroll:has(.rental-actions-toggle, .rental-quick-action) { overflow: visible; border: 0; background: transparent; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) { display: block; width: 100%; min-width: 0; border: 0; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) thead { display: none; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) tbody { display: grid; gap: 14px; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) tbody > tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 8px; padding: 16px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); min-width: 0; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) tbody > tr > td { min-width: 0; padding: 0; border: 0; width: auto; white-space: normal; overflow-wrap: anywhere; background: transparent; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(1) { order: 1; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(1) strong { font-size: 17px; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(4) { order: 2; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(2) { order: 3; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(3) { order: 4; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(5) { order: 5; grid-column: 1 / -1; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(6) { order: 6; grid-column: 2; padding-top: 6px; align-self: center; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(2)::before { content: 'Customer'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(3)::before { content: 'Deadline'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) td:nth-child(5)::before { content: 'Charges'; display: block; font-size: 11px; color: var(--ui-muted); margin-bottom: 3px; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) button { min-height: 44px; }
+  .admin-table:has(.rental-actions-toggle, .rental-quick-action) .transaction-icon-action { min-height: 32px; }
 }
 
 .transaction-record-modal { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; max-width: none; }

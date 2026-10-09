@@ -15,12 +15,13 @@ export function memoryFirestore(initial = {}) {
   const collection = (name, filters = [], limit = Infinity, order = null, cursor = null) => {
     const query = {
       doc: id => document(name, id),
-      where: (field, operator, value) => { if (operator !== '==') throw Error('Unsupported fixture query'); return collection(name, [...filters, [field, value]], limit, order, cursor); },
+      where: (field, operator, value) => { if (!['==', 'in', '<='].includes(operator)) throw Error('Unsupported fixture query'); return collection(name, [...filters, [field, operator, value]], limit, order, cursor); },
       limit: value => collection(name, filters, value, order, cursor),
       orderBy: (field, direction = 'asc') => collection(name, filters, limit, { field, direction }, cursor),
       startAfter: doc => collection(name, filters, limit, order, doc.id),
       get: async () => {
-        const entries = [...store].filter(([path, data]) => path.startsWith(name + '/') && !path.slice(name.length + 1).includes('/') && filters.every(([field, value]) => data[field] === value) && (!order || data[order.field] !== undefined));
+        const matches = (actual, operator, expected) => operator === 'in' ? expected.includes(actual) : operator === '<=' ? actual <= expected : actual === expected;
+        const entries = [...store].filter(([path, data]) => path.startsWith(name + '/') && !path.slice(name.length + 1).includes('/') && filters.every(([field, operator, value]) => matches(data[field], operator, value)) && (!order || data[order.field] !== undefined));
         if (order) entries.sort(([ap, a], [bp, b]) => ((a[order.field] < b[order.field] ? -1 : a[order.field] > b[order.field] ? 1 : ap.localeCompare(bp))) * (order.direction === 'desc' ? -1 : 1));
         const start = cursor ? entries.findIndex(([path]) => path === `${name}/${cursor}`) + 1 : 0;
         const docs = entries.slice(start, start + limit).map(([path]) => readDoc(document(name, path.slice(name.length + 1))));

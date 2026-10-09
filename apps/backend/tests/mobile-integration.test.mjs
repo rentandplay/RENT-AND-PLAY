@@ -7,7 +7,7 @@ import { saveRate } from '../src/workspace.mjs';
 import { localDateTime } from '../src/firebase.mjs';
 import { mobileCatalog, mobileProfile, mobileRentalList, resolveMobileItem } from '../src/mobile.mjs';
 import { createMobileRentalRequest, quoteEquipmentRental, reviewMobileRental, cancelMobileRentalRequest, requestMobileReturn, reviewMobileReturn } from '../src/transactions.mjs';
-import { releaseBooking, recordRentalReceipt } from '../src/rental-flow.mjs';
+import { prepareRentalDelivery, releaseBooking, recordRentalReceipt } from '../src/rental-flow.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
 const now = new Date('2026-10-06T02:00:00Z');
@@ -32,7 +32,8 @@ function fixture() {
 async function released(db, releaseAt = now) {
   const { rental } = await createMobileRentalRequest(db, customer, input, now);
   await reviewMobileRental(db, admin, rental.id, { action: 'APPROVE' }, now);
-  await releaseBooking(db, admin, rental.id, { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, inventoryCode: 'rp-qr-actual-bike', customerVerified: true, paymentVerified: true, depositReceived: true, inspection }, releaseAt);
+  await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-actual-bike' }, now);
+  await releaseBooking(db, admin, rental.id, { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, depositReceived: true, inspection }, releaseAt);
   return rental.id;
 }
 const hasStatus = expected => error => error.status === expected;
@@ -68,7 +69,7 @@ test('equipment appears for customers after rates are configured and stays visib
   const item = configured.items.find(row => row.id === 'unconfigured-document');
   assert.equal(item.status, 'RENTED');
   assert.equal(item.can_rent, false);
-  assert.equal(item.rate_text, '₱75.00 / hour');
+  assert.equal(item.rate_text, '₱75.00 / Per hour');
   assert.ok(configured.categories.includes('Other rentals'));
   assert.equal((await resolveMobileItem(db, { code: 'unconfigured-document' })).item.id, item.id);
 });
@@ -141,8 +142,9 @@ test('approval waits for physical release; scans, payment, deposit and inspectio
   assert.equal(db.data('rentals', rental.id).status, 'APPROVED');
   assert.equal(db.data('rentals', rental.id).start_at, null);
   assert.equal(db.data('items', input.itemId).status, 'AVAILABLE');
+  await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-actual-bike' }, now);
   const releaseAt = new Date(now.getTime() + 5 * 60000);
-  const release = { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, inventoryCode: 'rp-qr-actual-bike', customerVerified: true, paymentVerified: true, depositReceived: true, inspection };
+  const release = { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, depositReceived: true, inspection };
   await assert.rejects(releaseBooking(db, admin, rental.id, { ...release, paymentVerified: false }, releaseAt), hasStatus(400));
   await assert.rejects(releaseBooking(db, admin, rental.id, { ...release, depositReceived: false }, releaseAt), hasStatus(400));
   await assert.rejects(releaseBooking(db, admin, rental.id, { ...release, inspection: null }, releaseAt), hasStatus(400));
@@ -244,16 +246,16 @@ test('HTTP connects public catalog, Firebase customer rentals, web cookie review
     const { rental } = await created.json();
     assert.equal((await request(`/mobile/rentals/${rental.id}/review`, 'POST', { action: 'APPROVE', paymentVerified: true, inspection }, owner)).status, 401);
     assert.equal((await request(`/mobile/rentals/${rental.id}/review`, 'POST', { action: 'APPROVE', paymentVerified: true, inspection }, staff)).status, 200);
-    const release = { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, inventoryCode: 'rp-qr-actual-bike', customerVerified: true, paymentVerified: true, depositReceived: true, inspection };
+    const release = { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, depositReceived: true, inspection };
+    assert.equal((await request(`/rentals/${rental.id}/prepare-delivery`, 'POST', { inventoryCode: 'rp-qr-actual-bike' }, staff)).status, 200);
     const preflightPath = `/rentals/${rental.id}/release-verification`;
     assert.equal((await request(preflightPath, 'POST', { transactionCode: rental.booking_qr_token }, owner)).status, 401);
     assert.equal((await request(preflightPath, 'POST', { transactionCode: rental.booking_qr_token })).status, 401);
     assert.equal((await request(preflightPath, 'GET', null, staff)).status, 405);
     const bookingVerified = await request(preflightPath, 'POST', { transactionCode: rental.booking_qr_token }, staff);
-    assert.equal(bookingVerified.status, 200); assert.equal((await bookingVerified.json()).inventory_verified, false);
-    assert.equal((await request(preflightPath, 'POST', { transactionCode: rental.booking_qr_token, inventoryCode: 'another-item' }, staff)).status, 409);
-    const equipmentVerified = await request(preflightPath, 'POST', { transactionCode: rental.booking_qr_token, inventoryCode: release.inventoryCode }, staff);
-    assert.equal(equipmentVerified.status, 200); assert.equal((await equipmentVerified.json()).inventory_verified, true);
+    assert.equal(bookingVerified.status, 200);
+    assert.equal((await bookingVerified.json()).delivery_prepared, true);
+    assert.equal((await request(preflightPath, 'POST', { transactionCode: 'wrong-rental-qr' }, staff)).status, 409);
     assert.equal(db.data('rentals', rental.id).status, 'APPROVED');
     assert.equal((await request(`/rentals/${rental.id}/release`, 'POST', release, owner)).status, 401);
     assert.equal((await request(`/rentals/${rental.id}/release`, 'POST', release, staff)).status, 200);

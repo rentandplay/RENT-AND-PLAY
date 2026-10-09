@@ -12,7 +12,7 @@ The active Flutter app is in the adjacent `AndroidFiles` checkout. Customer cata
 
 Approval moves the booking to `APPROVED` and holds it for pickup without starting a timer. Admin then scans the transaction QR and exact inventory QR, verifies the customer/payment/deposit and condition, and confirms physical release. A separate physical receipt step stops overtime before return inspection. Original saved rates determine final charges; damaged returns create linked maintenance records. Payment balances and deposit refunds are recorded separately from equipment availability. See [the admin rental flow](../../docs/architecture/admin-rental-flow.md).
 
-Run `node --env-file-if-exists=.env scripts/check-mobile-integration.mjs` for a read-only comparison of the admin and customer catalog. Restart the running backend after source changes. Rebuild Android with `--dart-define=API_BASE_URL=http://<laptop-LAN-IP>:3000/api` for local debug usage; deploy the backend and use HTTPS for the hosted app. The web proxy and Android API must use the same Firebase project.
+Run `node --env-file-if-exists=.env scripts/check-mobile-integration.mjs` for a read-only comparison of the admin and customer catalog. Restart the local backend after source changes. The local web app uses `http://localhost:5173` and proxies API calls to the backend on port 3000. Android emulators use `--dart-define=API_BASE_URL=http://10.0.2.2:3000/api`; physical phones use the laptop's Wi-Fi IP. The web proxy and Android API must use the same Firebase project.
 
 1. Create a Firebase project and enable **Authentication > Sign-in method > Email/Password**.
 2. Create the default Cloud Firestore database.
@@ -26,6 +26,12 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 Set `FIREBASE_PROJECT_ID` and `FIREBASE_WEB_API_KEY` in `.env`. For Admin SDK credentials, either set `GOOGLE_APPLICATION_CREDENTIALS` to the absolute path of the downloaded JSON key or put its single-line JSON value in `FIREBASE_SERVICE_ACCOUNT_JSON`. Never commit that key.
+
+### Mobile email verification
+
+Customer registration sends a six-digit code through the backend. For local development, set `SMTP_USER` to the Gmail sender address, `SMTP_PASSWORD` to that account's Google App Password, and `REGISTRATION_OTP_PEPPER` to a separate random value of at least 32 bytes in `apps/backend/.env`. These credentials stay on the backend and must never be added to Flutter `--dart-define` values. Set the same variables in the backend host's secret environment before deploying.
+
+Codes expire after 10 minutes, allow five guesses, and can be resent after 30 seconds. Each email is limited to five sends per 15 minutes; the API also limits requests by source address. A successful code check returns a short-lived proof that is bound to the Firebase account email. The account profile is created only after the authenticated completion request consumes that proof.
 
 The `.vscode/launch.json` Run and Debug configurations are shared through Git. After setting up Firebase on this laptop, choose **Rent & Play: Start App** from the Run and Debug menu and press **F5** to start both backend and web. `node_modules`, `.env`, and the service-account key are local to each laptop; they are intentionally not stored in Git.
 
@@ -65,6 +71,8 @@ Open http://127.0.0.1:5173 and sign in with the admin account.
 
 The web administration API exposes authenticated workspace data, customer management, the client rate sheet, and rental operations to operators and owners. Only `OWNER` can change shared business settings or manage workspace accounts. Owner-created staff accounts use separate Firebase identities with the `ADMIN` operator or `OWNER` role; customer app accounts stay `USER`. Mobile rental and customer inbox endpoints reject staff accounts, while staff booking notifications are delivered only to active staff devices. `POST /api/mobile/rentals` submits customer bookings; web and Android staff can prepare counter bookings through `POST /api/rental-bookings`. Both use atomic unit holds. Admin approval leaves the booking `APPROVED` awaiting pickup. `POST /api/rentals/{id}/release` starts the timer after QR/customer/payment/inspection checks. Receipt and inspection use separate `/receipt` and `/complete-return` actions. Owners can cancel pending or approved bookings. The ESP32 terminal remains visible and disabled. `GET /api/pricing` reads the seeded rate sheet, `PUT /api/pricing` saves administrator changes, and `POST /api/pricing/quote` calculates an admin rental quote. Quotes can use a catalog product directly or an inventory item linked to that product. `POST /api/auth/password-reset` requests a Firebase password-reset email without revealing whether an account exists.
 
+Mobile registration uses `POST /api/mobile/registration/email-code`, `POST /api/mobile/registration/verify-email-code`, and authenticated `POST /api/mobile/registration/complete`. New profiles require a Firebase-verified email claim; the completion endpoint sets that claim only after checking the one-time OTP proof.
+
 The existing dashboard and inventory API routes are unchanged. Inventory writes use Firestore transactions. The `item_codes/{ITEM_CODE}` registry enforces unique item codes, and stale edits are rejected using `updated_at`. QR tokens and historical rates remain stable.
 
 Run unit tests with:
@@ -103,11 +111,11 @@ All timestamps above are serialized, including nested inspection and fee-snapsho
 
 ## Rental / return audit workflow
 
-The web and Android admin complete bookings, release, physical receipt, inspection, and settlements through the shared protected API. ESP32 terminal tabs remain visible on standby. Keep `ENABLE_ESP32=false` (the default): legacy terminal mutation/polling endpoints return a standby response and cannot participate in the current flow. The firmware and terminal records are retained for later hardware integration. See [the flow](../../docs/architecture/admin-rental-flow.md), [API contract](../../docs/api/endpoints.md), [data dictionary](../../docs/database/data-dictionary.md), and [deployment steps](../../docs/deployment/render-mobile-integration.md).
+The web and Android admin complete bookings, release, physical receipt, inspection, and settlements through the shared protected API. ESP32 terminal tabs remain visible on standby. Keep `ENABLE_ESP32=false` (the default): legacy terminal mutation/polling endpoints return a standby response and cannot participate in the current flow. The firmware and terminal records are retained for later hardware integration. See [the flow](../../docs/architecture/admin-rental-flow.md), [API contract](../../docs/api/endpoints.md), [data dictionary](../../docs/database/data-dictionary.md), and [local integration guide](../../docs/development/local-integration.md).
 
 Run `npm run terminal:register` to provision a new terminal or add a credential to an existing terminal without one. The command refuses to overwrite credentials, stores only a key digest, and displays the key once for ESP32 setup. Configure polling and physical confirmation according to the shared contract.
 
-Customer booking holds default to 15 minutes (`RENTAL_REQUEST_HOLD_SECONDS=900`); approved pickup holds default to 30 minutes (`RENTAL_PICKUP_HOLD_SECONDS=1800`). A startup/30-second worker and request-time sweeps persist expiry and release only the booking's own hold. Original pricing and condition snapshots survive edits and repairs. Legacy verification attempts retain their 10-minute `VERIFICATION_TTL_SECONDS` deadline while hardware stays disabled.
+Customer booking holds default to 15 minutes (`RENTAL_REQUEST_HOLD_SECONDS=900`); approved pickup holds default to 30 minutes (`RENTAL_PICKUP_HOLD_SECONDS=1800`). A startup/60-second worker and request-time sweeps persist expiry and release only the booking's own hold. Original pricing and condition snapshots survive edits and repairs. Legacy verification attempts retain their 10-minute `VERIFICATION_TTL_SECONDS` deadline while hardware stays disabled.
 
 ## Firebase usage and quota recovery
 
@@ -115,7 +123,11 @@ Run `npm run firebase:check` from this directory to check the configured project
 
 Open the project's Firestore **Usage** tab to identify the exhausted limit. If it is the free daily quota, wait for its reset around midnight Pacific time or enable billing/upgrade the Firebase plan to continue sooner. Billing can incur charges and must be configured by the project owner. See [Firebase usage limits](https://firebase.google.com/docs/firestore/quotas) and [Firestore error recovery](https://docs.cloud.google.com/firestore/native/docs/understand-error-codes). Restart the backend after applying source changes, then refresh the browser once access is restored.
 
-Dashboard, equipment-list, workspace, pricing, and mobile catalog displays share collection/document snapshots for up to 15 seconds. Writes through this backend invalidate those snapshots, including terminal confirmations and persisted expiry. Manual Refresh bypasses the display cache. Authentication, equipment availability checks, rental quotes, and transaction commits read the database directly. Other backend instances or direct console edits may take up to 15 seconds to appear.
+Dashboard, equipment-list, workspace, pricing, mobile catalog, analytics-summary, and customer rental-list reads share collection/document snapshots for up to five minutes, with concurrent reads coalesced and the in-memory cache capped at 4,096 least-recently-used entries. Rental changes invalidate the admin-wide rental view and only the affected customer's rental-list entries. Health probes are cached for one minute. Backend writes invalidate only the affected collections; the web app's manual dashboard refresh clears all display snapshots, while other manual refreshes clear the collections needed by that view. Firebase ID-token checks, active-account/role checks, and transactional availability, quote, and commit checks remain authoritative and read the database directly. Other backend instances or direct console edits may take up to five minutes to appear.
+
+Every 15 minutes, backend logs emit `[firestore-display-cache]` counters for cache-miss reads and returned documents by collection. These cover display-cache reads only, not transactional, notification, health, or worker reads, so use Firebase Usage as the source for total billed usage.
+
+The expiry worker now queries only pending records whose deadline has passed. Before deploying this backend, create the two composite indexes in the root `firestore.indexes.json` and wait until Firebase reports them ready. If the Firebase project already has other composite indexes, export or preserve them and merge them into that file before using the Firebase CLI so existing index definitions stay managed. Creating indexes changes Firebase configuration; it was not deployed from this workspace.
 
 Quota responses use HTTP `429`, `FIRESTORE_QUOTA_EXCEEDED`, and `Retry-After`; requests and the expiry worker share a five-minute cooldown. The browser pauses automatic polling during that cooldown. Logout and password-reset remain usable. Temporary connection failures and invalid configuration have distinct diagnostics. No synthetic records are substituted for unavailable cloud data.
 

@@ -6,6 +6,7 @@ const fail = (status, message) => { throw Object.assign(new Error(message), { st
 const hash = value => createHash('sha256').update(value).digest('hex');
 const staff = actor => isStaffRole(actor.role);
 const actorId = actor => String(actor.id || actor.uid);
+const readRevisionField = actor => `read_revision_${hash(actorId(actor)).slice(0, 24)}`;
 const inboxKey = actor => {
   if (staff(actor)) return 'staff';
   if (isCustomerRole(actor.role)) return `customer_${actorId(actor)}`;
@@ -51,7 +52,7 @@ export function queueRentalNotification(tx, db, rental, type, now, { audience = 
     item_name: rental.item_name || rental.itemName || 'Equipment', created_at: now, read_by: {},
     page: type.startsWith('RETURN_') ? 'Returns' : 'Rentals' };
   tx.create(messages(db, key).doc(id), notification);
-  tx.set(db.collection('notification_inboxes').doc(key), { revision: randomBytes(16).toString('hex') });
+  tx.set(db.collection('notification_inboxes').doc(key), { revision: randomBytes(16).toString('hex') }, { merge: true });
   tx.create(db.collection('notification_outbox').doc(id), { notification_id: id, inbox_key: key,
     audience, customer_id: audience === 'CUSTOMER' ? String(customerId) : null,
     title, message, rental_id: rental.id, type, status: 'PENDING', attempts: 0,
@@ -61,7 +62,8 @@ export function queueRentalNotification(tx, db, rental, type, now, { audience = 
 export async function listNotifications(db, actor, { before, since } = {}) {
   const key = inboxKey(actor), collection = messages(db, key);
   const header = await db.collection('notification_inboxes').doc(key).get();
-  const revision = hash(`${key}:${header.exists ? header.data().revision : 'empty'}`).slice(0, 32);
+  const headerData = header.exists ? header.data() : {};
+  const revision = hash(`${key}:${headerData.revision || 'empty'}:${headerData[readRevisionField(actor)] || 'unread'}`).slice(0, 32);
   if (!before && since === revision) return { unchanged: true, revision };
   let query = collection.orderBy('created_at', 'desc');
   if (before) {
@@ -92,7 +94,9 @@ export async function markNotificationsRead(db, actor, input, now = new Date()) 
       const read = doc.data().read_by || {};
       if (!read[actorId(actor)]) { tx.update(doc.ref, { read_by: { ...read, [actorId(actor)]: now } }); changed = true; }
     }
-    if (changed) tx.set(db.collection('notification_inboxes').doc(inboxKey(actor)), { revision: randomBytes(16).toString('hex') });
+    if (changed) tx.set(db.collection('notification_inboxes').doc(inboxKey(actor)), {
+      [readRevisionField(actor)]: randomBytes(16).toString('hex')
+    }, { merge: true });
   });
   return { ok: true, ids };
 }
@@ -121,11 +125,16 @@ export async function unregisterNotificationDevice(db, actor, input) {
 
 // A short lease prevents overlapping workers from sending the same event.
 // Push delivery is best effort; the durable inbox is always the source of truth.
-export function createNotificationDispatcher(db, messaging, { now = () => new Date(), ownerUid = '' } = {}) {
+export function createNotificationDispatcher(db, messaging, { now = () => new Date(), ownerUid = '', deviceDb = db, profileDb = db, onDevicesChanged = () => {} } = {}) {
   let running = null;
   async function drain() {
-    const snapshots = await Promise.all(['PENDING', 'RETRY'].map(status => db.collection('notification_outbox').where('status', '==', status).limit(40).get()));
-    for (const candidate of snapshots.flatMap(snapshot => snapshot.docs)) {
+    const pending = await db.collection('notification_outbox').where('status', '==', 'PENDING').limit(40).get();
+    const candidates = [...pending.docs];
+    if (candidates.length < 40) {
+      const retries = await db.collection('notification_outbox').where('status', '==', 'RETRY').limit(40 - candidates.length).get();
+      candidates.push(...retries.docs);
+    }
+    for (const candidate of candidates) {
       const leasedAt = now();
       const event = await db.runTransaction(async tx => {
         const doc = await tx.get(candidate.ref), row = doc.exists && doc.data();
@@ -135,8 +144,8 @@ export function createNotificationDispatcher(db, messaging, { now = () => new Da
       });
       if (!event) continue;
       try {
-        const devices = await db.collection('notification_devices').where(event.audience === 'STAFF' ? 'audience' : 'user_id', '==', event.audience === 'STAFF' ? 'STAFF' : event.customer_id).get();
-        const profiles = new Map(await Promise.all([...new Set(devices.docs.map(doc => doc.data().user_id))].map(async id => [id, await db.collection('users').doc(id).get()])));
+        const devices = await deviceDb.collection('notification_devices').where(event.audience === 'STAFF' ? 'audience' : 'user_id', '==', event.audience === 'STAFF' ? 'STAFF' : event.customer_id).get();
+        const profiles = new Map(await Promise.all([...new Set(devices.docs.map(doc => doc.data().user_id))].map(async id => [id, await profileDb.collection('users').doc(id).get()])));
         const allowed = devices.docs.filter(doc => {
           const device = doc.data(), profile = profiles.get(device.user_id), role = profile?.exists && profile.data().role;
           return profile?.exists && profile.data().is_active !== false && (event.audience === 'STAFF'
@@ -150,7 +159,7 @@ export function createNotificationDispatcher(db, messaging, { now = () => new Da
             data: { notification_id: event.notification_id, rental_id: event.rental_id, type: event.type, audience: event.audience, recipient_id: event.customer_id || '' },
             android: { priority: 'high', notification: { channelId: 'rental_updates', icon: 'ic_notification', sound: 'default', tag: event.notification_id } } });
           const invalid = response.responses.flatMap((result, index) => ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token'].includes(result.error?.code) ? [batch[index]] : []);
-          if (invalid.length) { const writer = db.batch(); invalid.forEach(doc => writer.delete(doc.ref)); await writer.commit(); }
+          if (invalid.length) { const writer = db.batch(); invalid.forEach(doc => writer.delete(doc.ref)); await writer.commit(); onDevicesChanged(); }
           const retryable = response.responses.find(result => !result.success && !['messaging/registration-token-not-registered', 'messaging/invalid-registration-token'].includes(result.error?.code));
           if (retryable) throw retryable.error;
         }

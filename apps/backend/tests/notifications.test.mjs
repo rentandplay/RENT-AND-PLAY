@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { memoryFirestore } from './support/memory-firestore.mjs';
-import { createBooking, reviewBooking, releaseBooking, recordRentalReceipt, completeRentalReturn, cancelBooking } from '../src/rental-flow.mjs';
+import { createBooking, reviewBooking, prepareRentalDelivery, releaseBooking, recordRentalReceipt, completeRentalReturn, cancelBooking } from '../src/rental-flow.mjs';
 import { requestMobileReturn } from '../src/transactions.mjs';
 import { queueRentalNotification, listNotifications, markNotificationsRead, registerNotificationDevice, unregisterNotificationDevice, createNotificationDispatcher } from '../src/notifications.mjs';
 import { createApi, createFirebaseServices } from '../src/server.mjs';
@@ -20,7 +20,8 @@ function fixture() { return memoryFirestore({ users: { admin, customer, admin2: 
 async function active(db) {
   const { rental } = await createBooking(db, customer, input, now);
   await reviewBooking(db, admin, rental.id, { action: 'APPROVE' }, later(1));
-  await releaseBooking(db, admin, rental.id, { requestKey: key('b'), transactionCode: rental.booking_qr_token, inventoryCode: 'unit-qr', customerVerified: true, paymentVerified: true, depositReceived: true, inspection }, later(2));
+  await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'unit-qr' }, later(1.5));
+  await releaseBooking(db, admin, rental.id, { requestKey: key('b'), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, depositReceived: true, inspection }, later(2));
   return rental;
 }
 
@@ -73,7 +74,7 @@ test('return requests notify staff once per request and decisions and physical r
   await recordRentalReceipt(db, admin, rental.id, { requestKey: key('c'), inventoryCode: 'unit-qr', physicalReceiptConfirmed: true }, later(6));
   await completeRentalReturn(db, admin, rental.id, { requestKey: key('d'), penaltyAmount: 0, inspection }, later(7));
   const customerTypes = (await listNotifications(db, customer)).notifications.map(row => row.type);
-  assert.deepEqual(customerTypes, ['RETURN_COMPLETED', 'RETURN_RECEIVED', 'RETURN_REQUEST_REJECTED', 'RENTAL_RELEASED', 'BOOKING_APPROVED']);
+  assert.deepEqual(customerTypes, ['RETURN_COMPLETED', 'RETURN_RECEIVED', 'RETURN_REQUEST_REJECTED', 'RENTAL_RELEASED', 'DELIVERY_PREPARED', 'BOOKING_APPROVED']);
 });
 
 test('customer cancellation notifies staff and cannot duplicate on retry', async () => {

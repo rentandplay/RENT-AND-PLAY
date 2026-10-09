@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
 import { FirebaseSessions, publicUser } from './auth.mjs';
 import { firebaseAuth as defaultFirebaseAuth, firebaseMessaging as defaultMessaging, firestore as defaultFirestore, requireFirebaseConfig } from './firebase.mjs';
-import { loadDashboard } from './dashboard.mjs';
+import { loadDashboard, loadAnalyticsSummary } from './dashboard.mjs';
 import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
 import { updateProfile } from './profile.mjs';
 import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
@@ -16,9 +16,17 @@ import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-er
 import { createBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt, completeRentalReturn, lookupRental, rentalTicket, changeAssignedUnit, settleRentalPayment, inspectionPhoto, submitRentalPaymentProof, rentalPaymentProof, reviewRentalPaymentProof, prepareRentalDelivery } from './rental-flow.mjs';
 import { listNotifications, markNotificationsRead, registerNotificationDevice, unregisterNotificationDevice, createNotificationDispatcher } from './notifications.mjs';
 import { isCustomerRole, isOwnerRole, isStaffRole, normalizeRole } from './roles.mjs';
+import { createRegistrationOtpService } from './registration-otp.mjs';
 
 const webRoot = nodePath.resolve(fileURLToPath(new URL('../../web/dist/', import.meta.url)));
 const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
+
+function explicitRefreshCollections(path) {
+  if (path === '/api/workspace' || path === '/api/mobile/admin-workspace') return ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history', 'item_condition_records', 'audit_logs', 'settings', 'users'];
+  if (path === '/api/analytics') return ['items', 'rentals'];
+  if (path === '/api/inventory') return ['items', 'item_categories', 'item_rates', 'customers', 'rentals', 'verification_requests', 'terminals', 'maintenance_records'];
+  return null;
+}
 
 async function serveWeb(req, res, requestPath) {
   if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405).end(); return; }
@@ -40,21 +48,55 @@ async function serveWeb(req, res, requestPath) {
 
 export function createFirebaseServices({ db = defaultFirestore, auth = defaultFirebaseAuth, messaging = defaultMessaging, now = () => new Date(), superAdminUid = process.env.SUPER_ADMIN_UID || '' } = {}) {
   const firestore = db, firebaseAuth = auth;
+  const registrationOtp = createRegistrationOtpService({ db: firestore, auth: firebaseAuth, now });
   const ownerUid = String(superAdminUid).trim();
-  const readCache = createReadCache(firestore, { ttlMs: 15000 });
+  // Display data is refreshed on writes and on explicit manual refresh. A
+  // longer shared snapshot window keeps every open client from rereading the
+  // same collections every few seconds.
+  const readCache = createReadCache(firestore, { ttlMs: 300000, maxEntries: 4096 });
   const readDatabase = readCache.database;
-  const verificationSweep = createExpirySweep(firestore, { now: () => now().getTime(), onExpired: () => readCache.invalidate() });
-  const notificationDispatcher = createNotificationDispatcher(firestore, messaging, { now, ownerUid });
+  const verificationSweep = createExpirySweep(firestore, { now: () => now().getTime(), onExpired: () => {
+    for (const collection of ['verification_requests', 'rentals', 'items', 'audit_logs']) readCache.invalidate(collection);
+  } });
+  const notificationDispatcher = createNotificationDispatcher(firestore, messaging, {
+    now, ownerUid, deviceDb: readDatabase, profileDb: readDatabase,
+    onDevicesChanged: () => readCache.invalidate('notification_devices')
+  });
+  let healthCheckedAt = -Infinity, healthError = null, healthPending = null;
   const services = {
     listNotifications: (actor, options) => listNotifications(firestore, actor, options),
     markNotificationsRead: (actor, input) => markNotificationsRead(firestore, actor, input, now()),
-    registerNotificationDevice: (actor, input) => registerNotificationDevice(firestore, actor, input, now()),
-    unregisterNotificationDevice: (actor, input) => unregisterNotificationDevice(firestore, actor, input),
+    registerNotificationDevice: async (actor, input) => {
+      const result = await registerNotificationDevice(firestore, actor, input, now());
+      readCache.invalidate('notification_devices');
+      return result;
+    },
+    unregisterNotificationDevice: async (actor, input) => {
+      const result = await unregisterNotificationDevice(firestore, actor, input);
+      readCache.invalidate('notification_devices');
+      return result;
+    },
     dispatchNotifications: () => notificationDispatcher.run(),
     firebaseProjectId: process.env.FIREBASE_PROJECT_ID || 'rent-and-play',
-    async health() { requireFirebaseConfig(); await firestore.collection('users').limit(1).get(); },
+    readCacheStats: () => readCache.getStats({ reset: true }),
+    async health() {
+      requireFirebaseConfig();
+      const checkedAt = now().getTime();
+      if (healthPending) return healthPending;
+      if (checkedAt - healthCheckedAt < 60000) {
+        if (healthError) throw healthError;
+        return;
+      }
+      healthPending = firestore.collection('users').limit(1).get()
+        .then(() => { healthError = null; healthCheckedAt = now().getTime(); })
+        .catch(error => { healthError = error; healthCheckedAt = now().getTime(); throw error; })
+        .finally(() => { healthPending = null; });
+      return healthPending;
+    },
     async getUser(id) {
       const userId = String(id), profileRef = firestore.collection('users').doc(userId);
+      // Account activity and role checks gate every protected request. Keep
+      // these reads authoritative instead of using the longer display cache.
       let doc = await profileRef.get();
       if (!doc.exists && ownerUid && userId === ownerUid) {
         const account = await firebaseAuth.getUser(userId);
@@ -72,6 +114,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
         } catch (error) {
           if (error.code !== 6 && error.code !== 'already-exists') throw error;
         }
+        readCache.invalidate('users');
         doc = await profileRef.get();
       }
       return doc.exists ? { id: doc.id, ...doc.data(), role: userId === ownerUid ? 'OWNER' : normalizeRole(doc.data().role) } : null;
@@ -79,16 +122,27 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     async touchLogin(id) { await firestore.collection('users').doc(String(id)).update({ last_login_at: new Date() }); },
     updateProfile: (id, input) => updateProfile(firebaseAuth, firestore, id, input),
     dashboard: async () => { await verificationSweep.run(); return loadDashboard(readDatabase, now()); },
+    analyticsSummary: () => loadAnalyticsSummary(readDatabase, now()),
     inventoryList: async () => { await verificationSweep.run(); return inventoryList(readDatabase); }, inventoryDetail: id => inventoryDetail(firestore, id), inventoryQr: id => inventoryQr(firestore, id), inventoryQrLabels: () => inventoryQrLabels(firestore),
     createItem: (actor, input) => createItem(firestore, actor, input), updateItem: (actor, id, input) => updateItem(firestore, actor, id, input), itemAction: (actor, id, input) => itemAction(firestore, actor, id, input), createItemCategory: (actor, input) => createItemCategory(firestore, actor, input), deleteItemCategory: (actor, id) => deleteItemCategory(firestore, actor, id), deleteArchivedItem: (actor, id, input) => deleteArchivedItem(firestore, actor, id, input),
-    workspace: async role => { await verificationSweep.run(); return loadWorkspace(readDatabase, role, now(), { ownerUid }); }, pricing: () => loadPricing(readDatabase, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
+    workspace: async role => { await verificationSweep.run(); return loadWorkspace(readDatabase, role, now(), { ownerUid }); },
+    mobileAdminWorkspace: async role => {
+      await verificationSweep.run();
+      const [workspace, dashboard, inventory] = await Promise.all([
+        loadWorkspace(readDatabase, role, now(), { ownerUid }),
+        loadDashboard(readDatabase, now()),
+        inventoryList(readDatabase)
+      ]);
+      return { ...workspace, items: inventory.items, _dashboard: dashboard, _inventory: inventory };
+    },
+    pricing: () => loadPricing(readDatabase, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
     authenticateTerminal: (id, key) => authenticateTerminal(firestore, id, key),
     terminalPending: terminal => terminalPending(firestore, terminal, new Date(), { expire: () => verificationSweep.run() }),
     terminalConfirm: (terminal, input) => resolveTerminalRequest(firestore, terminal, input),
-    createRentalRequest: async (actor, input) => { await verificationSweep.run({ force: true }); return createRentalRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
-    createReturnRequest: async (actor, input) => { await verificationSweep.run({ force: true }); return createReturnRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
-    createMobileRentalRequest: async (actor, input) => { await verificationSweep.run({ force: true }); return createMobileRentalRequest(firestore, actor, input, now()); },
-    createCounterBooking: async (actor, input) => { await verificationSweep.run({ force: true }); return createBooking(firestore, actor, input, now(), { staff: true }); },
+    createRentalRequest: async (actor, input) => { await verificationSweep.run(); return createRentalRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
+    createReturnRequest: async (actor, input) => { await verificationSweep.run(); return createReturnRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
+    createMobileRentalRequest: async (actor, input) => { await verificationSweep.run(); return createMobileRentalRequest(firestore, actor, input, now()); },
+    createCounterBooking: async (actor, input) => { await verificationSweep.run(); return createBooking(firestore, actor, input, now(), { staff: true }); },
     releaseBooking: (actor, id, input) => releaseBooking(firestore, actor, id, input, now()),
     verifyReleaseCodes: (actor, id, input) => verifyReleaseCodes(firestore, actor, id, input, now()),
     prepareRentalDelivery: (actor, id, input) => prepareRentalDelivery(firestore, actor, id, input, now()),
@@ -99,26 +153,38 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     completeRentalReturn: (actor, id, input) => completeRentalReturn(firestore, actor, id, input, now()),
     changeAssignedUnit: (actor, id, input) => changeAssignedUnit(firestore, actor, id, input, now()),
     settleRentalPayment: (actor, id, input) => settleRentalPayment(firestore, actor, id, input, now()),
-    lookupRental: async input => { await verificationSweep.run({ force: true }); return lookupRental(firestore, input); },
-    rentalTicket: async (actor, id) => { await verificationSweep.run({ force: true }); return rentalTicket(firestore, actor, id); },
+    lookupRental: input => lookupRental(firestore, input),
+    rentalTicket: (actor, id) => rentalTicket(firestore, actor, id),
     inspectionPhoto: id => inspectionPhoto(firestore, id),
     reviewMobileRental: async (actor, id, input) => reviewMobileRental(firestore, actor, id, input, now()),
     cancelMobileRentalRequest: async (actor, id) => cancelMobileRentalRequest(firestore, actor, id, now()),
     mobileCatalog: async () => { await verificationSweep.run(); return mobileCatalog(readDatabase); },
-    mobileProfile: async (claims, input, method) => { const result = await mobileProfile(firestore, claims, input, method); if (String(claims.uid) === ownerUid) result.user.role = 'OWNER'; return result; },
+    mobileProfile: async (claims, input, method) => {
+      const result = await mobileProfile(firestore, claims, input, method, now(), collections => {
+        for (const collection of collections) readCache.invalidate(collection);
+      });
+      if (String(claims.uid) === ownerUid) result.user.role = 'OWNER';
+      return result;
+    },
+    sendRegistrationCode: input => registrationOtp.sendCode(input?.email),
+    verifyRegistrationCode: input => registrationOtp.verifyCode(input?.email, input?.code),
+    completeMobileRegistration: (claims, input) => registrationOtp.completeRegistration({
+      claims,
+      input,
+      completeProfile: (verifiedClaims, profileInput) => services.mobileProfile(verifiedClaims, profileInput, 'POST')
+    }),
     resolveMobileItem: input => resolveMobileItem(readDatabase, input),
-    mobileRentalList: async (actor, id) => { await verificationSweep.run(); return mobileRentalList(firestore, actor, id); },
+    mobileRentalList: async (actor, id) => { await verificationSweep.run(); return mobileRentalList(readDatabase, actor, id); },
     mobilePaymentInstructions: () => mobilePaymentInstructions(readDatabase),
     submitRentalPaymentProof: (actor, id, input) => submitRentalPaymentProof(firestore, actor, id, input, now()),
-    mobileQuote: async input => { await verificationSweep.run({ force: true }); return quoteEquipmentRental(firestore, { ...input, mode: 'TIMED' }, now()); },
+    mobileQuote: input => quoteEquipmentRental(firestore, { ...input, mode: 'TIMED' }, now()),
     requestMobileReturn: (actor, id, input) => requestMobileReturn(firestore, actor, id, input, now()),
     reviewMobileReturn: (actor, id, input) => reviewMobileReturn(firestore, actor, id, input, now()),
-    saveRequestInspection: async (actor, id, input) => { await verificationSweep.run({ force: true }); return saveRequestInspection(firestore, actor, id, input); },
+    saveRequestInspection: (actor, id, input) => saveRequestInspection(firestore, actor, id, input),
     verifyMobileToken: async token => { try { return await firebaseAuth.verifyIdToken(token, true); } catch { return null; } },
     pricingQuote: async input => {
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('Rental quote details are required.'), { status: 400 });
       if (input.itemId) {
-        await verificationSweep.run({ force: true });
         return (await quoteEquipmentRental(firestore, input, now())).quote;
       }
       return quoteRental(await loadPricing(firestore), input);
@@ -127,20 +193,87 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   };
   services.updateUser = (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input, now(), { ownerUid });
 
-  for (const name of ['createCounterBooking', 'releaseBooking', 'verifyReleaseCodes', 'prepareRentalDelivery', 'reviewRentalPaymentProof', 'submitRentalPaymentProof', 'savePaymentSettings', 'recordRentalReceipt', 'completeRentalReturn', 'changeAssignedUnit', 'settleRentalPayment', 'touchLogin', 'updateProfile', 'createItem', 'updateItem', 'itemAction', 'createItemCategory', 'deleteItemCategory', 'deleteArchivedItem', 'inventoryQr', 'inventoryQrLabels', 'savePricing', 'terminalConfirm', 'createRentalRequest', 'createReturnRequest', 'createMobileRentalRequest', 'reviewMobileRental', 'cancelMobileRentalRequest', 'requestMobileReturn', 'reviewMobileReturn', 'saveRequestInspection', 'createCustomer', 'createMobileCustomerAccount', 'updateCustomer', 'changeCustomerPassword', 'deleteArchivedCustomer', 'saveRate', 'saveSettings', 'createUser', 'updateUser']) {
+  const cacheInvalidations = {
+    createCounterBooking: ['rentals', 'items', 'audit_logs', 'item_status_history', 'notification_inboxes'],
+    releaseBooking: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'notification_inboxes'],
+    prepareRentalDelivery: ['rentals', 'audit_logs', 'notification_inboxes'],
+    reviewRentalPaymentProof: ['rentals', 'rental_payment_proofs', 'audit_logs', 'notification_inboxes'],
+    submitRentalPaymentProof: ['rentals', 'rental_payment_proofs', 'audit_logs', 'notification_inboxes'],
+    savePaymentSettings: ['settings', 'audit_logs'],
+    recordRentalReceipt: ['rentals', 'items', 'audit_logs', 'item_status_history', 'notification_inboxes'],
+    completeRentalReturn: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records', 'notification_inboxes'],
+    changeAssignedUnit: ['rentals', 'items', 'audit_logs', 'item_status_history'],
+    settleRentalPayment: ['rentals', 'rental_settlements', 'audit_logs'],
+    touchLogin: ['users'],
+    updateProfile: ['users', 'audit_logs'],
+    createItem: ['items', 'item_rates', 'item_codes', 'counters', 'audit_logs', 'item_status_history'],
+    updateItem: ['items', 'item_rates', 'audit_logs'],
+    itemAction: ['items', 'maintenance_records', 'item_status_history', 'audit_logs'],
+    createItemCategory: ['item_categories', 'audit_logs'],
+    deleteItemCategory: ['item_categories', 'audit_logs'],
+    deleteArchivedItem: ['items', 'item_rates', 'audit_logs'],
+    inventoryQr: ['items'],
+    inventoryQrLabels: ['items'],
+    savePricing: ['settings', 'audit_logs'],
+    terminalConfirm: ['verification_requests', 'rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records'],
+    createRentalRequest: ['rentals', 'items', 'verification_requests', 'audit_logs', 'notification_inboxes'],
+    createReturnRequest: ['rentals', 'verification_requests', 'audit_logs', 'notification_inboxes'],
+    createMobileRentalRequest: ['rentals', 'items', 'audit_logs', 'notification_inboxes', 'rental_payment_proofs'],
+    reviewMobileRental: ['rentals', 'items', 'audit_logs', 'notification_inboxes'],
+    cancelMobileRentalRequest: ['rentals', 'items', 'audit_logs', 'notification_inboxes'],
+    requestMobileReturn: ['rentals', 'audit_logs', 'notification_inboxes'],
+    reviewMobileReturn: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records', 'notification_inboxes'],
+    saveRequestInspection: ['verification_requests', 'audit_logs'],
+    createCustomer: ['customers', 'counters', 'audit_logs'],
+    createMobileCustomerAccount: ['users', 'customers', 'counters', 'audit_logs'],
+    updateCustomer: ['customers', 'users', 'audit_logs'],
+    changeCustomerPassword: ['users', 'customers', 'audit_logs'],
+    deleteArchivedCustomer: ['customers', 'users', 'audit_logs'],
+    saveRate: ['item_rates', 'audit_logs'],
+    saveSettings: ['settings', 'audit_logs'],
+    createUser: ['users', 'audit_logs'],
+    updateUser: ['users', 'audit_logs']
+  };
+  const rentalScopedInvalidations = new Set([
+    'createCounterBooking', 'releaseBooking', 'prepareRentalDelivery', 'reviewRentalPaymentProof',
+    'submitRentalPaymentProof', 'recordRentalReceipt', 'completeRentalReturn', 'changeAssignedUnit',
+    'settleRentalPayment', 'createRentalRequest', 'createMobileRentalRequest', 'reviewMobileRental',
+    'cancelMobileRentalRequest', 'requestMobileReturn', 'reviewMobileReturn'
+  ]);
+  for (const name of Object.keys(cacheInvalidations)) {
     const operation = services[name];
     services[name] = async (...args) => {
-      try { return await operation(...args); }
-      finally { readCache.invalidate(); }
+      const result = await operation(...args);
+      if (result?.duplicate === true) return result;
+      for (const collection of cacheInvalidations[name]) {
+        if (collection === 'rentals' && rentalScopedInvalidations.has(name)) {
+          const rental = result?.rental || result?.data?.rental;
+          const customerId = String(rental?.customer_id || rental?.customerId || '');
+          const rentalId = String(rental?.id || rental?.rental_id || '');
+          if (!customerId || !rentalId) readCache.invalidate('rentals');
+          else readCache.invalidate('rentals', clauses => !clauses.length || clauses.some(clause =>
+            clause[0] === 'doc' && clause[1] === rentalId ||
+            clause[0] === 'where' && ['customer_id', 'customerId'].includes(clause[1]) && clause[3] === customerId
+          ));
+        } else readCache.invalidate(collection);
+      }
+      return result;
     };
   }
-  return Object.assign(services, { invalidateReadCache: () => readCache.invalidate(), sweepVerificationRequests: () => verificationSweep.run() });
+  return Object.assign(services, {
+    invalidateReadCache: collection => {
+      if (!collection) return readCache.invalidate();
+      for (const name of Array.isArray(collection) ? collection : [collection]) readCache.invalidate(name);
+    },
+    sweepVerificationRequests: () => verificationSweep.run()
+  });
 }
 
 const defaultServices = createFirebaseServices();
 
 export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices, notificationWorker = services === defaultServices, hardwareEnabled = process.env.ENABLE_ESP32 === 'true' } = {}) {
   const attempts = new Map();
+  const registrationAttempts = new Map();
   const quotaBackoff = createQuotaBackoff();
   const origins = new Set([
     process.env.WEB_ORIGIN || 'http://127.0.0.1:5173',
@@ -156,6 +289,17 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     } catch { return false; }
   };
   function send(res, status, value, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers }); res.end(JSON.stringify(value)); }
+  function limitRegistrationRequests(req, action, max) {
+    const key = `${action}:${req.socket.remoteAddress || 'unknown'}`;
+    const at = Date.now();
+    for (const [candidate, row] of registrationAttempts) if (at - row.startedAt >= 900000) registrationAttempts.delete(candidate);
+    const row = registrationAttempts.get(key);
+    if (row && at - row.startedAt < 900000 && row.count >= max) {
+      throw Object.assign(new Error('Too many requests. Please wait 15 minutes and try again.'), { status: 429 });
+    }
+    if (!row || at - row.startedAt >= 900000) registrationAttempts.set(key, { startedAt: at, count: 1 });
+    else registrationAttempts.set(key, { ...row, count: row.count + 1 });
+  }
   function cookie(value, seconds, persistent = false) { return `rent_play_session=${value}; HttpOnly; SameSite=Strict; Path=/${persistent ? `; Max-Age=${seconds}` : ''}${process.env.COOKIE_SECURE === 'true' ? '; Secure' : ''}`; }
   async function body(req, maxBytes = 8192) {
     if (!(req.headers['content-type'] || '').startsWith('application/json')) throw Object.assign(new Error('JSON body required.'), { status: 415 });
@@ -176,7 +320,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       if (!corsAllowed) return send(res, 403, { error: 'Request origin is not allowed.' });
       res.writeHead(204, {
         'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Accept, Authorization, Content-Type',
+        'Access-Control-Allow-Headers': 'Accept, Authorization, Cache-Control, Content-Type',
         'Access-Control-Max-Age': '600',
         'Cache-Control': 'no-store'
       });
@@ -204,8 +348,25 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(res, 400, { error: 'Enter a valid email address.' });
         await sessions.sendPasswordReset(email).catch(() => { }); return send(res, 200, { ok: true });
       }
+      if (['/api/mobile/registration/email-code', '/api/mobile/registration/verify-email-code', '/api/mobile/registration/complete'].includes(path)) {
+        if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed.' });
+        quotaBackoff.assertAvailable();
+        const input = await body(req);
+        if (path === '/api/mobile/registration/email-code') {
+          limitRegistrationRequests(req, 'send', 10);
+          await services.sendRegistrationCode(input);
+          return send(res, 200, { ok: true, message: 'If this address can receive verification mail, a code has been sent.' });
+        }
+        if (path === '/api/mobile/registration/verify-email-code') {
+          limitRegistrationRequests(req, 'verify', 30);
+          return send(res, 200, await services.verifyRegistrationCode(input));
+        }
+        const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
+        const claims = bearer ? await services.verifyMobileToken?.(bearer) : null;
+        if (!claims) return send(res, 401, { error: 'Please sign in to finish creating your account.' });
+        return send(res, 200, { ...await services.completeMobileRegistration(claims, input), firebaseProjectId: services.firebaseProjectId });
+      }
       quotaBackoff.assertAvailable();
-      if (req.method === 'GET' && req.headers['cache-control'] === 'no-cache') services.invalidateReadCache?.();
       if (['/api/notifications', '/api/notifications/read', '/api/notifications/device'].includes(path)) {
         const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = bearer ? await services.verifyMobileToken?.(bearer) : await sessions.verify(token);
@@ -230,7 +391,6 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (!claims) return send(res, 401, { error: 'Please sign in to access your profile.' });
         if (!['GET', 'POST', 'PATCH'].includes(req.method)) return send(res, 405, { error: 'Method not allowed.' });
         const result = await services.mobileProfile(claims, req.method === 'GET' ? {} : await body(req), req.method);
-        if (req.method !== 'GET') services.invalidateReadCache?.();
         return send(res, 200, { ...result, firebaseProjectId: services.firebaseProjectId });
       }
       const mobileRentalRoute = path.match(/^\/api\/mobile\/rentals(?:\/([A-Za-z0-9_-]{1,128})(?:\/(cancel|return|ticket|payment-proof))?)?$/);
@@ -291,11 +451,18 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       const inventoryQrLabelsRoute = path === '/api/inventory/qr-labels';
       const itemCategoriesRoute = path.match(/^\/api\/item-categories(?:\/([A-Za-z0-9_-]{1,128}))?$/);
       const customerRoute = path.match(/^\/api\/customers(?:\/([A-Za-z0-9_-]{1,128}))?$/), customerPasswordRoute = path.match(/^\/api\/customers\/([A-Za-z0-9_-]{1,128})\/password$/), customerAccountRoute = path === '/api/customer-accounts', userRoute = path.match(/^\/api\/users(?:\/([A-Za-z0-9_-]{1,128}))?$/);
-      const workspaceRoute = path === '/api/workspace' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
+      const workspaceRoute = path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute || rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) {
         const mobileToken = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
         const user = await services.getUser(claims.uid); if (!user?.is_active || !isStaffRole(user.role)) return send(res, 401, { error: 'Please sign in with an active operator or owner account.' });
+        if (req.method === 'GET' && req.headers['cache-control'] === 'no-cache') {
+          if (path === '/api/dashboard') services.invalidateReadCache?.();
+          else {
+            const collections = explicitRefreshCollections(path);
+            if (collections) services.invalidateReadCache?.(collections);
+          }
+        }
         user.role = normalizeRole(user.role);
         if (counterBookingRoute && req.method === 'POST') return send(res, 201, await services.createCounterBooking(user, await body(req)));
         if (rentalLookupRoute && req.method === 'POST') return send(res, 200, await services.lookupRental(await body(req)));
@@ -310,6 +477,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (path === '/api/auth/me') return send(res, 200, { user: publicUser(user), firebaseProjectId: services.firebaseProjectId });
         if (path === '/api/profile') return send(res, 200, { user: publicUser(await services.updateProfile(user.id, await body(req))) });
         if (path === '/api/workspace' && req.method === 'GET') return send(res, 200, await services.workspace(user.role));
+        if (path === '/api/mobile/admin-workspace' && req.method === 'GET') return send(res, 200, await services.mobileAdminWorkspace(user.role));
+        if (path === '/api/analytics') return req.method === 'GET' ? send(res, 200, await services.analyticsSummary()) : send(res, 405, { error: 'Method not allowed.' });
         if (path === '/api/rentals' && req.method === 'POST') return hardwareEnabled ? send(res, 201, await services.createRentalRequest(user, await body(req))) : send(res, 409, { error: 'ESP32 is on standby. Prepare a booking in the rental desk.' });
         if (path === '/api/returns' && req.method === 'POST') return hardwareEnabled ? send(res, 201, await services.createReturnRequest(user, await body(req))) : send(res, 409, { error: 'ESP32 is on standby. Record physical receipt in the return desk.' });
         if (mobileReviewRoute && req.method === 'POST') return send(res, 200, await services.reviewMobileRental({ id: user.id, full_name: user.full_name || user.name }, mobileReviewRoute[1], await body(req)));
@@ -370,9 +539,17 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       catch (error) { quotaBackoff.record(error); }
       finally { busy = false; }
     };
-    const timer = setInterval(dispatch, 10000); timer.unref?.();
+    const timer = setInterval(dispatch, 60000); timer.unref?.();
     server.once('listening', dispatch);
     server.once('close', () => clearInterval(timer));
+  }
+  if (services.readCacheStats) {
+    const metricsTimer = setInterval(() => {
+      const metrics = services.readCacheStats();
+      if (metrics.firestoreReads) console.info(`[firestore-display-cache] ${JSON.stringify(metrics)}`);
+    }, 900000);
+    metricsTimer.unref?.();
+    server.once('close', () => clearInterval(metricsTimer));
   }
   return server;
 }

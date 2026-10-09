@@ -71,9 +71,23 @@ export function createRentalDesk(h) {
     redraw(); toast(fresh ? label : `${label} Refresh to see the latest records.`);
     if (next) next(response.rental);
   }
-  function submit(form, title, description, callback) {
+  function submit(form, title, description, callback, { confirm = true } = {}) {
     const key = rentalOperationKey();
     form.querySelector('[data-close]').onclick = () => modal.close();
+    if (!confirm) {
+      let busy = false;
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (busy || !form.isConnected || !form.reportValidity()) return;
+        busy = true;
+        const button = form.querySelector('[type="submit"]'), error = form.querySelector('.form-error');
+        button.disabled = true; error.textContent = '';
+        try { await callback(Object.fromEntries(new FormData(form)), key); }
+        catch (problem) { if (form.isConnected) { error.textContent = problem.message; button.disabled = false; } }
+        finally { busy = false; }
+      });
+      return;
+    }
     confirmSubmit(form, { title, description, confirmLabel: 'Confirm' }, async () => {
       const button = form.querySelector('[type="submit"]'), error = form.querySelector('.form-error'); button.disabled = true; error.textContent = '';
       try { await callback(Object.fromEntries(new FormData(form)), key); }
@@ -148,9 +162,9 @@ export function createRentalDesk(h) {
       if (row.payment_proof_status === 'PENDING_REVIEW') { paymentProofReviewForm(row); return; }
       if (row.payment_proof_status !== 'VERIFIED') { toast('Waiting for the customer to upload a corrected payment screenshot.'); return; }
     }
-    showModal(approve ? 'Approve rental request' : 'Reject rental request', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)} · ${e(row.rental_code || row.id)}</p>${approve ? '<p>Approval reserves the assigned equipment. The timer starts only when you confirm the resort handoff.</p><label class="pricing-check"><input type="checkbox" name="paymentVerified"/> Rental payment already received and verified</label><label class="pricing-check"><input type="checkbox" name="depositReceived"/> Refundable deposit already received</label><label>Review notes<textarea name="notes" maxlength="1000"></textarea></label>' : '<label>Reason (optional)<textarea name="reason" maxlength="1000" rows="3"></textarea></label>'}${actions(approve ? 'Approve rental request' : 'Reject rental request')}</form>`);
+    showModal(approve ? 'Approve rental request' : 'Reject rental request', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)} · ${e(row.rental_code || row.id)}</p>${approve ? '<p>Approval reserves the equipment. Confirm any outstanding payment and deposit at handoff; the rental timer starts when you confirm delivery.</p><label>Review notes<textarea name="notes" maxlength="1000"></textarea></label>' : '<label>Reason (optional)<textarea name="reason" maxlength="1000" rows="3"></textarea></label>'}${actions(approve ? 'Approve rental request' : 'Reject rental request')}</form>`);
     const form = modal.querySelector('form');
-    submit(form, approve ? 'Approve this rental request?' : 'Reject this rental request?', approve ? 'The equipment stays reserved until preparation and handoff or expiry.' : 'The reservation will be released. Verified payments remain recorded for refund.', async fields => saved(await api(`/mobile/rentals/${encodeURIComponent(row.id)}/review`, { method: 'POST', body: JSON.stringify(approve ? { action, paymentVerified: fields.paymentVerified === 'on', depositReceived: fields.depositReceived === 'on', notes: fields.notes } : { action, reason: fields.reason }) }), approve ? 'Rental request approved. Prepare the equipment for delivery.' : 'Rental request rejected.'));
+    submit(form, approve ? 'Approve this rental request?' : 'Reject this rental request?', approve ? 'The equipment stays reserved until preparation and handoff or expiry.' : 'The reservation will be released. Verified payments remain recorded for refund.', async fields => saved(await api(`/mobile/rentals/${encodeURIComponent(row.id)}/review`, { method: 'POST', body: JSON.stringify(approve ? { action, notes: fields.notes } : { action, reason: fields.reason }) }), approve ? 'Rental request approved. Prepare the equipment for delivery.' : 'Rental request rejected.'));
   }
   async function paymentProofReviewForm(row) {
     showModal('Review QR payment', `<form class="admin-form rental-desk-form"><p>Rental request · ${e(row.rental_code || row.id)} · ${e(row.customer_name)}</p><p>Expected transfer: <strong>${e(h.money(Number(row.rental_fee || 0) + Number(row.deposit_amount || 0)))}</strong></p><div data-proof-content>Loading payment screenshot…</div><label>Review note<textarea name="notes" maxlength="1000" rows="2"></textarea></label><label data-proof-reject-reason hidden>Why is this proof being rejected?<textarea name="reason" maxlength="1000" rows="3"></textarea></label><p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Close</button><button type="button" class="secondary" data-reject-proof>Reject proof</button><button type="button" class="primary" data-verify-proof>Verify payment &amp; approve request</button></div></form>`);
@@ -181,7 +195,7 @@ export function createRentalDesk(h) {
     if (!row || row.status !== 'APPROVED') { toast('Approve the rental request before preparing the equipment.'); return; }
     showModal('Prepare equipment for delivery', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Scan the assigned unit’s printed QR at the shop. This marks it ready for delivery and does not start the rental timer.</p>${scanField('inventoryCode','Assigned equipment QR')}${manualControls}${actions('Mark ready for delivery')}</form>`);
     const form = modal.querySelector('form'); bindManual(form, row, false);
-    submit(form, 'Prepare this equipment?', `${row.item_name} (${row.item_code}) will be marked ready for delivery to ${row.delivery_location || 'the customer'}. The rental timer stays stopped.`, async fields => saved(await api(`/rentals/${encodeURIComponent(row.id)}/prepare-delivery`, { method: 'POST', body: JSON.stringify({ inventoryCode: fields.inventoryCode, ...(fields.manualLookup === 'on' ? { manualLookup: true, manualReason: fields.manualReason } : {}) }) }), 'Equipment verified and ready for delivery.'));
+    submit(form, 'Prepare this equipment?', `${row.item_name} (${row.item_code}) will be marked ready for delivery to ${row.delivery_location || 'the customer'}. The rental timer stays stopped.`, async fields => saved(await api(`/rentals/${encodeURIComponent(row.id)}/prepare-delivery`, { method: 'POST', body: JSON.stringify({ inventoryCode: fields.inventoryCode, ...(fields.manualLookup === 'on' ? { manualLookup: true, manualReason: fields.manualReason } : {}) }) }), 'Equipment verified and ready for delivery.'), { confirm: false });
   }
   function releaseForm(row) {
     if (!row || row.status !== 'APPROVED' || row.delivery_status !== 'PREPARED') { toast('Prepare the assigned equipment at the shop before confirming delivery.'); return; }
@@ -232,7 +246,7 @@ export function createRentalDesk(h) {
     submit(form, 'Confirm physical handoff?', `${row.item_name} will be delivered to ${row.customer_name} at ${row.delivery_location || 'the selected location'}. The rental timer starts now.`, async (fields, key) => {
       const notes = fields.inspectionNotes.trim() || 'No additional inspection notes.';
       return saved(await api(`/rentals/${encodeURIComponent(row.id)}/release`, { method: 'POST', body: JSON.stringify({ requestKey: key, ...verification.releaseCodes(), customerVerified: fields.customerVerified === 'on', paymentVerified: fields.paymentVerified === 'on', depositReceived: fields.depositReceived === 'on', inspection: { condition: fields.condition, result: 'AVAILABLE', notes, accessoriesChecked: fields.accessoriesChecked === 'on', photos: photos() } }) }), 'Handoff confirmed. Rental timer started.');
-    });
+    }, { confirm: false });
   }
   function receiveForm(id, reject = false) {
     const row = getModel().transactions.find(row => String(row.id) === String(id));

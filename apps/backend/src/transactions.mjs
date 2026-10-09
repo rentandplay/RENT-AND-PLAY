@@ -247,7 +247,7 @@ function closeUnconfirmed(tx, db, requestDoc, rentalDoc, itemDoc, status, reason
 }
 
 export async function expireVerificationRequests(db, now = new Date()) {
-  const pending = await db.collection('verification_requests').where('status', '==', 'PENDING').get();
+  const pending = await db.collection('verification_requests').where('status', '==', 'PENDING').where('expires_at', '<=', now).get();
   let count = 0;
   for (const candidate of pending.docs.filter(doc => expired(doc.data(), now))) {
     const changed = await db.runTransaction(async tx => {
@@ -360,7 +360,7 @@ export async function terminalPending(db, terminal, now = new Date(), { expire =
   return serializeTransaction({ terminal_id: terminal.id, requests: pending });
 }
 
-export function createExpirySweep(db, { intervalMs = 30000, now = Date.now, onExpired = () => {} } = {}) {
+export function createExpirySweep(db, { intervalMs = 60000, now = Date.now, onExpired = () => {} } = {}) {
   let pending = null, lastSuccess = -Infinity;
   return {
     run({ force = false } = {}) {
@@ -378,7 +378,7 @@ export function createExpirySweep(db, { intervalMs = 30000, now = Date.now, onEx
   };
 }
 
-export function startExpiryWorker(db, { intervalMs = 30000, now = Date.now, sweep = () => expireVerificationRequests(db), onError = error => console.warn(`Verification expiry sweep failed (${error.code || 'FIREBASE_ERROR'}): ${error.message} ${firebaseFailure(error).error}`) } = {}) {
+export function startExpiryWorker(db, { intervalMs = 60000, now = Date.now, sweep = () => expireVerificationRequests(db), onError = error => console.warn(`Verification expiry sweep failed (${error.code || 'FIREBASE_ERROR'}): ${error.message} ${firebaseFailure(error).error}`) } = {}) {
   let running = false, stopped = false, failures = 0, retryAt = 0;
   const tick = async () => {
     if (running || stopped || now() < retryAt) return;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createApi, createFirebaseServices } from '../src/server.mjs';
 import { DEFAULT_PRICING } from '../src/pricing.mjs';
 import { mobileCatalog } from '../src/mobile.mjs';
-import { createBooking, reviewBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt, completeRentalReturn, cancelBooking, expireRentalHolds, rentalTicket, lookupRental, changeAssignedUnit, settleRentalPayment } from '../src/rental-flow.mjs';
+import { createBooking, reviewBooking, prepareRentalDelivery, verifyReleaseCodes, releaseBooking, recordRentalReceipt, completeRentalReturn, cancelBooking, expireRentalHolds, rentalTicket, lookupRental, changeAssignedUnit, settleRentalPayment } from '../src/rental-flow.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
 const now = new Date('2026-10-06T02:00:00Z');
@@ -27,9 +27,10 @@ function fixture() {
 async function approved(db) {
   const { rental } = await createBooking(db, customer, input, now);
   await reviewBooking(db, admin, rental.id, { action: 'APPROVE' }, after(1));
+  await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-cards' }, after(1.5));
   return rental;
 }
-const releaseInput = rental => ({ requestKey: key('b'), transactionCode: rental.booking_qr_token, inventoryCode: 'rp-qr-cards', customerVerified: true, paymentVerified: true, depositReceived: true, inspection });
+const releaseInput = rental => ({ requestKey: key('b'), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, depositReceived: true, inspection });
 const receiptInput = { requestKey: key('c'), inventoryCode: 'rp-qr-cards', physicalReceiptConfirmed: true };
 const returnInput = { requestKey: key('d'), penaltyAmount: 0, inspection };
 async function active(db) {
@@ -95,9 +96,9 @@ test('booking rejection still validates supplied reasons before changing records
   assert.equal(db.records('audit_logs').filter(row => row.action === 'RENTAL_REJECTED').length, 0);
 });
 
-test('release rejects wrong QR codes, missing identity, payment, deposit or accessory checks without changing inventory', async () => {
+test('release rejects wrong rental QR, missing identity, payment, deposit or accessory checks without changing inventory', async () => {
   const db = fixture(), rental = await approved(db), good = releaseInput(rental);
-  for (const override of [{ transactionCode: 'wrong' }, { inventoryCode: 'rp-qr-spare' }, { customerVerified: false }, { paymentVerified: false }, { depositReceived: false }, { inspection: { ...inspection, accessoriesChecked: false } }, { inspection: { ...inspection, photos: ['data:image/png;base64,AAAA'] } }]) {
+  for (const override of [{ transactionCode: 'wrong' }, { customerVerified: false }, { paymentVerified: false }, { depositReceived: false }, { inspection: { ...inspection, accessoriesChecked: false } }, { inspection: { ...inspection, photos: ['data:image/png;base64,AAAA'] } }]) {
     await assert.rejects(releaseBooking(db, admin, rental.id, { ...good, ...override }, after(2)));
     assert.equal(db.data('rentals', rental.id).status, 'APPROVED');
     assert.equal(db.data('items', 'cards').status, 'AVAILABLE');
@@ -110,45 +111,56 @@ test('release rejects wrong QR codes, missing identity, payment, deposit or acce
   assert.equal(db.records('item_status_history').length, 1);
 });
 
-test('manual lookup needs matching codes and an audited reason', async () => {
+test('manual lookup needs a matching rental code and records its reason', async () => {
   const db = fixture(), rental = await approved(db);
-  const manual = { ...releaseInput(rental), transactionCode: rental.rental_code, inventoryCode: 'CARDS' };
+  const manual = { ...releaseInput(rental), transactionCode: rental.rental_code };
   await assert.rejects(releaseBooking(db, admin, rental.id, manual, after(2)), status(409));
-  await releaseBooking(db, admin, rental.id, { ...manual, manualReason: 'Camera unavailable; matched printed codes.' }, after(2));
-  assert.equal(db.data('rentals', rental.id).verification_method, 'MANUAL');
+  await releaseBooking(db, admin, rental.id, { ...manual, manualLookup: true, manualReason: 'Camera unavailable; matched printed codes.' }, after(2));
+  assert.equal(db.data('rentals', rental.id).handoff_verification.verification_method, 'MANUAL');
   assert.match(db.records('audit_logs').find(row => row.action === 'RENTAL_RELEASED').manual_reason, /Camera/);
 });
 
-test('release preflight verifies the transaction first and only accepts the exact requested equipment unit without starting a timer', async () => {
+test('delivery preparation verifies the assigned unit and release preflight verifies the customer rental QR', async () => {
   const db = fixture(), rental = await approved(db);
   await db.collection('items').doc('cards').update({ name: 'Bingo Set' });
   await db.collection('items').doc('bicycle').set({ name: 'Bicycle', item_code: 'BIKE-001', qr_token: 'rp-qr-bike', status: 'AVAILABLE' });
   const before = structuredClone(db.records('rentals'));
-  await assert.rejects(verifyReleaseCodes(db, admin, rental.id, { inventoryCode: 'rp-qr-cards' }, after(2)), status(400));
+  await assert.rejects(prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-bike' }, after(2)), status(409));
+  await assert.rejects(verifyReleaseCodes(db, admin, rental.id, {}, after(2)), status(400));
   await assert.rejects(verifyReleaseCodes(db, admin, rental.id, { transactionCode: 'wrong-booking' }, after(2)), status(409));
   const booking = await verifyReleaseCodes(db, admin, rental.id, { transactionCode: rental.booking_qr_token }, after(2));
-  assert.equal(booking.booking_verified, true); assert.equal(booking.inventory_verified, false);
+  assert.equal(booking.booking_verified, true); assert.equal(booking.inventory_verified, true); assert.equal(booking.delivery_prepared, true);
   assert.equal(booking.item.name, 'Bingo Set'); assert.equal(booking.item.item_code, 'CARDS');
-  for (const inventoryCode of ['rp-qr-bike', 'rp-qr-spare', 'CARDS']) {
-    await assert.rejects(verifyReleaseCodes(db, admin, rental.id, { transactionCode: rental.booking_qr_token, inventoryCode }, after(2)), error => error.status === 409 && /Bingo Set/.test(error.message));
-  }
-  const matched = await verifyReleaseCodes(db, admin, rental.id, { transactionCode: rental.booking_qr_token, inventoryCode: 'rp-qr-cards' }, after(2));
-  assert.equal(matched.inventory_verified, true);
   assert.deepEqual(db.records('rentals'), before); assert.equal(db.data('items', 'cards').status, 'AVAILABLE');
   assert.equal(db.records('item_condition_records').length, 0);
-  const manual = await verifyReleaseCodes(db, admin, rental.id, { transactionCode: rental.rental_code, inventoryCode: 'CARDS', manualReason: 'Camera unavailable' }, after(2));
-  assert.equal(manual.inventory_verified, true);
-  await assert.rejects(verifyReleaseCodes(db, admin, rental.id, { transactionCode: rental.rental_code, inventoryCode: 'BIKE-001', manualReason: 'Camera unavailable' }, after(2)), status(409));
+  const manual = await verifyReleaseCodes(db, admin, rental.id, { transactionCode: rental.rental_code, manualLookup: true, manualReason: 'Camera unavailable' }, after(2));
+  assert.equal(manual.booking_verified, true);
+});
+
+test('preparing the same assigned unit twice is idempotent and changing units permits a new preparation alert', async () => {
+  const db = fixture(), rental = await approved(db);
+  const first = await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-cards' }, after(2));
+  assert.equal(first.duplicate, true);
+  assert.equal(db.records('notification_outbox').filter(row => row.type === 'DELIVERY_PREPARED').length, 1);
+
+  await changeAssignedUnit(db, admin, rental.id, { inventoryCode: 'rp-qr-spare', reason: 'Use inspected spare.' }, after(3));
+  await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-spare' }, after(4));
+  assert.equal(db.data('rentals', rental.id).delivery_preparation.item_id, 'spare');
+  assert.equal(db.records('notification_outbox').filter(row => row.type === 'DELIVERY_PREPARED').length, 2);
 });
 
 test('preflight rejects expired bookings and rechecks assignment changes before the final release', async () => {
-  const db = fixture(), rental = await approved(db), codes = { transactionCode: rental.booking_qr_token, inventoryCode: 'rp-qr-cards' };
-  await assert.rejects(verifyReleaseCodes(db, admin, rental.id, codes, after(31)), status(409));
+  const expiredDb = fixture(), { rental: expiredRental } = await createBooking(expiredDb, customer, input, now);
+  await reviewBooking(expiredDb, admin, expiredRental.id, { action: 'APPROVE' }, after(1));
+  await assert.rejects(verifyReleaseCodes(expiredDb, admin, expiredRental.id, { transactionCode: expiredRental.booking_qr_token }, after(31)), status(409));
+
+  const db = fixture(), rental = await approved(db), codes = { transactionCode: rental.booking_qr_token };
   await verifyReleaseCodes(db, admin, rental.id, codes, after(2));
   await changeAssignedUnit(db, admin, rental.id, { inventoryCode: 'rp-qr-spare', reason: 'Use inspected spare' }, after(3));
   await assert.rejects(verifyReleaseCodes(db, admin, rental.id, codes, after(4)), status(409));
   await assert.rejects(releaseBooking(db, admin, rental.id, releaseInput(rental), after(4)), status(409));
-  const updated = await verifyReleaseCodes(db, admin, rental.id, { ...codes, inventoryCode: 'rp-qr-spare' }, after(4));
+  await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-spare' }, after(4));
+  const updated = await verifyReleaseCodes(db, admin, rental.id, codes, after(4));
   assert.equal(updated.item.id, 'spare'); assert.equal(updated.inventory_verified, true);
 });
 
@@ -173,7 +185,8 @@ test('changing the assigned unit transfers only the hold and checks pricing', as
   assert.equal(db.data('items', 'cards').reserved_rental_id, null);
   assert.equal(db.data('items', 'spare').reserved_rental_id, rental.id);
   await assert.rejects(releaseBooking(db, admin, rental.id, releaseInput(rental), after(3)), status(409));
-  await releaseBooking(db, admin, rental.id, { ...releaseInput(rental), inventoryCode: 'rp-qr-spare' }, after(3));
+  await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-spare' }, after(2.5));
+  await releaseBooking(db, admin, rental.id, releaseInput(rental), after(3));
   assert.equal(db.data('items', 'spare').status, 'RENTED');
 });
 
@@ -233,6 +246,7 @@ test('whole-stay bookings keep a fixed checkout deadline when physically release
   const db = fixture();
   await db.collection('items').doc('cards').update({ pricing_product_id: 'jenga' });
   const { rental } = await createBooking(db, admin, { ...input, customerId: customer.id, mode: 'WHOLE_STAY', resortCheckoutAt: after(600).toISOString() }, now, { staff: true });
+  await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-cards' }, after(1));
   await releaseBooking(db, admin, rental.id, releaseInput(rental), after(20));
   assert.equal(db.data('rentals', rental.id).due_at.getTime(), after(600).getTime());
   assert.equal(db.data('rentals', rental.id).rental_fee, 250);

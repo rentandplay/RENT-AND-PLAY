@@ -8,12 +8,13 @@ const money = amount => `₱${Number(amount).toFixed(2)}`;
 const validAmount = amount => typeof amount === 'number' && Number.isFinite(amount) && amount >= 0;
 export const isMobileRental = rental => rental.request_source === 'MOBILE_APP' || Boolean(rental.admin_review) || Boolean(rental.customerId);
 
-export async function mobileProfile(db, claims, input = {}, method = 'GET', now = new Date()) {
+export async function mobileProfile(db, claims, input = {}, method = 'GET', now = new Date(), onWrite = () => {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Profile details are required.');
   const userRef = db.collection('users').doc(String(claims.uid));
-  const profile = await db.runTransaction(async tx => {
+  const { profile, created } = await db.runTransaction(async tx => {
     const doc = await tx.get(userRef);
     const existing = doc.exists ? doc.data() : null;
+    if (!existing && claims.email_verified !== true) fail(403, 'Verify your email before creating an account.');
     if (existing?.is_active === false) fail(403, 'Your account is inactive. Contact an administrator.');
     const existingRole = existing ? normalizeRole(existing.role) : 'USER';
     if (existing && !existingRole) fail(403, 'This account has no supported app role. Contact the workspace owner.');
@@ -49,8 +50,9 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     }
     if (!existing) tx.create(userRef, { ...created, ...changes });
     else if (method === 'PATCH') tx.update(userRef, changes);
-    return { ...created, ...changes };
+    return { profile: { ...created, ...changes }, created: !existing };
   });
+  if (created || method === 'PATCH') onWrite(method === 'PATCH' ? ['users', 'customers'] : ['users']);
   return { user: serializeMobile({ id: claims.uid, uid: claims.uid, name: profile.full_name || profile.name || '', full_name: profile.full_name || profile.name || '', email: profile.email || claims.email || '', phone: profile.phone || '', role: profile.role || 'USER', is_active: profile.is_active !== false, validIdUrl: profile.validIdUrl || profile.valid_id_url || null, profileImageUrl: profile.profileImageUrl || null, hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false, createdAt: profile.created_at || profile.createdAt || null }) };
 }
 

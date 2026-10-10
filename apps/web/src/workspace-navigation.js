@@ -10,13 +10,13 @@ export const pageInfo = Object.freeze({
   Dashboard: ['Today at a glance', 'Track equipment, upcoming returns, and the handoffs that need your attention.', 'grid'],
   Inventory: ['Your equipment collection', 'Manage availability, condition, pricing, and QR labels in one place.', 'box'],
   Customers: ['People behind the play', 'Keep contact details close and follow every customer’s rental history.', 'users'],
-  'Rates & Fees': ['Clear prices, easier rentals', 'Manage rental rates and deposits, then preview what a customer will pay.', 'money'],
+  'Rates & Fees': ['Clear prices, easier rentals', 'Manage rental rates, then preview what a customer will pay.', 'money'],
   Rentals: ['Keep every rental on track', 'Prepare new rentals and follow up on equipment that is due or overdue.', 'clock'],
   Returns: ['Ready for the next rental', 'Record return inspections and review completed equipment handoffs.', 'box'],
   'Transaction History': ['Every rental, one record', 'Find past transactions, saved charges, and their complete verification history.', 'clock'],
   Maintenance: ['Keep your collection ready', 'Track inspections and repairs, and return serviced equipment to the collection.', 'settings'],
   'ESP32 terminal': ['Hardware on standby', '', 'chip'],
-  Reports: ['See how your business is doing', 'Explore rental performance, equipment use, and service trends.', 'chart'],
+  Reports: ['See how your business is doing', 'Explore rental performance, equipment use, forecasts, and practical next steps.', 'chart'],
   Settings: ['Make this workspace yours', 'Manage business details, appearance, and your workspace preferences.', 'settings'],
   Profile: ['Your workspace account', 'Keep your name and sign-in details up to date.', 'users']
 });

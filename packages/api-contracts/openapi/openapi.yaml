@@ -4,6 +4,79 @@ info:
   version: 0.4.0
   description: Admin-confirmed pickup and physical return. ESP32 routes default to standby (ENABLE_ESP32=false).
 paths:
+  /api/auth/email-check:
+    post:
+      summary: Validate an email and a domain capable of receiving mail
+      description: Public and rate limited. Lowercases emails, rejects whitespace, and accepts valid company or school domains. DNS failures ask the caller to retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AccountEmail'}
+      responses:
+        '200': {description: Email domain validated}
+        '400': {description: Invalid syntax or INVALID_EMAIL_DOMAIN}
+        '503': {description: Temporary DNS failure}
+  /api/auth/password-reset:
+    post:
+      summary: Request a reset email for an explicitly entered recipient
+      description: Public and rate limited. Checks email format without DNS/domain validation. Confirmation names the email without revealing whether the account exists. Real provider failures are reported.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AccountEmail'}
+      responses:
+        '200': {description: Recipient and generic reset instructions}
+        '400': {description: Invalid email format}
+        '429': {description: Too many requests}
+        '503': {description: Reset provider temporarily unavailable}
+  /api/auth/change-password:
+    post:
+      summary: Change the temporary password before entering the staff workspace
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword, confirmPassword]
+              properties:
+                currentPassword: {type: string, minLength: 1, maxLength: 1024, writeOnly: true}
+                newPassword: {$ref: '#/components/schemas/AccountPassword'}
+                confirmPassword: {$ref: '#/components/schemas/AccountPassword'}
+                remember: {type: boolean, default: false}
+      responses:
+        '200': {description: Password updated and temporary-password flag cleared; web session renewed or signInAgain true; mobile signs in again}
+        '400': {description: Incorrect current password, weak new password, unchanged password, or confirmation mismatch}
+        '401': {description: Authentication required}
+        '403': {description: Only active staff accounts may change a staff password}
+  /api/users:
+    post:
+      summary: Owner creates a separate Owner or Operator account
+      description: Email format is checked without DNS/domain validation. Generated mode emails a cryptographically random temporary password. Email failure rolls back creation. Manual mode requires password and confirmation. Passwords never appear in the response or Firestore.
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fullName, email, role, passwordMode]
+              properties:
+                fullName: {type: string, minLength: 2, maxLength: 150}
+                email: {type: string, format: email, maxLength: 254}
+                role: {type: string, enum: [OWNER, OPERATOR]}
+                passwordMode: {type: string, enum: [generated, manual]}
+                password: {$ref: '#/components/schemas/AccountPassword'}
+                confirmPassword: {$ref: '#/components/schemas/AccountPassword'}
+      responses:
+        '201': {description: Created staff user with mustChangePassword and credentialsEmailSent; no password returned}
+        '400': {description: Invalid account details or missing manual password confirmation}
+        '403': {description: Owner access required or PASSWORD_CHANGE_REQUIRED}
+        '409': {description: Email already in use}
+        '503': {description: Generated credential email could not be delivered}
   /api/notifications:
     get:
       summary: Read the authenticated rental notification inbox
@@ -88,17 +161,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [fullName, code, email, password, confirmPassword]
+              required: [fullName, code, email, phone, password, confirmPassword]
               properties:
                 fullName: {type: string, minLength: 2, maxLength: 150}
                 code: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{1,49}$'}
-                email: {type: string, format: email, maxLength: 191}
+                email: {type: string, format: email, maxLength: 254}
                 phone: {type: string, maxLength: 40}
                 address: {type: string, maxLength: 500}
-                password: {type: string, minLength: 12, maxLength: 128, writeOnly: true}
-                confirmPassword: {type: string, minLength: 12, maxLength: 128, writeOnly: true}
+                password: {$ref: '#/components/schemas/AccountPassword'}
+                confirmPassword: {$ref: '#/components/schemas/AccountPassword'}
       responses:
-        '201': {description: Firebase USER account and customer profile created with the same UID}
+        '201': {description: Firebase CUSTOMER account and customer profile created with the same UID}
         '400': {description: Invalid name, customer code, contact details, or password}
         '401': {description: Administrator authentication required}
         '409': {description: Email or customer code already in use}
@@ -144,8 +217,8 @@ paths:
               type: object
               required: [newPassword, confirmNewPassword]
               properties:
-                newPassword: {type: string, minLength: 12, maxLength: 128, writeOnly: true}
-                confirmNewPassword: {type: string, minLength: 12, maxLength: 128, writeOnly: true}
+                newPassword: {$ref: '#/components/schemas/AccountPassword'}
+                confirmNewPassword: {$ref: '#/components/schemas/AccountPassword'}
       responses:
         '200': {description: Linked Firebase password changed; the audit log records no password value}
         '400': {description: Password does not meet length requirements or confirmation differs}
@@ -196,7 +269,7 @@ paths:
             schema: {$ref: '#/components/schemas/AdminRelease'}
       responses:
         '200': {description: ACTIVE rental and RENTED unit; identical retry is a duplicate}
-        '400': {description: Missing payment, customer, deposit or inspection verification}
+        '400': {description: Missing payment, customer or inspection verification}
         '409': {description: Wrong QR, reused key, or unavailable state}
   /api/rentals/{rentalId}/receipt:
     parameters:
@@ -250,7 +323,7 @@ paths:
     parameters:
       - {name: rentalId, in: path, required: true, schema: {type: string}}
     post:
-      summary: Record actual collection, deposit application and refunds after rental completion or closure
+      summary: Record actual rental collection and refunds after rental completion or closure
       security: [{adminSession: []}, {mobileAdminToken: []}]
       requestBody:
         required: true
@@ -324,7 +397,7 @@ paths:
         '200': {description: Own profile and Firebase project ID}
         '403': {description: Account inactive}
     post:
-      summary: Bootstrap a regular USER profile from verified Firebase claims
+      summary: Bootstrap a regular CUSTOMER profile from verified Firebase claims
       security: [{customerFirebaseToken: []}]
       requestBody:
         content:
@@ -357,8 +430,8 @@ paths:
                 itemId: {type: string}
                 durationMinutes: {type: integer, minimum: 1, maximum: 10080}
       responses:
-        '200': {description: Authoritative quote with package components, billed duration, fee, deposit, and total}
-        '400': {description: Rate or required deposit needs configuration}
+        '200': {description: Authoritative quote with package components, billed duration, rental fee, and total}
+        '400': {description: Rental rate needs configuration}
         '409': {description: Equipment unavailable or reserved}
   /api/mobile/rentals:
     get:
@@ -528,10 +601,22 @@ paths:
 components:
   securitySchemes:
     adminSession: {type: apiKey, in: cookie, name: rent_play_session}
-    mobileAdminToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active ADMIN operator or OWNER super admin profile}
-    customerFirebaseToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active USER customer profile in the same Firebase project}
+    mobileAdminToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active OPERATOR or OWNER profile; workspace access requires completion of temporary-password change}
+    customerFirebaseToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active CUSTOMER profile in the same Firebase project}
     terminalDeviceKey: {type: http, scheme: bearer, description: Separately provisioned terminal key; never a Firebase token or web cookie}
   schemas:
+    AccountEmail:
+      type: object
+      required: [email]
+      properties:
+        email: {type: string, format: email, maxLength: 254, description: No whitespace; normalized to lowercase. DNS is checked only by the mobile email-check and registration endpoints}
+    AccountPassword:
+      type: string
+      minLength: 8
+      maxLength: 128
+      writeOnly: true
+      pattern: '^(?=[\s\S]*[A-Z])(?=[\s\S]*[0-9])[\s\S]+$'
+      description: At least eight characters, a capital letter, and a number; confirmation must match
     NotificationDevice:
       type: object
       required: [token]
@@ -573,7 +658,6 @@ components:
         inventoryCode: {type: string, maxLength: 256}
         customerVerified: {type: boolean, enum: [true]}
         paymentVerified: {type: boolean, description: Required true unless saved full payment was already received}
-        depositReceived: {type: boolean, description: Required true unless saved required deposit was already collected}
         manualReason: {type: string, minLength: 1, maxLength: 1000}
         inspection: {$ref: '#/components/schemas/AdminInspection'}
     AdminReceipt:
@@ -598,8 +682,6 @@ components:
       properties:
         requestKey: {$ref: '#/components/schemas/OperationKey'}
         paymentAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0}
-        depositAppliedAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0}
-        depositRefundAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0}
         rentalRefundAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0, description: Only for cancelled/rejected/expired bookings}
         notes: {type: string, minLength: 1, maxLength: 1000}
     Inspection:
@@ -633,10 +715,9 @@ components:
         requestKey: {type: string, pattern: '^[a-f0-9]{32}$', description: Same key and details return the existing owned request without a second reservation}
         expectedQuote:
           type: object
-          required: [rentalFee, depositAmount, billedMinutes]
+          required: [rentalFee, billedMinutes]
           properties:
             rentalFee: {type: number, minimum: 0}
-            depositAmount: {type: number, minimum: 0}
             billedMinutes: {type: integer, minimum: 1}
     MobileRentalReview:
       type: object
@@ -644,7 +725,6 @@ components:
       properties:
         action: {type: string, enum: [APPROVE, REJECT]}
         paymentVerified: {type: boolean, description: Optional actual rental payment already received; timer stays stopped}
-        depositReceived: {type: boolean, description: Optional actual refundable deposit already collected}
         notes: {type: string, maxLength: 1000}
         reason: {type: string, maxLength: 1000, description: Optional when rejecting; omitted or blank values record no reason}
     MobileProfile:

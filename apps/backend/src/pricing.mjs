@@ -1,8 +1,8 @@
 import { auditFields, stageAudit } from './audit.mjs';
 
 const product = (id,name,group,rateOptions,extra={})=>({
-  id,name,group,rate_options:rateOptions,deposit_amount:0,overtime_rate_per_hour:0,
-  high_value:false,included_items:[],sale_price:null,...extra
+  id,name,group,rate_options:rateOptions,overtime_rate_per_hour:0,
+  included_items:[],sale_price:null,...extra
 });
 
 export const DEFAULT_PRICING = {
@@ -11,49 +11,49 @@ export const DEFAULT_PRICING = {
       {id:'half-hour',label:'30 minutes',kind:'SHORT',duration_minutes:30,amount:150},
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:200},
       {id:'three-hour-special',label:'3-hour special',kind:'PACKAGE',duration_minutes:180,amount:500}
-    ],{high_value:true,deposit_amount:200,overtime_rate_per_hour:200}),
+    ],{overtime_rate_per_hour:200}),
     product('pickleball-set','Pickleball Set','Sports',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:120}
-    ],{deposit_amount:100,overtime_rate_per_hour:120,included_items:['4 paddles','6 outdoor pickleballs','Portable net']}),
+    ],{overtime_rate_per_hour:120,included_items:['4 paddles','6 outdoor pickleballs','Portable net']}),
     product('badminton-set','Badminton Set','Sports',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:100}
-    ],{deposit_amount:100,overtime_rate_per_hour:100,included_items:['4 rackets','6 shuttlecocks','Net']}),
+    ],{overtime_rate_per_hour:100,included_items:['4 rackets','6 shuttlecocks','Net']}),
     product('basketball','Basketball','Sports',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:50},
       {id:'five-hour-special',label:'5-hour special',kind:'PACKAGE',duration_minutes:300,amount:200}
-    ],{deposit_amount:50,overtime_rate_per_hour:50}),
+    ],{overtime_rate_per_hour:50}),
     product('volleyball','Volleyball','Sports',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:50},
       {id:'five-hour-special',label:'5-hour special',kind:'PACKAGE',duration_minutes:300,amount:200}
-    ],{deposit_amount:50,overtime_rate_per_hour:50}),
+    ],{overtime_rate_per_hour:50}),
     product('ps4','PlayStation 4 Console','Tech Rentals',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:250}
-    ],{high_value:true,deposit_amount:300,overtime_rate_per_hour:250}),
+    ],{overtime_rate_per_hour:250}),
     product('nintendo-switch','Nintendo Switch','Tech Rentals',[
       {id:'hour',label:'Per hour',kind:'HOURLY',duration_minutes:60,amount:200}
-    ],{high_value:true,deposit_amount:300,overtime_rate_per_hour:200}),
+    ],{overtime_rate_per_hour:200}),
     product('ps5','PlayStation 5 Console','Tech Rentals',[
       {id:'day',label:'Per day',kind:'BLOCK',duration_minutes:1440,amount:120}
-    ],{high_value:true,deposit_amount:500,overtime_rate_per_hour:120}),
+    ],{overtime_rate_per_hour:120}),
     product('deck-of-cards','Deck of Cards','Cards',[
       {id:'five-hour',label:'5 hours',kind:'BLOCK',duration_minutes:300,amount:50}
-    ],{deposit_amount:50,overtime_rate_per_hour:10,sale_price:150,sale_label:'Brand new'}),
+    ],{overtime_rate_per_hour:10,sale_price:150,sale_label:'Brand new'}),
     product('uno-cards','Uno Cards','Cards',[
       {id:'five-hour',label:'5 hours',kind:'BLOCK',duration_minutes:300,amount:100}
-    ],{deposit_amount:50,overtime_rate_per_hour:20,sale_price:300,sale_label:'Brand new'}),
+    ],{overtime_rate_per_hour:20,sale_price:300,sale_label:'Brand new'}),
     product('bingo-cards','Bingo Set','Cards',[
       {id:'five-hour',label:'5 hours',kind:'BLOCK',duration_minutes:300,amount:150}
-    ],{deposit_amount:100,overtime_rate_per_hour:30,sale_price:450,sale_label:'Brand new'}),
+    ],{overtime_rate_per_hour:30,sale_price:450,sale_label:'Brand new'}),
     ...[
       ['jenga','Jenga'],['scrabble','Scrabble'],['chess','Chess Set']
     ].map(([id,name])=>product(id,name,'Board Games',[
       {id:'five-hour',label:'5 hours',kind:'BLOCK',duration_minutes:300,amount:150},
       {id:'whole-stay',label:'Whole stay until resort checkout',kind:'WHOLE_STAY',duration_minutes:null,amount:250}
-    ],{deposit_amount:100,overtime_rate_per_hour:30})),
+    ],{overtime_rate_per_hour:30})),
   ],
   rules:{
     opens_at:'08:00',closes_at:'20:00',valid_id_required:true,
-    high_value_deposit_required:true,lost_piece_fee:50,
+    lost_piece_fee:50,
     order_phone:'0992-768-5192',order_channels:'Call / Text / Viber',
     order_method_note:'You may also tell your resort caretaker.',
     overtime_basis:'Each started hour after the due time, at the product hourly rate.',
@@ -89,7 +89,6 @@ export function validatePricing(input={}) {
       if(!submitted)fail(400,`A rate is missing for ${base.name}.`);
       return {...rate,amount:validAmount(submitted.amount,`${base.name} ${rate.label}`)};
     });
-    base.deposit_amount=validAmount(row.deposit_amount??0,`${base.name} deposit`);
     base.overtime_rate_per_hour=validAmount(row.overtime_rate_per_hour??base.overtime_rate_per_hour,`${base.name} overtime rate`);
     if(base.sale_price!==null)base.sale_price=validAmount(row.sale_price??base.sale_price,`${base.name} sale price`);
     if(Array.isArray(row.included_items))base.included_items=row.included_items.filter(v=>typeof v==='string').map(v=>v.trim().slice(0,100)).filter(Boolean).slice(0,12);
@@ -98,7 +97,7 @@ export function validatePricing(input={}) {
   const rules={...defaults.rules,...(input.rules||{})};
   if(!validTime(rules.opens_at)||!validTime(rules.closes_at)||rules.opens_at>=rules.closes_at)fail(400,'Enter valid daily service hours.');
   rules.valid_id_required=rules.valid_id_required!==false;
-  rules.high_value_deposit_required=rules.high_value_deposit_required!==false;
+  delete rules.high_value_deposit_required;
   rules.lost_piece_fee=validAmount(rules.lost_piece_fee??50,'Lost piece fee');
   for(const key of ['order_phone','order_channels','order_method_note','overtime_basis','after_hours_returns','whole_stay_basis','bike_safety','care_and_loss','return_reminder']){
     if(typeof rules[key]!=='string'||rules[key].trim().length>500)fail(400,'Business rental policies must be 500 characters or fewer.');
@@ -198,16 +197,13 @@ export function quoteRental(pricing,input={},now=new Date()) {
   const startTime=timeInManila(startAt),dueTime=timeInManila(dueAt),{opens_at:opensAt,closes_at:closesAt}=pricing.rules;
   if(startTime<opensAt||startTime>=closesAt)warnings.push(`Rental start is outside daily service hours (${opensAt}–${closesAt}).`);
   if(dueTime<opensAt||dueTime>closesAt)warnings.push(`Due time falls outside daily service hours (${opensAt}–${closesAt}); after-hours return follows the saved overtime rule.`);
-  if(item.high_value&&pricing.rules.high_value_deposit_required&&item.deposit_amount===0)warnings.push('Set the high-value item deposit before confirming this rental.');
   return {
     product_id:item.id,product_name:item.name,rate_label:rateLabel,rate_id:rateId,rate_kind:rateKind,rate_components:rateComponents,start_at:startAt.toISOString(),requested_minutes:input.mode==='WHOLE_STAY'?billedMinutes:Number(input.durationMinutes),
     rental_fee:Math.round(amount*100)/100,overtime_blocks:overtimeBlocks,
     overtime_rate_per_hour:item.overtime_rate_per_hour,overtime_fee:Math.round(overtimeAmount*100)/100,
     rental_charge_total:Math.round((amount+overtimeAmount)*100)/100,
-    deposit_amount:item.deposit_amount,deposit_required:item.high_value&&pricing.rules.high_value_deposit_required,
-    deposit_configured:!item.high_value||!pricing.rules.high_value_deposit_required||item.deposit_amount>0,
     valid_id_required:pricing.rules.valid_id_required,billed_minutes:billedMinutes,
-    total_to_collect:Math.round((amount+overtimeAmount+item.deposit_amount)*100)/100,
+    total_to_collect:Math.round((amount+overtimeAmount)*100)/100,
     due_at:dueAt.toISOString(),actual_return_at:actualReturnAt?.toISOString()||null,
     after_hours_return_note:pricing.rules.after_hours_returns,
     overtime_basis:pricing.rules.overtime_basis,lost_piece_fee:pricing.rules.lost_piece_fee,

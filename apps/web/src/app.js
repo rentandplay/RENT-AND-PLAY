@@ -5,12 +5,14 @@ import { bindRecordLinks, recordAttrs } from './record-links.js';
 import { pageRoutes, pageForPath, pageInfo } from './workspace-navigation.js';
 import { createApiClient } from './api-client.js';
 import { createRentalNotifications, renderRentalNotifications } from './notifications.js';
+import { bindAccountValidation, emailError, passwordError, passwordMatchError, passwordHelp } from './account-validation.js';
 const apiClient = createApiClient();
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const confirmation = createConfirmationDialog({ dialog: document.querySelector('#confirmation-modal'), parentModal: modal, notify: message => toast(message) });
 const { confirmAction, confirmSubmit } = confirmation;
 let logoutPending = false;
+let rememberSession = false;
 let invalidateWorkspace = () => {};
 const icons = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5l1.5 1.5M5 19l1.5-1.5M17.5 6.5l1.5-1.5"/>',
@@ -57,6 +59,8 @@ const pageLabels = { Inventory: 'Equipment', 'ESP32 terminal': 'ESP32 / Verifica
 const workspacePages = new Set(['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings', 'ESP32 terminal']);
 const dashboardSnapshot = value => value ? JSON.stringify(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'refreshedAt'))) : '';
 let user = null, data = null, page = pageForPath(location.pathname), filter = 'All rentals', query = '', period = 'This week', category = '', connectionError = '', toastTimer, refreshing = false, manualRefreshPending = false, rentalPage = 0, verificationPage = 0;
+let rentalEventSource = null, rentalEventAccount = null, rentalEventsDisabled = false, rentalEventSyncTimer = null, rentalEventSyncing = false, rentalEventSyncPending = false;
+const liveRentalPages = new Set(['Rentals', 'Returns', 'Transaction History']);
 let profileEditing = false;
 let theme = document.documentElement.dataset.theme || 'light';
 let sidebarCollapsed = false;
@@ -129,8 +133,8 @@ function appearanceSettings() {
 async function api(path, options = {}) {
   let result;
   try { result = await apiClient.request(path, options); }
-  catch (error) { if (error.status === 401 && user && !path.startsWith('/auth/')) endSession(); throw error; }
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(options.method || 'GET').toUpperCase()) && path !== '/pricing/quote' && !path.startsWith('/notifications')) invalidateWorkspace();
+  catch (error) { if (error.code === 'PASSWORD_CHANGE_REQUIRED' && user) { user.mustChangePassword = true; requiredPasswordChange(); } else if (error.status === 401 && user && !path.startsWith('/auth/')) endSession(); throw error; }
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(options.method || 'GET').toUpperCase()) && path !== '/pricing/quote' && !path.startsWith('/notifications') && !path.startsWith('/auth/')) invalidateWorkspace();
   return result;
 }
 function toast(message) {
@@ -160,9 +164,78 @@ function showModal(title, body) {
   updateModalLayout();
   modal.showModal(); document.querySelector('#close-modal').onclick = () => modal.close();
 }
+function stopRentalEventStream() {
+  rentalEventSource?.close();
+  rentalEventSource = null;
+  rentalEventAccount = null;
+  rentalEventsDisabled = false;
+  rentalEventSyncPending = false;
+  clearTimeout(rentalEventSyncTimer);
+  rentalEventSyncTimer = null;
+}
+function scheduleRentalEventSync() {
+  clearTimeout(rentalEventSyncTimer);
+  rentalEventSyncTimer = setTimeout(async () => {
+    rentalEventSyncTimer = null;
+    if (!user || user.mustChangePassword || logoutPending) return;
+    if (!apiClient.canRefresh() || document.visibilityState !== 'visible' || modal.open) {
+      rentalEventSyncPending = true;
+      return;
+    }
+    if (rentalEventSyncing) { rentalEventSyncPending = true; return; }
+    rentalEventSyncPending = false;
+    rentalEventSyncing = true;
+    try {
+      await rentalNotifications.refresh();
+      if (page === 'Dashboard' || page === 'ESP32 terminal') await refresh();
+      else if (liveRentalPages.has(page)) {
+        const refreshedPage = page;
+        const changed = await workspaceUI.refresh();
+        if (modal.open) rentalEventSyncPending = true;
+        else if (changed && page === refreshedPage && user) render();
+      }
+    } catch (problem) {
+      if (problem.status === 429 || !apiClient.canRefresh()) rentalEventSyncPending = true;
+      if (problem.status !== 401) toast(problem.message);
+    } finally {
+      rentalEventSyncing = false;
+      if (rentalEventSyncPending && document.visibilityState === 'visible' && !modal.open && apiClient.canRefresh()) scheduleRentalEventSync();
+    }
+  }, 180);
+}
+modal.addEventListener('close', () => {
+  if (rentalEventSyncPending) scheduleRentalEventSync();
+});
+function syncRentalEventStream(accountId) {
+  if (rentalEventAccount !== accountId) {
+    rentalEventSource?.close();
+    rentalEventSource = null;
+    rentalEventAccount = accountId;
+    rentalEventsDisabled = false;
+    rentalEventSyncPending = false;
+    clearTimeout(rentalEventSyncTimer);
+    rentalEventSyncTimer = null;
+  }
+  if (!accountId || rentalEventsDisabled || typeof EventSource === 'undefined' || rentalEventSource && rentalEventSource.readyState !== EventSource.CLOSED) return;
+  const source = new EventSource('/api/rental-events');
+  let receivedReady = false;
+  rentalEventSource = source;
+  source.addEventListener('ready', () => {
+    if (receivedReady) scheduleRentalEventSync();
+    receivedReady = true;
+  });
+  source.addEventListener('rental.changed', scheduleRentalEventSync);
+  source.onerror = () => {
+    if (rentalEventSource === source && source.readyState === EventSource.CLOSED) {
+      rentalEventsDisabled = true;
+      rentalEventSource = null;
+    }
+  };
+}
 function endSession() {
   if (!user) return;
   confirmation.cancel(); user = null; data = null; connectionError = '';
+  stopRentalEventStream();
   rentalNotifications.setAccount(null);
   inventoryController.reset(); workspaceUI.reset(); modal.close(); login('Your session ended. Please sign in again.');
 }
@@ -226,9 +299,9 @@ modal.addEventListener('click', e => {
 });
 function login(message = '') {
   document.title = 'Sign in · Rent & Play';
-  app.innerHTML = `<main class="login"><section class="login-story"><a class="brand" href="#">${brand}</a><div class="story-body"><span class="eyebrow">LESS PAPERWORK. MORE PLAY.</span><h1>Good times.<br/>Greatly managed<span class="orange">.</span></h1><p>Your equipment, rentals, and returns.<br/>All together in one happy place.</p><div class="login-art">${sportArt}</div><div class="story-features"><span>${icon('box')} Know what’s available</span><span>${icon('clock')} Stay ahead of due dates</span><span>${icon('chip')} Verify every handoff</span></div></div><footer>Made for Rent & Play <span>Los Baños, Laguna</span></footer></section><section class="login-form-side"><span class="workspace-label">OWNER / OPERATOR WORKSPACE</span><div class="login-form-wrap"><div class="welcome-icon">${icon('grid')}</div><h2>Welcome back!</h2><p>Sign in to manage your rentals.</p><form id="login-form"><label for="email">Email address</label><input id="email" type="email" autocomplete="username" maxlength="191" required/><div class="label-line"><label for="password">Password</label><button class="text-button" type="button" id="forgot">Account help</button></div><div class="password-field"><input id="password" type="password" autocomplete="current-password" placeholder="Enter your password" maxlength="1024" required/><button type="button" id="show-password" aria-label="Show password">${icon('eye')}</button></div><label class="checkbox"><input id="remember" type="checkbox"/> Remember me on this device</label><p id="login-error" role="alert">${escape(message)}</p><button class="primary login-submit" type="submit">Sign in</button></form><p class="login-foot">Your account. Your equipment. Your workspace.</p></div><footer>© ${new Date().getFullYear()} Rent & Play <span>Built for more play.</span></footer></section></main>`;
+  app.innerHTML = `<main class="login"><section class="login-story"><a class="brand" href="#">${brand}</a><div class="story-body"><span class="eyebrow">LESS PAPERWORK. MORE PLAY.</span><h1>Good times.<br/>Greatly managed<span class="orange">.</span></h1><p>Your equipment, rentals, and returns.<br/>All together in one happy place.</p><div class="login-art">${sportArt}</div><div class="story-features"><span>${icon('box')} Know what’s available</span><span>${icon('clock')} Stay ahead of due dates</span><span>${icon('chip')} Verify every handoff</span></div></div><footer>Made for Rent & Play <span>Los Baños, Laguna</span></footer></section><section class="login-form-side"><span class="workspace-label">OWNER / OPERATOR WORKSPACE</span><div class="login-form-wrap"><div class="welcome-icon">${icon('grid')}</div><h2>Welcome back!</h2><p>Sign in to manage your rentals.</p><form id="login-form"><label for="email">Email address</label><input id="email" type="email" autocomplete="username" maxlength="254" required/><div class="label-line"><label for="password">Password</label><button class="text-button" type="button" id="forgot">Forgot password?</button></div><div class="password-field"><input id="password" type="password" autocomplete="current-password" placeholder="Enter your password" maxlength="1024" required/><button type="button" id="show-password" aria-label="Show password">${icon('eye')}</button></div><label class="checkbox"><input id="remember" type="checkbox"/> Remember me on this device</label><p id="login-error" role="alert">${escape(message)}</p><button class="primary login-submit" type="submit">Sign in</button></form><p class="login-foot">Your account. Your equipment. Your workspace.</p></div><footer>© ${new Date().getFullYear()} Rent & Play <span>Built for more play.</span></footer></section></main>`;
   const loginHeader = document.createElement('div'); loginHeader.className = 'login-header';
-  const workspaceLabel = document.querySelector('.workspace-label'); workspaceLabel.textContent = 'ADMIN WORKSPACE'; workspaceLabel.before(loginHeader);
+  const workspaceLabel = document.querySelector('.workspace-label'); workspaceLabel.textContent = 'OWNER / OPERATOR WORKSPACE'; workspaceLabel.before(loginHeader);
   loginHeader.append(workspaceLabel);
   const themeButton = document.createElement('button'); themeButton.id = 'login-theme'; themeButton.className = 'theme-button'; themeButton.type = 'button';
   loginHeader.append(themeButton); themeButton.onclick = () => setTheme(theme === 'dark' ? 'light' : 'dark'); updateThemeControls();
@@ -237,22 +310,78 @@ function login(message = '') {
     e.currentTarget.setAttribute('aria-label', input.type === 'password' ? 'Show password' : 'Hide password');
   };
   document.querySelector('#forgot').onclick = () => {
-    showModal('Reset your password', '<p>Enter your workspace email and Firebase will send a secure password-reset link.</p><form id="reset-form" class="admin-form"><label>Email address<input name="email" type="email" autocomplete="email" required/></label><p class="form-error" role="alert"></p><button class="primary" type="submit">Send reset link</button></form>');
+    showModal('Reset your password', `<p>Enter the email registered to your account. Review the address before requesting the reset link.</p><form id="reset-form" class="admin-form"><label>Account email<input name="email" type="email" autocomplete="email" maxlength="254" value="${escape(document.querySelector('#email').value)}" required/></label><p class="form-error" role="alert"></p><button class="primary" type="submit">Send reset link</button></form>`);
     const form = modal.querySelector('#reset-form');
-    confirmSubmit(form, { title: 'Send password reset link?', description: 'A password reset link will be requested for the email address you entered.', confirmLabel: 'Yes, send reset link' }, async () => { const button = form.querySelector('button'), error = form.querySelector('.form-error'); button.disabled = true; try { await api('/auth/password-reset', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); modal.close(); toast('If that account exists, a reset email has been sent.'); } catch (problem) { error.textContent = problem.message; button.disabled = false; } });
+    bindAccountValidation(form, { email: emailError });
+    confirmSubmit(form, () => ({ title: 'Send password reset link?', description: `Request a reset link for ${form.elements.email.value}?`, confirmLabel: 'Send reset link' }), async () => {
+      const button = form.querySelector('button'), error = form.querySelector('.form-error'); button.disabled = true; button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span> Sending…';
+      try {
+        const result = await api('/auth/password-reset', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+        modal.close();
+        showModal('Check your email', `<div class="reset-instructions"><p>If an account exists for <strong>${escape(result.email)}</strong>, a reset link has been requested for that address.</p><ol><li>Open the email from Rent & Play. Check your spam folder too.</li><li>Follow the link and choose a new password.</li><li>Return to login and use your new password.</li></ol><button type="button" class="primary" data-reset-close>Back to login</button></div>`);
+        modal.querySelector('[data-reset-close]').onclick = () => modal.close();
+      } catch (problem) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Send reset link'; }
+    });
   };
+  const loginValidation = bindAccountValidation(document.querySelector('#login-form'), { email: emailError, password: value => value ? '' : 'Enter your password.' });
   document.querySelector('#login-form').onsubmit = async e => {
-    e.preventDefault(); const button = e.currentTarget.querySelector('[type="submit"]'); button.disabled = true;
+    e.preventDefault(); if (!loginValidation.validate()) return;
+    const form = e.currentTarget, button = form.querySelector('[type="submit"]'); if (button.disabled) return;
+    const body = { email: form.querySelector('#email').value, password: form.querySelector('#password').value, remember: form.querySelector('#remember').checked };
+    const loginStarted = performance.now();
+    const controls = [...form.querySelectorAll('input, button')]; controls.forEach(control => control.disabled = true);
+    button.setAttribute('aria-busy', 'true'); button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span> Logging in…';
+    rememberSession = document.querySelector('#remember').checked;
     document.querySelector('#login-error').textContent = '';
     try {
-      const result = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email: document.querySelector('#email').value, password: document.querySelector('#password').value, remember: document.querySelector('#remember').checked }) });
+      const result = await api('/auth/login', { method: 'POST', body: JSON.stringify(body) });
       user = result.user; page = pageForPath(location.pathname); history.replaceState({ page }, '', pageRoutes[page]); await refresh();
     } catch (error) {
       const el = document.querySelector('#login-error'); if (el) el.textContent = error.message;
-    } finally { button.disabled = false; }
+    } finally {
+      // Brief responses still give visible feedback; longer requests add no delay.
+      const remaining = 500 - (performance.now() - loginStarted);
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+      controls.forEach(control => control.disabled = false); button.removeAttribute('aria-busy'); button.textContent = 'Sign in';
+    }
+  };
+}
+
+function requiredPasswordChange() {
+  if (!user) return;
+  document.title = 'Secure your account · Rent & Play';
+  rentalNotifications.setAccount(null);
+  app.innerHTML = `<main class="password-change-page"><section class="password-change-card"><img class="session-logo" src="/public/logo.png" alt="Rent & Play"/><h1>Secure your account</h1><p>Choose your own password before opening your ${user.role === 'OWNER' ? 'Owner' : 'Operator'} workspace.</p><form id="required-password-form" class="admin-form"><label>Current / temporary password<input name="currentPassword" type="password" autocomplete="current-password" maxlength="1024" required/></label><label>New password<input name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" required/><small>${passwordHelp}</small></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" maxlength="128" required/></label><label class="checkbox"><input type="checkbox" id="change-show-passwords"/> Show passwords</label><p class="form-error" role="alert"></p><button class="primary" type="submit">Update password</button><button type="button" class="secondary" id="change-signout">Sign out</button></form></section></main>`;
+  const form = document.querySelector('#required-password-form');
+  const validation = bindAccountValidation(form, {
+    currentPassword: value => value ? '' : 'Enter your current or temporary password.',
+    newPassword: value => passwordError(value) || (value === form.elements.currentPassword.value ? 'Choose a different password.' : ''),
+    confirmPassword: value => passwordMatchError(form.elements.newPassword.value, value)
+  });
+  document.querySelector('#change-show-passwords').onchange = event => form.querySelectorAll('[autocomplete$="password"]').forEach(input => input.type = event.target.checked ? 'text' : 'password');
+  document.querySelector('#change-signout').onclick = async event => {
+    const buttons = [...form.querySelectorAll('button')]; buttons.forEach(button => button.disabled = true);
+    try { await api('/auth/logout', { method: 'POST' }); endSession(); }
+    catch (problem) { form.querySelector('.form-error').textContent = problem.message; }
+    finally { buttons.forEach(button => button.disabled = false); }
+  };
+  form.onsubmit = async event => {
+    event.preventDefault(); if (!validation.validate()) return;
+    const button = form.querySelector('[type="submit"]'); if (button.disabled) return;
+    const body = { ...Object.fromEntries(new FormData(form)), remember: rememberSession };
+    const controls = [...form.querySelectorAll('input, button')]; controls.forEach(control => control.disabled = true);
+    button.setAttribute('aria-busy', 'true'); button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span> Updating password…';
+    form.querySelector('.form-error').textContent = '';
+    try {
+      const result = await api('/auth/change-password', { method: 'POST', body: JSON.stringify(body) });
+      if (result.signInAgain) { endSession(); login('Password updated. Sign in with your new password.'); return; }
+      user = result.user; await refresh(); toast('Your password has been updated.');
+    } catch (problem) { if (form.isConnected) form.querySelector('.form-error').textContent = problem.message; }
+    finally { controls.forEach(control => control.disabled = false); button.removeAttribute('aria-busy'); button.textContent = 'Update password'; }
   };
 }
 async function refresh({ force = false } = {}) {
+  if (user?.mustChangePassword) { requiredPasswordChange(); return; }
   if (!user || refreshing) return;
   const sessionUser = user;
   refreshing = true;
@@ -313,7 +442,7 @@ function rentalsTable(full = false) {
 }
 function chart() {
   const amounts = data.revenue[period]; const max = Math.max(100, ...amounts); const scale = Math.ceil(max / 100) * 100;
-  return `<section class="panel revenue-panel"><div class="panel-title"><div><h3>Confirmed rental fees</h3><p>Grouped by the date each rental was confirmed.</p></div><div class="revenue-actions"><select id="period" aria-label="Revenue period"><option ${period === 'This week' ? 'selected' : ''}>This week</option><option ${period === 'Last week' ? 'selected' : ''}>Last week</option></select><button class="text-button" data-page="Reports">Detailed analytics →</button></div></div><div class="revenue-total">${money(amounts.reduce((a, b) => a + b, 0))}<span>Deposits excluded</span></div><div class="chart"><div class="axis">${[1, .75, .5, .25, 0].map(x => `<span>${money(scale * x)}</span>`).join('')}</div><div class="bars">${amounts.map((amount, i) => `<div class="bar-column"><div class="bar ${amount === max ? 'highlight' : ''}" style="height:${amount / scale * 100}%" title="${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][i]}: ${money(amount)}"></div><span>${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][i]}</span></div>`).join('')}</div></div>${amounts.every(v => v === 0) ? '<p class="chart-empty">No confirmed rental fees in this period.</p>' : ''}</section>`;
+  return `<section class="panel revenue-panel"><div class="panel-title"><div><h3>Confirmed rental fees</h3><p>Grouped by the date each rental was confirmed.</p></div><div class="revenue-actions"><select id="period" aria-label="Revenue period"><option ${period === 'This week' ? 'selected' : ''}>This week</option><option ${period === 'Last week' ? 'selected' : ''}>Last week</option></select><button class="text-button" data-page="Reports">Detailed analytics →</button></div></div><div class="revenue-total">${money(amounts.reduce((a, b) => a + b, 0))}<span>Recorded rental charges</span></div><div class="chart"><div class="axis">${[1, .75, .5, .25, 0].map(x => `<span>${money(scale * x)}</span>`).join('')}</div><div class="bars">${amounts.map((amount, i) => `<div class="bar-column"><div class="bar ${amount === max ? 'highlight' : ''}" style="height:${amount / scale * 100}%" title="${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][i]}: ${money(amount)}"></div><span>${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][i]}</span></div>`).join('')}</div></div>${amounts.every(v => v === 0) ? '<p class="chart-empty">No confirmed rental fees in this period.</p>' : ''}</section>`;
 }
 function terminal() {
   const t = data.terminals[0]; const queue = t ? data.pending.filter(p => p.terminal_code === t.terminal_code) : [];
@@ -330,17 +459,19 @@ function inventory() {
     <section class="panel inv-collection inv-loading-collection" aria-hidden="true">
       <div class="inv-loading-toolbar"><i class="inv-skeleton-block inv-skeleton-search"></i><div><i class="inv-skeleton-block inv-skeleton-button"></i><i class="inv-skeleton-block inv-skeleton-button short"></i><i class="inv-skeleton-block inv-skeleton-add"></i></div></div>
       <div class="inv-loading-filters"><i class="inv-skeleton-block inv-skeleton-filter"></i><i class="inv-skeleton-block inv-skeleton-filter"></i><i class="inv-skeleton-block inv-skeleton-filter sort"></i><i class="inv-skeleton-block inv-skeleton-reset"></i><i class="inv-skeleton-block inv-skeleton-count"></i></div>
-      <div class="inv-loading-table"><div class="inv-loading-table-head"><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i></div>${Array.from({length:5},()=>`<div class="inv-loading-row"><div class="inv-loading-equipment"><i class="inv-skeleton-block inv-skeleton-thumb"></i><div><i class="inv-skeleton-block inv-skeleton-name"></i><i class="inv-skeleton-block inv-skeleton-code"></i></div></div><div><i class="inv-skeleton-block inv-skeleton-status"></i><i class="inv-skeleton-block inv-skeleton-condition"></i></div><i class="inv-skeleton-block inv-skeleton-price"></i><i class="inv-skeleton-block inv-skeleton-deposit"></i></div>`).join('')}</div>
+      <div class="inv-loading-table"><div class="inv-loading-table-head"><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i></div>${Array.from({length:5},()=>`<div class="inv-loading-row"><div class="inv-loading-equipment"><i class="inv-skeleton-block inv-skeleton-thumb"></i><div><i class="inv-skeleton-block inv-skeleton-name"></i><i class="inv-skeleton-block inv-skeleton-code"></i></div></div><div><i class="inv-skeleton-block inv-skeleton-status"></i><i class="inv-skeleton-block inv-skeleton-condition"></i></div><i class="inv-skeleton-block inv-skeleton-price"></i></div>`).join('')}</div>
       <div class="inv-loading-footer"><i class="inv-skeleton-block"></i><div><i class="inv-skeleton-block"></i><i class="inv-skeleton-block"></i></div></div>
     </section>
   </div>`;
 }
 function profile() {
-  const details = profileEditing ? `<section class="panel profile-form-card"><span class="eyebrow">EDIT PROFILE</span><h2>Update your details</h2><p>Your name appears throughout the workspace. Your email is also your Firebase login.</p><form id="profile-form" class="profile-form"><label>Full name<input name="fullName" value="${escape(user.name)}" minlength="2" maxlength="150" autocomplete="name" required/></label><label>Login email<input name="email" type="email" value="${escape(user.email)}" maxlength="191" autocomplete="email" required/></label><label>Role<input value="${escape(user.role)}" disabled/><small>Account roles are managed separately for security.</small></label><p class="profile-error" role="alert"></p><div class="profile-actions"><button class="secondary" id="profile-cancel" type="button">Cancel</button><button class="primary" type="submit">Save changes</button></div></form></section>` : `<section class="panel profile-overview"><div class="profile-overview-heading"><button class="primary" id="profile-edit" type="button">Edit profile</button></div><dl class="profile-details"><div><dt>Full name</dt><dd>${escape(user.name)}</dd></div><div><dt>Login email</dt><dd>${escape(user.email)}</dd></div><div><dt>Account role</dt><dd>${escape(user.role)}</dd></div><div><dt>Account status</dt><dd><span class="profile-active">Active</span></dd></div></dl><div class="profile-note"><strong>Login details</strong><p>If you change the email address, use the new email the next time you sign in.</p></div></section>`;
+  const details = profileEditing ? `<section class="panel profile-form-card"><span class="eyebrow">EDIT PROFILE</span><h2>Update your details</h2><p>Your name appears throughout the workspace. Your email is also your Firebase login.</p><form id="profile-form" class="profile-form"><label>Full name<input name="fullName" value="${escape(user.name)}" minlength="2" maxlength="150" autocomplete="name" required/></label><label>Login email<input name="email" type="email" value="${escape(user.email)}" maxlength="254" autocomplete="email" required/></label><label>Role<input value="${escape(user.role)}" disabled/><small>Account roles are managed separately for security.</small></label><p class="profile-error" role="alert"></p><div class="profile-actions"><button class="secondary" id="profile-cancel" type="button">Cancel</button><button class="primary" type="submit">Save changes</button></div></form></section>` : `<section class="panel profile-overview"><div class="profile-overview-heading"><button class="primary" id="profile-edit" type="button">Edit profile</button></div><dl class="profile-details"><div><dt>Full name</dt><dd>${escape(user.name)}</dd></div><div><dt>Login email</dt><dd>${escape(user.email)}</dd></div><div><dt>Account role</dt><dd>${escape(user.role)}</dd></div><div><dt>Account status</dt><dd><span class="profile-active">Active</span></dd></div></dl><div class="profile-note"><strong>Login details</strong><p>If you change the email address, use the new email the next time you sign in.</p></div></section>`;
   return `<div class="profile-layout"><section class="panel profile-card"><span class="profile-avatar">${escape(initials(user.name))}</span><h2>${escape(user.name)}</h2><p>${escape(user.email)}</p><span class="profile-role">${escape(user.role)}</span><small>Account ID</small><code>${escape(user.id)}</code></section>${details}</div>`;
 }
 function render() {
   if (!user) return;
+  if (user.mustChangePassword) { stopRentalEventStream(); requiredPasswordChange(); return; }
+  syncRentalEventStream(user.id);
   rentalNotifications.setAccount(user.id);
   const existingInventory = page === 'Inventory' ? document.querySelector('#inventory-root') : null;
   const previousFocus = app.contains(document.activeElement) ? document.activeElement : null;
@@ -414,7 +545,7 @@ function bind() {
     closeAccountMenu(); closeNotifications();
     try {
       if (!await confirmAction({ title: 'Log out of Rent & Play?', description: 'Your session will end. You will need to sign in again to access the workspace.', confirmLabel: 'Yes, log out', cancelLabel: 'No, stay signed in' })) return;
-      await api('/auth/logout', { method: 'POST' }); user = null; data = null; connectionError = ''; rentalNotifications.setAccount(null); inventoryController.reset(); workspaceUI.reset(); history.replaceState({}, '', pageRoutes.Dashboard); modal.close(); login();
+      await api('/auth/logout', { method: 'POST' }); user = null; data = null; connectionError = ''; stopRentalEventStream(); rentalNotifications.setAccount(null); inventoryController.reset(); workspaceUI.reset(); history.replaceState({}, '', pageRoutes.Dashboard); modal.close(); login();
     }
     catch (error) { toast(error.message); }
     finally { logoutPending = false; }
@@ -457,7 +588,7 @@ function bind() {
   const openRental = id => {
     const r = data.rentals.find(r => String(r.id) === String(id));
     if (!r) return;
-    showModal('Rental details', `<div class="detail-header"><div><h3>${escape(r.item_name)}</h3><p>${escape(r.rental_code)}</p></div>${badge(r.displayStatus)}</div><dl><dt>Customer</dt><dd>${escape(r.customer)}</dd><dt>Due</dt><dd>${escape(formatDate(r.due_at))}</dd><dt>Rental fee</dt><dd>${money(r.rental_fee)}</dd><dt>Refundable deposit</dt><dd>${money(r.deposit_amount)}</dd><dt>Rental confirmed</dt><dd>${escape(formatDate(r.confirmed_rental_at))}</dd></dl><div class="info-box">Request a return from the Returns page or the mobile QR workflow, record the inspection, then confirm it at the physical terminal.</div>`);
+    showModal('Rental details', `<div class="detail-header"><div><h3>${escape(r.item_name)}</h3><p>${escape(r.rental_code)}</p></div>${badge(r.displayStatus)}</div><dl><dt>Customer</dt><dd>${escape(r.customer)}</dd><dt>Due</dt><dd>${escape(formatDate(r.due_at))}</dd><dt>Rental fee</dt><dd>${money(r.rental_fee)}</dd><dt>Rental confirmed</dt><dd>${escape(formatDate(r.confirmed_rental_at))}</dd></dl><div class="info-box">Request a return from the Returns page or the mobile QR workflow, record the inspection, then confirm it at the physical terminal.</div>`);
   };
   document.querySelectorAll('[data-rental]').forEach(el => el.onclick = () => openRental(el.dataset.rental));
   bindRecordLinks(app, { 'dashboard-rental': openRental });
@@ -478,7 +609,7 @@ function bind() {
 }
 function exportCsv() {
   const cell = value => { const v = String(value ?? ''); return '"' + (/^[=+@\-\t\r]/.test(v) ? "'" + v : v).replaceAll('"', '""') + '"'; };
-  const rows = [['Rental code', 'Item', 'Customer', 'Due (Philippine time)', 'Status', 'Rental fee', 'Deposit'], ...data.rentals.map(r => [r.rental_code, r.item_name, r.customer, r.due_at, r.displayStatus, r.rental_fee, r.deposit_amount])];
+  const rows = [['Rental code', 'Item', 'Customer', 'Due (Philippine time)', 'Status', 'Rental fee'], ...data.rentals.map(r => [r.rental_code, r.item_name, r.customer, r.due_at, r.displayStatus, r.rental_fee])];
   const url = URL.createObjectURL(new Blob(['\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a'); a.href = url; a.download = 'rent-and-play-open-rentals.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast('Rental report downloaded.');
 }
@@ -500,13 +631,18 @@ const inventoryController = createInventory({ api, escape, icon, symbol, badge, 
 const workspaceUI = createWorkspaceUI({ api, escape, icon, showModal, modal, toast, money, formatDate, confirmAction, confirmSubmit, showEquipmentDetails: id => inventoryController.details(id), navigate: goTo });
 const rentalNotifications = createRentalNotifications({ api, onChange: syncNotifications,
   onAlert: (notification, count) => toast(count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`) });
-setInterval(() => { if (user && !logoutPending && apiClient.canRefresh() && document.visibilityState === 'visible') rentalNotifications.refresh(); }, 120000);
-document.addEventListener('visibilitychange', () => { if (user && document.visibilityState === 'visible') rentalNotifications.refresh(); });
+document.addEventListener('visibilitychange', () => {
+  if (user && !user.mustChangePassword && document.visibilityState === 'visible') {
+    rentalNotifications.refresh();
+    syncRentalEventStream(user.id);
+    if (rentalEventSyncPending) scheduleRentalEventSync();
+  }
+});
 invalidateWorkspace = () => workspaceUI.invalidate();
 window.addEventListener('popstate', () => { page = pageForPath(location.pathname); if (workspacePages.has(page)) invalidateWorkspace(); if (user) { render(); document.querySelector('#workspace-content')?.focus({ preventScroll: true }); } });
 setInterval(async () => {
   if (confirmation.isOpen() || logoutPending) return;
-  if (!user || !apiClient.canRefresh() || !workspaceUI.autoRefreshEnabled() || page === 'Settings' || document.visibilityState !== 'visible') return;
+  if (!user || user.mustChangePassword || !apiClient.canRefresh() || !workspaceUI.autoRefreshEnabled() || page === 'Settings' || liveRentalPages.has(page) || document.visibilityState !== 'visible') return;
   if (page !== 'Inventory' && modal.open) { await workspaceUI.refreshPendingHandoff(); return; }
   if (document.querySelector('#rental-search:focus,#module-search:focus,.admin-form input:focus,.admin-form textarea:focus,.admin-form select:focus,#profile-form input:focus,.analytics-filters input:focus,.analytics-filters select:focus,#analytics-sort:focus,.sidebar.open,#profile-dropdown:not([hidden]),#notification-dropdown:not([hidden])')) return;
   try {

@@ -4,7 +4,7 @@ import {updateProfile,validateProfile} from '../src/profile.mjs';
 import {memoryFirestore} from './support/memory-firestore.mjs';
 
 test('profile validation normalizes editable account details',()=>{
-  assert.deepEqual(validateProfile({fullName:'  Reynold Pastor ',email:' RENTANDPLAY0@GMAIL.COM '}),{fullName:'Reynold Pastor',email:'rentandplay0@gmail.com'});
+  assert.deepEqual(validateProfile({fullName:'  Reynold Pastor ',email:'RENTANDPLAY0@GMAIL.COM'}),{fullName:'Reynold Pastor',email:'rentandplay0@gmail.com'});
   for(const input of [{fullName:'',email:'owner@example.com'},{fullName:'Owner',email:'invalid'}])assert.throws(()=>validateProfile(input),error=>error.status===400);
 });
 

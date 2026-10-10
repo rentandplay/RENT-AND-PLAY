@@ -25,6 +25,5 @@ export interface Rental {
   rentedAt: string;
   dueDate: string;
   rentalFee: number;
-  deposit: number;
   latePenalty: number;
 }

@@ -21,7 +21,7 @@ function fixture() {
     settings: { business: { default_late_grace_hours: 0 }, pricing: structuredClone(DEFAULT_PRICING) },
     item_categories: { cards: { name: 'Cards' } },
     items: Object.fromEntries(['cards', 'spare'].map(id => [id, { name: 'Cards', item_code: id.toUpperCase(), qr_token: `rp-qr-${id}`, category_id: 'cards', status: 'AVAILABLE', is_active: true }])),
-    item_rates: Object.fromEntries(['cards', 'spare'].map(id => [id, { item_id: id, rate_type: 'HOURLY', rental_rate: 50, deposit_amount: 20, late_penalty_rate: 10, is_active: true, effective_from: after(-60) }])),
+    item_rates: Object.fromEntries(['cards', 'spare'].map(id => [id, { item_id: id, rate_type: 'HOURLY', rental_rate: 50, late_penalty_rate: 10, is_active: true, effective_from: after(-60) }])),
   });
 }
 async function approved(db) {
@@ -30,7 +30,7 @@ async function approved(db) {
   await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-cards' }, after(1.5));
   return rental;
 }
-const releaseInput = rental => ({ requestKey: key('b'), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, depositReceived: true, inspection });
+const releaseInput = rental => ({ requestKey: key('b'), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, inspection });
 const receiptInput = { requestKey: key('c'), inventoryCode: 'rp-qr-cards', physicalReceiptConfirmed: true };
 const returnInput = { requestKey: key('d'), penaltyAmount: 0, inspection };
 async function active(db) {
@@ -55,10 +55,10 @@ test('approval and pickup holds expire, refund recorded money, and permit a fres
   assert.equal(db.data('rentals', rental.id).status, 'EXPIRED');
   assert.equal(db.data('items', 'cards').reserved_rental_id, null);
   const next = await createBooking(db, customer, { ...input, requestKey: key('f') }, after(15));
-  await reviewBooking(db, admin, next.rental.id, { action: 'APPROVE', paymentVerified: true, depositReceived: true }, after(16));
+  await reviewBooking(db, admin, next.rental.id, { action: 'APPROVE', paymentVerified: true }, after(16));
   await assert.rejects(releaseBooking(db, admin, next.rental.id, releaseInput(next.rental), after(46)), status(409));
   assert.equal(db.data('rentals', next.rental.id).status, 'EXPIRED');
-  assert.equal(db.data('rentals', next.rental.id).refund_due, 70);
+  assert.equal(db.data('rentals', next.rental.id).refund_due, 50);
   assert.equal(db.data('items', 'cards').reserved_rental_id, null);
 });
 
@@ -73,11 +73,11 @@ test('an expiry sweep cannot clear a newer reservation pointer', async () => {
 test('booking rejection accepts an omitted or blank reason, releases the hold, and retains refunds and audit records', async () => {
   for (const reason of [undefined, '', '   ', '  Customer requested cancellation.  ']) {
     const db = fixture(), { rental } = await createBooking(db, customer, input, now);
-    await reviewBooking(db, admin, rental.id, { action: 'APPROVE', paymentVerified: true, depositReceived: true }, after(1));
+    await reviewBooking(db, admin, rental.id, { action: 'APPROVE', paymentVerified: true }, after(1));
     const result = await reviewBooking(db, admin, rental.id, { action: 'REJECT', ...(reason === undefined ? {} : { reason }) }, after(2));
     assert.equal(result.rental.status, 'REJECTED');
     assert.equal(result.rental.final_reason, reason?.trim() || '');
-    assert.equal(result.rental.refund_due, 70);
+    assert.equal(result.rental.refund_due, 50);
     assert.equal(db.data('items', 'cards').reserved_rental_id, null);
     assert.equal(db.data('items', 'cards').status, 'AVAILABLE');
     const audit = db.records('audit_logs').find(row => row.action === 'RENTAL_REJECTED');
@@ -96,9 +96,9 @@ test('booking rejection still validates supplied reasons before changing records
   assert.equal(db.records('audit_logs').filter(row => row.action === 'RENTAL_REJECTED').length, 0);
 });
 
-test('release rejects wrong rental QR, missing identity, payment, deposit or accessory checks without changing inventory', async () => {
+test('release rejects wrong rental QR, missing identity, payment or accessory checks without changing inventory', async () => {
   const db = fixture(), rental = await approved(db), good = releaseInput(rental);
-  for (const override of [{ transactionCode: 'wrong' }, { customerVerified: false }, { paymentVerified: false }, { depositReceived: false }, { inspection: { ...inspection, accessoriesChecked: false } }, { inspection: { ...inspection, photos: ['data:image/png;base64,AAAA'] } }]) {
+  for (const override of [{ transactionCode: 'wrong' }, { customerVerified: false }, { paymentVerified: false }, { inspection: { ...inspection, accessoriesChecked: false } }, { inspection: { ...inspection, photos: ['data:image/png;base64,AAAA'] } }]) {
     await assert.rejects(releaseBooking(db, admin, rental.id, { ...good, ...override }, after(2)));
     assert.equal(db.data('rentals', rental.id).status, 'APPROVED');
     assert.equal(db.data('items', 'cards').status, 'AVAILABLE');
@@ -205,7 +205,7 @@ test('physical receipt stops overtime before inspection, remains unavailable, an
   assert.equal(saved.received_at.getTime(), after(63).getTime());
   assert.equal(saved.fee_breakdown.overtime_fee, 10);
   assert.equal(saved.fee_breakdown.final_rental_charges, 60);
-  assert.equal(saved.balance_due, 10); assert.equal(saved.refund_due, 20);
+  assert.equal(saved.balance_due, 10); assert.equal(saved.refund_due, 0);
   assert.equal(db.data('items', 'cards').status, 'AVAILABLE');
 });
 
@@ -218,7 +218,7 @@ test('damage forces maintenance and settlement changes money separately from equ
   const saved = db.data('rentals', rental.id);
   assert.equal(db.data('items', 'cards').status, 'UNDER_MAINTENANCE');
   assert.equal(db.data('maintenance_records', saved.maintenance_record_id).rental_id, rental.id);
-  const payment = { requestKey: key('e'), paymentAmount: 20, depositAppliedAmount: 10, depositRefundAmount: 10, notes: 'Customer paid remaining charges; deposit remainder refunded.' };
+  const payment = { requestKey: key('e'), paymentAmount: 30, notes: 'Customer paid the remaining rental charges.' };
   await settleRentalPayment(db, admin, rental.id, payment, after(41));
   assert.equal((await settleRentalPayment(db, admin, rental.id, payment, after(42))).duplicate, true);
   assert.equal(db.data('rentals', rental.id).balance_due, 0); assert.equal(db.data('rentals', rental.id).refund_due, 0);
@@ -231,13 +231,13 @@ test('damage forces maintenance and settlement changes money separately from equ
 test('cancelled prepaid bookings track and refund actual payments without fabricating a paid rental', async () => {
   const db = fixture(), rental = await approved(db);
   // Repeated approval does not recollect payments; collection happens at release or initial approval.
-  await db.collection('rentals').doc(rental.id).update({ rental_paid_amount: 50, deposit_collected_amount: 20 });
+  await db.collection('rentals').doc(rental.id).update({ rental_paid_amount: 50 });
   await cancelBooking(db, customer, rental.id, after(2));
   assert.equal((await cancelBooking(db, customer, rental.id, after(3))).duplicate, true);
   const saved = db.data('rentals', rental.id);
-  assert.equal(saved.balance_due, 0); assert.equal(saved.refund_due, 70);
+  assert.equal(saved.balance_due, 0); assert.equal(saved.refund_due, 50);
   await assert.rejects(settleRentalPayment(db, admin, rental.id, { requestKey: key('e'), rentalRefundAmount: 51, notes: 'Refund' }, after(3)), status(400));
-  await settleRentalPayment(db, admin, rental.id, { requestKey: key('e'), rentalRefundAmount: 50, depositRefundAmount: 20, notes: 'Payment and deposit refunded.' }, after(3));
+  await settleRentalPayment(db, admin, rental.id, { requestKey: key('e'), rentalRefundAmount: 50, notes: 'Rental payment refunded.' }, after(3));
   assert.equal(db.data('rentals', rental.id).refund_due, 0);
   assert.equal(db.data('rentals', rental.id).confirmed_rental_at, null);
 });

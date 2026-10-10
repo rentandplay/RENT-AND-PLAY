@@ -1,11 +1,12 @@
 import { stageAudit } from './audit.mjs';
+import { nameError, emailError, validationFailure } from './account-validation.mjs';
 
 export function validateProfile(input) {
   if(!input||typeof input!=='object')throw Object.assign(new Error('Profile details are required.'),{status:400});
   const fullName=typeof input.fullName==='string'?input.fullName.trim():'';
   const email=typeof input.email==='string'?input.email.trim().toLowerCase():'';
-  if(fullName.length<2||fullName.length>150)throw Object.assign(new Error('Full name must contain 2–150 characters.'),{status:400});
-  if(email.length>191||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw Object.assign(new Error('Enter a valid email address.'),{status:400});
+  validationFailure(nameError(input.fullName));
+  validationFailure(emailError(input.email));
   return {fullName,email};
 }
 

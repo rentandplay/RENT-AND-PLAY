@@ -8,7 +8,15 @@ export function createReleaseVerification({ api, rentalId, onChange = () => {} }
   function update(name, value) {
     if (!['transactionCode', 'manualLookup', 'manualReason'].includes(name) || state[name] === value) return;
     revision++;
-    state = { ...state, [name]: value, busy: false, error: '', bookingVerified: false, inventoryVerified: false, item: null, step: 1 };
+    const next = { ...state, [name]: value, busy: false, error: '', bookingVerified: false, inventoryVerified: false, item: null, step: 1 };
+    if (name === 'transactionCode') {
+      const code = value.trim();
+      if (/^R-[A-Z0-9]+$/i.test(code)) next.manualLookup = true;
+      else if (/^rp-rental-/i.test(code)) next.manualLookup = false;
+    } else if (name === 'manualLookup' && /^R-[A-Z0-9]+$/i.test(state.transactionCode.trim())) {
+      next.manualLookup = true;
+    }
+    state = next;
     emit();
   }
   async function verifyBooking() {

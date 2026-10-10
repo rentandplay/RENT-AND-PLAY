@@ -58,7 +58,7 @@ export function createConfirmationDialog({ dialog, parentModal, notify = () => {
       const buttons = [...form.querySelectorAll('button[type="submit"],button:not([type]),input[type="submit"]')].map(button => [button, button.disabled]);
       buttons.forEach(([button]) => { button.disabled = true; });
       try {
-        if (!await confirmAction(options) || !form.isConnected || parent && !parent.open) return;
+        if (!await confirmAction(typeof options === 'function' ? options() : options) || !form.isConnected || parent && !parent.open) return;
         if (signature !== formSignature(form)) { notify('The details changed. Review the form and confirm again.'); return; }
         if (form.reportValidity()) await submit();
       } finally {

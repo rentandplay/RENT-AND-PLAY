@@ -30,7 +30,7 @@ All 12 workspace pages were reviewed in the browser against an isolated local AP
 - Rental forms exclude reserved/archived equipment and archived customers. Return forms exclude rentals already awaiting return confirmation and provide useful empty-state actions.
 - Successful writes remain successful when the subsequent reload fails, avoiding misleading errors and repeated submissions.
 - Open pending handoff dialogs can check the current terminal status and update automatically when the browser's refresh preference is enabled. A late status response cannot overwrite an inspection form.
-- Rate editing retains saved service hours and pre-fills the selected equipment's existing rate, deposit and late penalty.
+- Rate editing retains saved service hours and pre-fills the selected equipment's existing rental rate and late penalty.
 - Due-today and already-overdue rentals have consistent separate counts.
 - Shared page headings, clearer guidance, readable controls/tables, dark-mode profile surfaces, keyboard focus, a skip link and a mobile drawer focus loop improve navigation.
 - Customer tables stay inside their scroll container. Compact headers truncate safely instead of widening the page. Phone table scrolling remains available.

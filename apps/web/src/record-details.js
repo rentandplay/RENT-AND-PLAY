@@ -22,7 +22,7 @@ export function createRecordDetails(h) {
     if (!row) return missing();
     show('Equipment rate details', row.item_name || 'Unknown equipment', row.item_code || '', [
       ['Rate ID', row.id], ['Rate basis', String(row.rate_type || '').replaceAll('_', ' ')],
-      ['Rental rate', cash(row.rental_rate)], ['Refundable deposit', cash(row.deposit_amount)],
+      ['Rental rate', cash(row.rental_rate)],
       ['Late penalty rate', cash(row.late_penalty_rate)], ['Status', row.is_active === false ? 'Inactive' : 'Active'],
       ['Effective from', formatDate(row.effective_from)], ['Effective until', row.effective_to ? formatDate(row.effective_to) : row.is_active === false ? 'Not recorded' : 'Current rate']
     ], equipmentAction(row.item_id));

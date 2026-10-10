@@ -16,13 +16,15 @@ Makikita ang analytics sa **sidebar → Reports → Business analytics**. Ang re
 3. **Filters:** pumili ng category o isang equipment para makita ang parehong metrics para lamang sa selection. Ang pagbabago ng category ay nagre-reset ng equipment selection.
 4. **Service & operations:** ipakita ang overdue, on-time, average duration, repeat customers, maintenance frequency at downtime.
 5. **Terminal verification time:** ipakita ang average, median, P95 at per-terminal breakdown kung may valid confirmed requests.
-6. **Explain and export:** buksan ang **How these 14 analytics are calculated**, pagkatapos pindutin ang **Export analytics CSV**. Kasama ang buong filtered results, hindi lamang ang limang nasa kasalukuyang page.
+6. **Forecasts:** ipakita ang estimate kapag may sapat na complete periods at rental history. I-explain na baseline ito at hindi pa kasama ang special events, panahon, pagbabago ng rate, o supply.
+7. **Recommendations:** ipakita ang evidence sa bawat rule-based suggestion. Kailangan pa ring suriin ng operator ang sitwasyon; walang automatic na pagbabago sa inventory o presyo.
+8. **Explain and export:** buksan ang **How these 14 analytics are calculated**, pagkatapos pindutin ang **Export analytics CSV**. Kasama ang buong filtered results, forecast at recommendations, hindi lamang ang limang nasa kasalukuyang page.
 
 ## Ang 14 analytics at puwedeng ipaliwanag
 
 | Analytics | Sukatan at gamit |
 | --- | --- |
-| Revenue trend | Recorded rental fees ng ACTIVE/COMPLETED rentals ayon sa confirmation date. Daily, calendar-week at calendar-month view para makita ang pagbabago ng charges. Hindi kasama ang deposits, pending at cancelled requests. |
+| Revenue trend | Recorded rental fees ng ACTIVE/COMPLETED rentals ayon sa confirmation date. Daily, calendar-week at calendar-month view para makita ang pagbabago ng charges. Hindi kasama ang pending at cancelled requests. |
 | Rentals trend | Bilang ng confirmed rentals sa bawat period; hiwalay sa halaga ng fees para makita ang demand. |
 | Equipment utilization | Rented hours ÷ observed calendar hours × 100. Nagsisimula sa item creation o period start, alinman ang mas huli; hindi kasama ang recorded archived intervals. Hindi nadodoble ang overlapping rentals. |
 | Most rented equipment | Top five ayon sa confirmed rental count. Nakakatulong sa pag-prioritize ng stock. |
@@ -37,6 +39,12 @@ Makikita ang analytics sa **sidebar → Reports → Business analytics**. Ang re
 | Maintenance downtime | Merged maintenance hours sa loob ng period, kasama ang carry-over at ongoing work. Fleet total ay item-hours: dalawang item na tig-isang oras unavailable = dalawang item-hours. |
 | Terminal verification time | Confirmation timestamp minus request timestamp para sa valid CONFIRMED terminal requests. Kasama ang queue at operator wait; hindi ito purong ESP32 processing latency. |
 
+## Forecast at recommendation rules
+
+Ang forecast ay simple baseline na gumagamit lamang ng kumpletong periods at confirmed rentals. Daily forecast: average ng kaparehong araw ng linggo mula sa huling 28 complete days, hanggang 4 samples bawat forecast day; kailangan ng hindi bababa sa 28 complete days at 4 confirmed rentals. Weekly forecast: average ng huling 8 complete weeks at kailangan ang 8 linggo. Monthly forecast: average ng huling 6 complete months at kailangan ang 8 complete months. Tinataya nito ang susunod na 7 araw, 4 linggo, o 3 buwan depende sa grouping. Walang confidence interval dahil baseline lang ito. Sa custom range na nagtatapos noon, ang mga forecast date ay kasunod ng napiling range kaya retrospective ang projection.
+
+Ang recommendations ay nagpapakita lamang ng rule-based na susunod na hakbang kapag sapat ang sample: overdue follow-up kapag 5+ due rentals at hindi bababa sa 20% ang overdue rate; terminal handoff review kapag 5+ confirmations at 60 segundo o higit pa ang P95; service review kapag 2+ maintenance records ang nagsimula sa period (kasama ang inspections); capacity review para sa item na may 3+ rentals at nasa top quarter ng active items; at listing review para sa zero-rental active items kapag 30+ araw ang range at may 5+ rentals ang buong filtered report. Suggestions lang ang mga ito at hindi awtomatikong nagbabago ng presyo, availability, o records.
+
 ## Karaniwang tanong ng panel
 
 **“Bakit hindi 100% kapag pinagsama ang overdue at on-time rates?”**
@@ -45,7 +53,7 @@ Magkaiba ang sample: due dates ang filter ng overdue rate; return dates naman sa
 
 **“Income ba talaga ang Revenue?”**
 
-Recorded rental charges ang ipinapakita, hindi verified cash collections, net profit o payment reconciliation. Hindi kinukuwenta ang refundable deposits bilang revenue.
+Recorded rental charges ang ipinapakita, hindi verified cash collections, net profit o payment reconciliation.
 
 **“Bakit mababa ang utilization?”**
 

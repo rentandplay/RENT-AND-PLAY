@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { authenticateTerminal, createRentalRequest, createReturnRequest, expireVerificationRequests, finalCharges, publicTerminal, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending, validatePenalty } from '../src/transactions.mjs';
+import { authenticateTerminal, createRentalRequest, createReturnRequest, createExpirySweep, expireVerificationRequests, finalCharges, publicTerminal, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending, validatePenalty } from '../src/transactions.mjs';
+import { createBooking } from '../src/rental-flow.mjs';
 import { DEFAULT_PRICING, savePricing } from '../src/pricing.mjs';
 import { itemAction } from '../src/inventory.mjs';
 import { localDateTime } from '../src/firebase.mjs';
@@ -13,7 +14,7 @@ export const actor = { id: 'admin-1', full_name: 'Test Inspector', role: 'ADMIN'
 export const deviceKey = 'test-device-key-123456789012345678901234567890';
 const inspection = { condition: 'GOOD', notes: 'Frame, brakes, tires, and included parts checked.', result: 'AVAILABLE' };
 export function fixture() {
-  const pricing = structuredClone(DEFAULT_PRICING); pricing.products.find(product => product.id === 'bike').deposit_amount = 100;
+  const pricing = structuredClone(DEFAULT_PRICING);
   return memoryFirestore({
     users: { [actor.id]: actor }, settings: { pricing, business: { default_late_grace_hours: 0 } },
     items: { 'item-1': { name: 'Bike', item_code: 'BIKE-001', pricing_product_id: 'bike', condition_status: 'GOOD', status: 'AVAILABLE', is_active: true, updated_at: requestTime } },
@@ -28,17 +29,32 @@ export async function confirm(db, request, time = new Date(requestTime.getTime()
 }
 async function released(db) { const response = await createRentalRequest(db, actor, rentalInput, requestTime); await confirm(db, response.request); return response; }
 
-test('the saved package, deposit, and overtime survive subsequent pricing edits', async () => {
+test('expiry sweeps report rental expirations separately for live update fanout', async () => {
+  const db = fixture();
+  await createBooking(db, actor, {
+    itemId: 'item-1', customerId: 'customer-1', durationMinutes: 180,
+    requestKey: 'a'.repeat(32)
+  }, requestTime, { staff: true });
+  let currentTime = requestTime.getTime() + 31 * 60 * 1000;
+  const sweep = createExpirySweep(db, { now: () => currentTime });
+
+  const result = await sweep.run({ force: true });
+
+  assert.equal(result.expiredRentals, 1);
+  assert.equal(result.expired, 1);
+});
+
+test('the saved package and overtime survive subsequent pricing edits', async () => {
   const db = fixture(), response = await released(db), original = db.data('rentals', response.rental.id).fee_breakdown;
-  assert.equal(original.rental_fee, 500); assert.equal(original.rate_id, 'three-hour-special'); assert.equal(original.billed_minutes, 180); assert.equal(original.deposit_amount, 100);
+  assert.equal(original.rental_fee, 500); assert.equal(original.rate_id, 'three-hour-special'); assert.equal(original.billed_minutes, 180); assert.equal(Object.hasOwn(original, 'deposit_amount'), false);
   const pricing = structuredClone(DEFAULT_PRICING), bike = pricing.products.find(product => product.id === 'bike');
-  bike.rate_options.forEach(rate => rate.amount *= 10); bike.deposit_amount = 900; bike.overtime_rate_per_hour = 999;
+  bike.rate_options.forEach(rate => rate.amount *= 10); bike.overtime_rate_per_hour = 999;
   await savePricing(db, actor.id, pricing, requestTime);
   const actual = new Date(original.due_at.getTime() + 1);
   const returned = await createReturnRequest(db, actor, { rentalId: response.rental.id, terminalId: 'terminal-1', penaltyAmount: 50, penaltyReason: 'Missing accessory', inspection }, actual);
   await confirm(db, returned.request, new Date(actual.getTime() + 60000));
   const saved = db.data('rentals', response.rental.id).fee_breakdown;
-  assert.equal(saved.rental_fee, 500); assert.equal(saved.overtime_rate, 200); assert.equal(saved.overtime_units, 1); assert.equal(saved.overtime_fee, 200); assert.equal(saved.penalty_amount, 50); assert.equal(saved.final_rental_charges, 750); assert.equal(saved.deposit_amount, 100);
+  assert.equal(saved.rental_fee, 500); assert.equal(saved.overtime_rate, 200); assert.equal(saved.overtime_units, 1); assert.equal(saved.overtime_fee, 200); assert.equal(saved.penalty_amount, 50); assert.equal(saved.final_rental_charges, 750); assert.equal(Object.hasOwn(saved, 'deposit_amount'), false);
   assert.equal(saved.actual_return_at.toISOString(), actual.toISOString()); assert.deepEqual(saved.rate_components, original.rate_components);
 });
 

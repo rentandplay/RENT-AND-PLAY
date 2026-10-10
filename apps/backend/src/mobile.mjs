@@ -2,6 +2,7 @@ import { asDate, docData } from './firebase.mjs';
 import { inventoryList } from './inventory.mjs';
 import { equipmentRateOptions, loadPricing } from './pricing.mjs';
 import { normalizeRole } from './roles.mjs';
+import { nameError, phoneError, validationFailure } from './account-validation.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const money = amount => `₱${Number(amount).toFixed(2)}`;
@@ -16,17 +17,19 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     const existing = doc.exists ? doc.data() : null;
     if (!existing && claims.email_verified !== true) fail(403, 'Verify your email before creating an account.');
     if (existing?.is_active === false) fail(403, 'Your account is inactive. Contact an administrator.');
-    const existingRole = existing ? normalizeRole(existing.role) : 'USER';
+    const existingRole = existing ? normalizeRole(existing.role) : 'CUSTOMER';
     if (existing && !existingRole) fail(403, 'This account has no supported app role. Contact the workspace owner.');
     const clean = (value, max, label) => {
       if (typeof value !== 'string' || value.trim().length > max) fail(400, `Enter a valid ${label}.`);
       return value.trim();
     };
-    const created = existing ? { ...existing, role: existingRole } : { full_name: clean(input.name || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name'), email: claims.email || '', phone: clean(input.phone || '', 40, 'phone'), role: 'USER', is_active: true, hasAcceptedTerms: false, created_at: now };
+    if (!existing && input.name !== undefined) validationFailure(nameError(input.name));
+    if (!existing && input.phone !== undefined) validationFailure(phoneError(input.phone, false));
+    const created = existing ? { ...existing, role: existingRole } : { full_name: clean(input.name || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name'), email: claims.email || '', phone: clean(input.phone || '', 40, 'phone'), role: 'CUSTOMER', is_active: true, hasAcceptedTerms: false, created_at: now };
     const changes = {};
     if (method === 'PATCH') {
-      if (input.name !== undefined) { changes.full_name = clean(input.name, 150, 'name'); if (changes.full_name.length < 2) fail(400, 'Your name must contain at least 2 characters.'); changes.name = changes.full_name; }
-      if (input.phone !== undefined) changes.phone = clean(input.phone, 40, 'phone');
+      if (input.name !== undefined) { validationFailure(nameError(input.name)); changes.full_name = clean(input.name, 150, 'name'); changes.name = changes.full_name; }
+      if (input.phone !== undefined) { validationFailure(phoneError(input.phone, false)); changes.phone = clean(input.phone, 40, 'phone'); }
       if (input.validIdUrl !== undefined) changes.validIdUrl = clean(input.validIdUrl, 2048, 'ID reference');
       if (input.profileImageUrl !== undefined) changes.profileImageUrl = clean(input.profileImageUrl, 2048, 'profile image');
       if (input.hasAcceptedTerms !== undefined) {
@@ -35,7 +38,7 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
       }
       changes.updated_at = now;
     }
-    if (method === 'PATCH' && existingRole === 'USER') {
+    if (method === 'PATCH' && existingRole === 'CUSTOMER') {
       const customerRef = db.collection('customers').doc(String(claims.uid));
       const customerDoc = await tx.get(customerRef);
       if (customerDoc.exists) {
@@ -53,7 +56,7 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     return { profile: { ...created, ...changes }, created: !existing };
   });
   if (created || method === 'PATCH') onWrite(method === 'PATCH' ? ['users', 'customers'] : ['users']);
-  return { user: serializeMobile({ id: claims.uid, uid: claims.uid, name: profile.full_name || profile.name || '', full_name: profile.full_name || profile.name || '', email: profile.email || claims.email || '', phone: profile.phone || '', role: profile.role || 'USER', is_active: profile.is_active !== false, validIdUrl: profile.validIdUrl || profile.valid_id_url || null, profileImageUrl: profile.profileImageUrl || null, hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false, createdAt: profile.created_at || profile.createdAt || null }) };
+  return { user: serializeMobile({ id: claims.uid, uid: claims.uid, name: profile.full_name || profile.name || '', full_name: profile.full_name || profile.name || '', email: profile.email || claims.email || '', phone: profile.phone || '', role: normalizeRole(profile.role) || 'CUSTOMER', mustChangePassword: profile.must_change_password === true, is_active: profile.is_active !== false, validIdUrl: profile.validIdUrl || profile.valid_id_url || null, profileImageUrl: profile.profileImageUrl || null, hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false, createdAt: profile.created_at || profile.createdAt || null }) };
 }
 
 // Only configured equipment belongs in the customer catalog; admin inventory retains all records.
@@ -63,17 +66,16 @@ export async function mobileCatalog(db) {
   const items = inventory.items.filter(item => item.is_active !== false && typeof item.name === 'string' && item.name.trim()).flatMap(item => {
     const linkedProduct = products.get(item.pricing_product_id);
     const customOptions = Array.isArray(item.custom_rate_options) ? item.custom_rate_options : [];
-    const validRate = ['HOURLY', 'DAILY', 'FLAT'].includes(item.rate_type) && [item.rental_rate, item.deposit_amount, item.late_penalty_rate].every(validAmount);
+    const validRate = ['HOURLY', 'DAILY', 'FLAT'].includes(item.rate_type) && [item.rental_rate, item.late_penalty_rate].every(validAmount);
     const hasItemSpecificRates = customOptions.length > 0 || (!item.pricing_product_id && validRate);
     const usesLegacyRateOptions = customOptions.length > 0 && !(Number(item.custom_rate_options_version) >= 2);
     const product = hasItemSpecificRates ? {
       id: `custom-${item.id}`, name: item.name,
       rate_options: usesLegacyRateOptions ? customOptions : equipmentRateOptions(item.rate_type, item.rental_rate, customOptions),
-      deposit_amount: item.deposit_amount, overtime_rate_per_hour: item.late_penalty_rate,
-      high_value: false, sale_price: null
+      overtime_rate_per_hour: item.late_penalty_rate, sale_price: null
     } : linkedProduct;
     const options = product?.rate_options.filter(rate => rate.kind !== 'WHOLE_STAY') || [];
-    const configured = product ? options.length > 0 && !(product.high_value && pricing.rules.high_value_deposit_required && product.deposit_amount <= 0) : validRate;
+    const configured = product ? options.length > 0 : validRate;
     if (!configured) return [];
     const status = item.reserved_rental_id ? 'RESERVED_PENDING' : String(item.effective_status || item.status || 'UNAVAILABLE').toUpperCase();
     const salePrice = product?.sale_price ?? item.sale_price ?? null;
@@ -86,7 +88,6 @@ export async function mobileCatalog(db) {
       rate_text: product ? product.rate_options.map(rate => `${money(rate.amount)} / ${rate.label}`).join(' · ') : `${money(item.rental_rate)} / ${{ HOURLY: 'hour', DAILY: 'day', FLAT: 'rental' }[item.rate_type]}`,
       rate_type: product ? 'RATE_SHEET' : item.rate_type,
       rental_rate: product?.overtime_rate_per_hour ?? item.rental_rate,
-      deposit_amount: product?.deposit_amount ?? item.deposit_amount,
       late_penalty_rate: product?.overtime_rate_per_hour ?? item.late_penalty_rate,
       pricing_product_id: hasItemSpecificRates ? null : item.pricing_product_id, rate_options: product?.rate_options || [],
       can_rent: status === 'AVAILABLE',
@@ -119,7 +120,7 @@ export async function resolveMobileItem(db, input) {
 export function serializeMobile(value) {
   if (value instanceof Date || typeof value?.toDate === 'function') return asDate(value).toISOString();
   if (Array.isArray(value)) return value.map(serializeMobile);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, serializeMobile(entry)]));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !/deposit/i.test(key)).map(([key, entry]) => [key, serializeMobile(entry)]));
   return value;
 }
 
@@ -151,7 +152,7 @@ export async function mobileRentalList(db, actor, rentalId = '') {
       hold_expires_at: rental.hold_expires_at || null,
       received_at: rental.received_at || null,
       due_at: rental.due_at || rental.dueDate,
-      rental_fee: rental.rental_fee ?? rental.rateFee, deposit_amount: rental.deposit_amount ?? rental.deposit,
+      rental_fee: rental.rental_fee ?? rental.rateFee,
       delivery_location: rental.delivery_location || rental.deliveryLocation,
       payment_method: rental.payment_method || rental.paymentMethod,
       can_request_return: String(rental.status).toUpperCase() === 'ACTIVE' && isMobileRental(rental) && rental.latest_return_request_status !== 'PENDING_ADMIN_APPROVAL' && !rental.received_at

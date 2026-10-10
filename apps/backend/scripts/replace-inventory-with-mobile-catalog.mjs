@@ -159,13 +159,13 @@ async function main() {
       const right = typeof b.effective_from?.toDate === 'function' ? b.effective_from.toDate().getTime() : new Date(b.effective_from || 0).getTime();
       return right - left;
     })[0];
-    const hasCorrectRate = currentRate && currentRate.rate_type === catalogItem.rateType && Number(currentRate.rental_rate) === catalogItem.rentalRate && Number(currentRate.deposit_amount) === catalogItem.deposit && Number(currentRate.late_penalty_rate) === catalogItem.latePenalty && activeRates.length === 1;
+    const hasCorrectRate = currentRate && currentRate.rate_type === catalogItem.rateType && Number(currentRate.rental_rate) === catalogItem.rentalRate && Number(currentRate.late_penalty_rate) === catalogItem.latePenalty && activeRates.length === 1;
     if (!hasCorrectRate) {
       for (const rate of activeRates) rateWrites.push(batch => batch.update(firestore.collection('item_rates').doc(rate.id), { is_active: false, effective_to: now }));
       const rateRef = firestore.collection('item_rates').doc();
       rateWrites.push(batch => batch.create(rateRef, {
         item_id: id, rate_type: catalogItem.rateType, rental_rate: catalogItem.rentalRate,
-        deposit_amount: catalogItem.deposit, late_penalty_rate: catalogItem.latePenalty,
+        late_penalty_rate: catalogItem.latePenalty,
         created_by: 'mobile-catalog-replacement', is_active: true, effective_from: now, effective_to: null
       }));
     }

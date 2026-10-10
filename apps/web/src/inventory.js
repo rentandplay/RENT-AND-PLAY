@@ -188,7 +188,7 @@ export function createInventory(h) {
   }
   function exportInventory() {
     const cell = value => '"' + (/^[=+@\-\t\r]/.test(String(value || '')) ? "'" : '') + String(value ?? '').replaceAll('"', '""') + '"';
-    const rows = [['Code', 'Equipment', 'Category', 'Status', 'Condition', 'Rate type', 'Rental rate', 'Deposit', 'Late penalty'], ...filtered().map(item => [item.item_code, item.name, item.category, item.effective_status, item.condition_status, item.rate_type, item.rental_rate, item.deposit_amount, item.late_penalty_rate])];
+    const rows = [['Code', 'Equipment', 'Category', 'Status', 'Condition', 'Rate type', 'Rental rate', 'Late penalty'], ...filtered().map(item => [item.item_code, item.name, item.category, item.effective_status, item.condition_status, item.rate_type, item.rental_rate, item.late_penalty_rate])];
     download('\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n'), 'text/csv;charset=utf-8', 'rent-play-inventory.csv');
     toast('Filtered inventory exported.');
   }
@@ -281,7 +281,7 @@ export function createInventory(h) {
         <div class="inv-form-grid">
           <label>Rate setup<select id="inv-rate-mode" name="rateMode"><option value="traditional" ${initialRateMode === 'traditional' ? 'selected' : ''}>Traditional admin-set rate</option><option value="product" ${initialRateMode === 'product' ? 'selected' : ''}>Use a shared pricing product</option></select><small>Set the regular price and rental terms, or use a shared rate sheet.</small></label>
           <div class="inv-linked-rate-panel" id="inv-linked-rate-panel" ${initialRateMode === 'traditional' ? 'hidden' : ''}>
-            <label>Pricing product<select id="inv-pricing-product" name="pricingProductId"><option value="">Choose a product</option>${pricingProducts.map(p => `<option value="${e(p.id)}" ${p.id === (item?.pricing_product_id || '') ? 'selected' : ''}>${e(p.name)} · ${e(p.group)}</option>`).join('')}</select><small>Uses the current shared rates, deposit, and overtime setting.</small></label>
+            <label>Pricing product<select id="inv-pricing-product" name="pricingProductId"><option value="">Choose a product</option>${pricingProducts.map(p => `<option value="${e(p.id)}" ${p.id === (item?.pricing_product_id || '') ? 'selected' : ''}>${e(p.name)} · ${e(p.group)}</option>`).join('')}</select><small>Uses the current shared rates and overtime setting.</small></label>
             <div class="inv-linked-rate-summary" id="inv-linked-rate-summary" aria-live="polite"></div>
           </div>
           <section class="inv-traditional-rate-panel" id="inv-traditional-rate-panel" ${initialRateMode === 'product' ? 'hidden' : ''}>
@@ -297,7 +297,6 @@ export function createInventory(h) {
               <small class="inv-rate-help">The name is shown in the mobile app; the billing rule controls the charge. Mobile quotes compare each option with the traditional rate and use the lowest valid price for the selected duration. Packages require an hourly traditional rate.</small>
             </section>
             <div class="inv-form-grid inv-rate-terms-grid">
-              ${field('deposit', 'Security deposit (₱)', 'number', item?.deposit_amount ?? 0, 'min="0" max="9999999999.99" step="0.01"')}
               ${field('latePenalty', 'Late penalty per started hour (₱)', 'number', item?.late_penalty_rate ?? 0, 'min="0" max="9999999999.99" step="0.01"')}
             </div>
           </section>
@@ -369,7 +368,7 @@ export function createInventory(h) {
     const updateLinkedSummary = () => {
       const product = pricingProducts.find(entry => entry.id === pricingSelect.value);
       if (!product) { linkedSummary.innerHTML = '<small>Select a pricing product to see its customer rates.</small>'; return; }
-      linkedSummary.innerHTML = `<strong>${e(product.name)}</strong><span>${product.rate_options.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`).join(' · ')}</span><small>Deposit ${cash(product.deposit_amount)} · Late penalty ${cash(product.overtime_rate_per_hour)} per started hour</small>`;
+      linkedSummary.innerHTML = `<strong>${e(product.name)}</strong><span>${product.rate_options.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`).join(' · ')}</span><small>Late penalty ${cash(product.overtime_rate_per_hour)} per started hour</small>`;
     };
     const syncLinkedProduct = () => {
       updateLinkedSummary();
@@ -391,8 +390,8 @@ export function createInventory(h) {
       const traditional = rateModeSelect.value === 'traditional';
       baseRatePanel.hidden = !traditional; linkedRatePanel.hidden = traditional;
       rateModeHelp.textContent = traditional
-        ? 'Mobile checkout compares the traditional rate with additional options, then uses the lowest valid price for the selected duration. Option names are display labels; billing rules determine the charge. Deposits and late penalties are set here.'
-        : 'Mobile checkout uses the selected shared product’s current rates, deposit, and late penalty. Edit those shared settings under Rates & Fees.';
+        ? 'Mobile checkout compares the traditional rate with additional options, then uses the lowest valid price for the selected duration. Option names are display labels; billing rules determine the charge. Late penalties are set here.'
+        : 'Mobile checkout uses the selected shared product’s current rates and late penalty. Edit those shared settings under Rates & Fees.';
       pricingSelect.required = !traditional; pricingSelect.disabled = traditional;
       baseRatePanel.querySelectorAll('.inv-base-rate-grid input, .inv-base-rate-grid select, .inv-rate-terms-grid input').forEach(control => { control.disabled = !traditional; });
       customOptionsToggle.disabled = !traditional;
@@ -458,21 +457,19 @@ export function createInventory(h) {
         values.customRateOptions = customOptionsToggle.checked ? readRateOptions() : [];
         values.rateType = formEl.elements.rateType.value;
         values.rentalRate = Number(formEl.elements.rentalRate.value);
-        values.deposit = Number(formEl.elements.deposit.value);
         values.latePenalty = Number(formEl.elements.latePenalty.value);
       } else {
         const product = pricingProducts.find(entry => entry.id === pricingSelect.value);
         if (!product) { formEl.querySelector('#inv-form-error').textContent = 'Choose a pricing product or switch to traditional admin-set rates.'; return; }
         values.pricingProductId = product.id;
         values.customRateOptions = [];
-        values.deposit = product.deposit_amount;
         values.latePenalty = product.overtime_rate_per_hour;
         const primary = product.rate_options.find(rate => rate.kind === 'HOURLY') || product.rate_options.find(rate => rate.kind !== 'PACKAGE' && rate.kind !== 'WHOLE_STAY') || product.rate_options[0];
         values.rateType = primary?.kind === 'BLOCK' && Number(primary.duration_minutes) === 1440 ? 'DAILY' : ['SHORT', 'FLAT'].includes(primary?.kind) ? 'FLAT' : 'HOURLY';
         values.rentalRate = Number(primary?.amount ?? 0);
       }
       if (item && conditionSelect.disabled) values.condition = savedCondition;
-      for (const key of ['rentalRate', 'deposit', 'latePenalty']) values[key] = Number(values[key]);
+      for (const key of ['rentalRate', 'latePenalty']) values[key] = Number(values[key]);
       if (item) values.version = item.updated_at;
       const saved = await submit(formEl, () => api('/inventory' + (item ? '/' + item.id : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(values) }), item ? 'Equipment updated.' : 'Equipment added.', item ? null : () => { scope = 'active'; status = 'all'; offset = 0; draw(); });
       if (saved && scope === 'archived') { scope = 'active'; status = 'all'; offset = 0; draw(); }
@@ -501,7 +498,6 @@ export function createInventory(h) {
         <section class="inv-detail-facts" aria-label="Equipment details">
           <div><small>Condition</small><strong>${label(i.condition_status)}</strong></div>
           <div><small>Rental rate</small><strong>${cash(displayRateAmount(i))}</strong><small>${displayRateUnit(i)}</small></div>
-          <div><small>Deposit</small><strong>${cash(i.deposit_amount)}</strong></div>
           <div><small>Late penalty rate</small><strong>${cash(i.late_penalty_rate)}</strong></div>
         </section>
         ${priceOptions(i) ? `<section class="inv-detail-rate-options" aria-label="Customer rental rate options"><strong>Customer rate options</strong>${priceOptions(i)}</section>` : ''}
@@ -515,7 +511,7 @@ export function createInventory(h) {
         <section class="inv-history-list" aria-label="Equipment history">
           <details class="inv-history"><summary>Status history <span>${history.length}</span></summary>${history.map(v => `<div><strong>${v.old_status ? e(stateLabel(v.old_status)) + ' → ' : ''}${e(stateLabel(v.new_status))}</strong><small>${e(formatDate(v.changed_at))} · ${e(v.source)}</small></div>`).join('') || '<p>No status changes recorded.</p>'}</details>
           <details class="inv-history"><summary>Maintenance records <span>${maintenance.length}</span></summary>${maintenance.map(v => `<div><strong>${e(v.reason)} · ${label(v.status)}</strong><p>${e(v.details || 'No inspection notes yet.')}</p><small>Started ${e(formatDate(v.started_at))}${v.completed_at ? ' · Completed ' + e(formatDate(v.completed_at)) : ''}</small></div>`).join('') || '<p>No maintenance recorded.</p>'}</details>
-          <details class="inv-history"><summary>Pricing history <span>${rates.length}</span></summary>${rates.map(v => `<div><strong>${cash(v.rental_rate)} ${unit(v.rate_type)} · Deposit ${cash(v.deposit_amount)}</strong><small>Late penalty ${cash(v.late_penalty_rate)} · Since ${e(formatDate(v.effective_from))}${v.effective_to ? ' · Ended ' + e(formatDate(v.effective_to)) : ''}</small>${v.custom_rate_options?.length ? `<small>${v.custom_rate_options.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`).join(' · ')}</small>` : ''}</div>`).join('') || '<p>No rate configured.</p>'}</details>
+          <details class="inv-history"><summary>Pricing history <span>${rates.length}</span></summary>${rates.map(v => `<div><strong>${cash(v.rental_rate)} ${unit(v.rate_type)}</strong><small>Late penalty ${cash(v.late_penalty_rate)} · Since ${e(formatDate(v.effective_from))}${v.effective_to ? ' · Ended ' + e(formatDate(v.effective_to)) : ''}</small>${v.custom_rate_options?.length ? `<small>${v.custom_rate_options.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`).join(' · ')}</small>` : ''}</div>`).join('') || '<p>No rate configured.</p>'}</details>
         </section>
       </div>`);
       renderEquipmentImage(modal.querySelector('.inv-detail-art'), i); modal.querySelector('#inv-detail-edit')?.addEventListener('click', () => void form(i)); modal.querySelector('#inv-qr').onclick = () => qr(i);
@@ -755,7 +751,7 @@ function createInventoryView(root, h) {
     const actions = [['view', 'View', 'eye', ''], ['edit', 'Edit', 'edit', isActive(item) ? '' : 'Restore archived equipment before editing.'], ['qr', 'QR label', 'qr', ''], ['archive', 'Archive', 'archive', archiveReason]];
     return `<div class="inv-item-actions" role="group" aria-label="Actions for ${e(item.name)}">${actions.map(([action, name, glyph, reason]) => `<button type="button" class="inv-quick-action${action === 'archive' ? ' inv-quick-archive' : ''}" data-inv-action="${action}" data-inv-id="${e(item.id)}" aria-label="${e(name)} for ${e(item.name)}" title="${e(reason || name)}" aria-haspopup="dialog" ${reason ? 'disabled' : ''}>${icon(glyph)}</button>`).join('')}</div>`;
   };
-  const signature = item => JSON.stringify([item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.deposit_amount, item.pricing_product_id, item.custom_rate_options || [], item.custom_rate_options_version, item.sale_price, item.image_data || '', productFor(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id]);
+  const signature = item => JSON.stringify([item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.pricing_product_id, item.custom_rate_options || [], item.custom_rate_options_version, item.sale_price, item.image_data || '', productFor(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id]);
   function itemNode(item, mode) {
     const node = document.createElement(mode === 'grid' ? 'article' : 'tr');
     node.dataset.invItem = String(item.id);
@@ -764,7 +760,7 @@ function createInventoryView(root, h) {
       node.innerHTML = `<div class="inv-art">${symbol(item.category)}${badge(statusText(item))}</div><small>${e(item.category)} · ${e(item.item_code)}</small><h3><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button></h3><p>${label(item.condition_status)} condition</p><div class="inv-price"><strong>${cash(displayRateAmount(item))}</strong><small>${e(displayRateUnit(item))}</small>${priceOptions(item)}</div>`;
       renderEquipmentImage(node.querySelector('.inv-art'), item, { keepBadge: true });
     } else {
-      node.innerHTML = `<td><div class="item-cell"><span class="item-symbol">${symbol(item.category)}</span><div><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button><small>${e(item.item_code)} · ${e(item.category)}</small></div></div></td><td>${badge(statusText(item))}<small>${label(item.condition_status)} condition</small></td><td><strong>${cash(displayRateAmount(item))}</strong><small>${e(displayRateUnit(item))}</small>${priceOptions(item)}</td><td>${cash(item.deposit_amount)}</td><td class="inv-actions-cell">${quickActions(item)}</td>`;
+      node.innerHTML = `<td><div class="item-cell"><span class="item-symbol">${symbol(item.category)}</span><div><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button><small>${e(item.item_code)} · ${e(item.category)}</small></div></div></td><td>${badge(statusText(item))}<small>${label(item.condition_status)} condition</small></td><td><strong>${cash(displayRateAmount(item))}</strong><small>${e(displayRateUnit(item))}</small>${priceOptions(item)}</td><td class="inv-actions-cell">${quickActions(item)}</td>`;
       renderEquipmentImage(node.querySelector('.item-symbol'), item);
     }
     signatures.set(node, signature(item));
@@ -818,7 +814,7 @@ function createInventoryView(root, h) {
 
     const mode = shown.length ? view : scopedRecords.length ? 'filtered-empty' : 'empty';
     if (mode !== resultMode) {
-      if (mode === 'table') results.innerHTML = '<div class="table-scroll"><table class="inv-table"><thead><tr><th scope="col">EQUIPMENT</th><th scope="col">STATUS / CONDITION</th><th scope="col">RENTAL RATE</th><th scope="col">DEPOSIT</th><th scope="col" class="inv-actions-cell">ACTIONS</th></tr></thead><tbody></tbody></table></div>';
+      if (mode === 'table') results.innerHTML = '<div class="table-scroll"><table class="inv-table"><thead><tr><th scope="col">EQUIPMENT</th><th scope="col">STATUS / CONDITION</th><th scope="col">RENTAL RATE</th><th scope="col" class="inv-actions-cell">ACTIONS</th></tr></thead><tbody></tbody></table></div>';
       else if (mode === 'grid') results.innerHTML = '<div class="inv-card-grid"></div>';
       else results.innerHTML = `<div class="inv-empty"><span>${icon('box')}</span><h3>${scopedRecords.length ? 'No equipment matches this view' : scope === 'archived' ? 'Your archive is empty' : 'Your collection starts here'}</h3><p>${scopedRecords.length ? 'Try another category, status, or search.' : scope === 'archived' ? 'Archived equipment will appear here. You can restore it or permanently delete it.' : 'Add your first equipment with its rate and details.'}</p><button type="button" class="secondary" id="inv-empty-action">${scopedRecords.length ? 'Reset filters' : scope === 'archived' ? 'View equipment' : '＋ Add equipment'}</button></div>`;
       resultMode = mode;

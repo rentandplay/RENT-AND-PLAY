@@ -88,11 +88,11 @@ test('equipment requiring a deposit stays in admin inventory but is hidden from 
 });
 
 test('profile bootstrap and edits cannot grant admin access or change token identity', async () => {
-  const db = fixture(), claims = { uid: 'new-user', email: 'verified@example.test' };
-  const response = await mobileProfile(db, claims, { name: 'Customer', phone: '09123', role: 'ADMIN', is_active: false, uid: admin.id, email: 'fake@example.test' }, 'POST', now);
-  assert.equal(response.user.role, 'USER'); assert.equal(response.user.uid, claims.uid); assert.equal(response.user.email, claims.email); assert.equal(response.user.is_active, true);
+  const db = fixture(), claims = { uid: 'new-user', email: 'verified@example.test', email_verified: true };
+  const response = await mobileProfile(db, claims, { name: 'Customer', phone: '09123456789', role: 'ADMIN', is_active: false, uid: admin.id, email: 'fake@example.test' }, 'POST', now);
+  assert.equal(response.user.role, 'CUSTOMER'); assert.equal(response.user.uid, claims.uid); assert.equal(response.user.email, claims.email); assert.equal(response.user.is_active, true);
   const changed = await mobileProfile(db, claims, { name: 'Changed name', hasAcceptedTerms: true, role: 'ADMIN', is_active: false }, 'PATCH', now);
-  assert.equal(changed.user.name, 'Changed name'); assert.equal(changed.user.hasAcceptedTerms, true); assert.equal(changed.user.role, 'USER');
+  assert.equal(changed.user.name, 'Changed name'); assert.equal(changed.user.hasAcceptedTerms, true); assert.equal(changed.user.role, 'CUSTOMER');
   await db.collection('users').doc(claims.uid).update({ is_active: false });
   await assert.rejects(mobileProfile(db, claims), hasStatus(403));
 });

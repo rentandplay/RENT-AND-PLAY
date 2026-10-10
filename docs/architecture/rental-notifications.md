@@ -16,7 +16,7 @@ Rental notifications use the same authenticated backend as rental requests. ESP3
 | Customer submits a return request | Active operators and owners | Arrange collection or physical receipt |
 | Admin rejects a return request | That rental's customer | Rental stays active; customer can request again |
 | Admin receives the equipment | That rental's customer | Clock stops; inspection is pending |
-| Admin completes return inspection | That rental's customer | Check final balance and deposit refund |
+| Admin completes return inspection | That rental's customer | Check the final rental balance |
 
 Notifications are saved in the same Firestore transaction as the rental change. Failed actions create no alert. Event IDs identify the rental, recipient inbox, event type and return-request revision, so retries do not create duplicate inbox messages. No previous rental events are backfilled on upgrade.
 

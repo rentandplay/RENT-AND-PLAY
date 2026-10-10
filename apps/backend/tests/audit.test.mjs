@@ -11,6 +11,7 @@ const admin = { full_name: 'Test Owner', email: 'owner@example.test', role: 'OWN
 const customerInput = { fullName: 'Ana Reyes', code: 'CUST-001', email: 'ana@example.test' };
 const equipmentInput = { categoryId: 'sports', name: 'New basketball', condition: 'GOOD', rateType: 'DAILY', rentalRate: 50, deposit: 0, latePenalty: 5 };
 const businessInput = { businessName: 'Rent & Play', location: 'Los Baños', currency: 'PHP', timezone: 'Asia/Manila', defaultLateGraceHours: 0 };
+const accountOptions = { validateEmail: async value => value };
 const fixture = () => memoryFirestore({ users: { admin }, item_categories: { sports: { name: 'Sports equipment' } }, items: { bike: { name: 'Bike', item_code: 'BIKE-001' } } });
 
 test('authenticated equipment creation and workspace changes appear in the Reports audit feed', async () => {
@@ -19,7 +20,7 @@ test('authenticated equipment creation and workspace changes appear in the Repor
     getUser: async id => ({ id, ...db.data('users', id) }), workspace: role => loadWorkspace(db, role),
     createItem: (actor, input) => createItem(db, actor, input), createCustomer: (actor, input) => createCustomer(db, actor, input),
     updateCustomer: (actor, id, input) => updateCustomer(db, actor, id, input), saveSettings: (actor, input) => saveSettings(db, actor, input),
-    createUser: (actor, input) => createWorkspaceUser(auth, db, actor, input)
+    createUser: (actor, input) => createWorkspaceUser(auth, db, actor, input, new Date(), accountOptions)
   } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -36,7 +37,7 @@ test('authenticated equipment creation and workspace changes appear in the Repor
     const customerId = (await customer.json()).customer.id;
     assert.equal((await request('/customers/' + customerId, 'PATCH', { ...customerInput, fullName: 'Ana Updated', user_id: 'spoofed' })).status, 200);
     assert.equal((await request('/settings', 'PATCH', { ...businessInput, user_id: 'spoofed' })).status, 200);
-    assert.equal((await request('/users', 'POST', { fullName: 'Another Admin', email: 'other@example.test', password: 'SECRET-password-long', role: 'ADMIN', user_id: 'spoofed' })).status, 201);
+    assert.equal((await request('/users', 'POST', { fullName: 'Another Admin', email: 'other@example.test', password: 'SECRET-password-long9', confirmPassword: 'SECRET-password-long9', role: 'ADMIN', user_id: 'spoofed' })).status, 201);
     assert.deepEqual(db.records('audit_logs').map(row => row.user_id), Array(5).fill('admin'));
     assert.ok(!JSON.stringify(db.records('audit_logs')).includes('SECRET-password-long'));
     const count = db.records('audit_logs').length;
@@ -65,7 +66,7 @@ test('customer edits, archive, restore, rates, pricing, and business settings re
 test('account and profile activities exclude passwords, hashes, and other credential fields', async () => {
   const db = fixture(), auth = { createUser: async () => ({ uid: 'another-admin' }), deleteUser: async () => {},
     updateUser: async () => {}, getUser: async () => ({ displayName: admin.full_name, email: admin.email }) };
-  await createWorkspaceUser(auth, db, 'admin', { fullName: 'Another Admin', email: 'other@example.test', password: 'SECRET-PASSWORD', role: 'ADMIN' });
+  await createWorkspaceUser(auth, db, 'admin', { fullName: 'Another Admin', email: 'other@example.test', password: 'SECRET-PASSWORD9', confirmPassword: 'SECRET-PASSWORD9', role: 'ADMIN' }, new Date(), accountOptions);
   await db.collection('users').doc('another-admin').update({ password_hash: 'SECRET-HASH', token: 'SECRET-TOKEN' });
   await updateWorkspaceUser(auth, db, 'admin', 'another-admin', { role: 'ADMIN', isActive: false });
   await updateProfile(auth, db, 'admin', { fullName: 'Updated Admin', email: admin.email });
@@ -81,7 +82,7 @@ test('a rejected audit commit rolls back the saved record and any new Firebase A
   await assert.rejects(saveSettings(db, 'admin', businessInput), /Commit rejected/);
   assert.equal(db.data('settings', 'business'), undefined); assert.equal(db.records('audit_logs').length, 0);
   const auth = { createUser: async () => ({ uid: 'new-admin' }), deleteUser: async id => deleted.push(id) };
-  await assert.rejects(createWorkspaceUser(auth, db, 'admin', { fullName: 'New Admin', email: 'new@example.test', password: 'secret-password-long', role: 'ADMIN' }), /Commit rejected/);
+  await assert.rejects(createWorkspaceUser(auth, db, 'admin', { fullName: 'New Admin', email: 'new@example.test', password: 'Secret-password-long9', confirmPassword: 'Secret-password-long9', role: 'ADMIN' }, new Date(), accountOptions), /Commit rejected/);
   assert.deepEqual(deleted, ['new-admin']); assert.equal(db.data('users', 'new-admin'), undefined);
   assert.equal(db.records('audit_logs').length, 0);
 });

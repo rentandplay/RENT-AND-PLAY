@@ -12,7 +12,7 @@ const details = input => { if (!input || typeof input !== 'object' || Array.isAr
 function serializeFlow(value) {
   if (value instanceof Date || value?.toDate instanceof Function) return asDate(value).toISOString();
   if (Array.isArray(value)) return value.map(serializeFlow);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, serializeFlow(child)]));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !/deposit/i.test(key)).map(([key, child]) => [key, serializeFlow(child)]));
   return value;
 }
 const rows = snap => snap.docs.map(docData);
@@ -32,27 +32,31 @@ const audit = (tx, db, actor, action, id, now, extra = {}) => tx.create(db.colle
 const operationKey = value => { if (typeof value !== 'string' || !/^[a-f0-9]{32}$/.test(value)) fail(400, 'A valid operation key is required. Refresh the form and try again.'); return value; };
 const ttl = (setting, fallback) => { const seconds = Number(process.env[setting] || fallback); if (!Number.isInteger(seconds) || seconds < 60 || seconds > 86400) fail(500, 'Rental hold duration must be between one minute and one day.'); return seconds * 1000; };
 
+function remainingDeposit(rental) {
+  const applied = round(Number(rental.deposit_applied_amount || 0));
+  return round(Math.max(0, Number(rental.deposit_collected_amount || 0) - applied - Number(rental.deposit_refunded_amount || 0)));
+}
+
 function paymentSummary(rental, extra = {}) {
   const value = { ...rental, ...extra };
-  if (!Object.hasOwn(value, 'rental_paid_amount')) return { balance_due: null, refund_due: null, deposit_remaining: null, payment_status: 'UNKNOWN' };
+  if (!Object.hasOwn(value, 'rental_paid_amount')) return { balance_due: null, refund_due: null, payment_status: 'UNKNOWN' };
   const paid = round(Number(value.rental_paid_amount || 0)), applied = round(Number(value.deposit_applied_amount || 0));
   const base = Number(value.rental_fee ?? value.rateFee ?? 0), final = value.fee_breakdown?.final_rental_charges;
   const closedWithoutRelease = ['CANCELLED', 'REJECTED', 'EXPIRED'].includes(state(value));
   const charges = closedWithoutRelease ? 0 : money(final) ? final : base;
   const balance = round(Math.max(0, charges - paid - applied));
-  const depositRemaining = round(Math.max(0, Number(value.deposit_collected_amount || 0) - applied - Number(value.deposit_refunded_amount || 0)));
+  const depositRemaining = remainingDeposit(value);
   const rentalRefund = closedWithoutRelease ? round(Math.max(0, paid - Number(value.rental_refunded_amount || 0))) : 0;
   const refundDue = ['COMPLETED', 'CANCELLED', 'REJECTED', 'EXPIRED'].includes(state(value)) ? round(depositRemaining + rentalRefund) : 0;
-  return { balance_due: balance, refund_due: refundDue, deposit_remaining: depositRemaining, payment_status: refundDue > 0 ? 'REFUND_PENDING' : balance > 0 ? (paid > 0 ? 'BALANCE_DUE' : 'UNPAID') : 'PAID' };
+  return { balance_due: balance, refund_due: refundDue, payment_status: refundDue > 0 ? 'REFUND_PENDING' : balance > 0 ? (paid > 0 ? 'BALANCE_DUE' : 'UNPAID') : 'PAID' };
 }
 
 function collectPayment(rental, input, requirePayment = false) {
-  const base = Number(rental.rental_fee ?? rental.rateFee), deposit = Number(rental.deposit_amount ?? rental.deposit ?? 0);
-  if (!money(base) || !money(deposit)) fail(409, 'Review the saved rental fee and deposit before release.');
-  const paid = Number(rental.rental_paid_amount || 0), collected = Number(rental.deposit_collected_amount || 0);
+  const base = Number(rental.rental_fee ?? rental.rateFee);
+  if (!money(base)) fail(409, 'Review the saved rental fee before release.');
+  const paid = Number(rental.rental_paid_amount || 0);
   if (requirePayment && paid < base && input.paymentVerified !== true) fail(400, 'Confirm receipt of the rental payment before release.');
-  if (requirePayment && deposit > collected && input.depositReceived !== true) fail(400, 'Confirm receipt of the required refundable deposit before release.');
-  return { rental_paid_amount: input.paymentVerified === true ? base : paid, deposit_collected_amount: input.depositReceived === true ? deposit : collected, deposit_applied_amount: Number(rental.deposit_applied_amount || 0), deposit_refunded_amount: Number(rental.deposit_refunded_amount || 0), rental_refunded_amount: Number(rental.rental_refunded_amount || 0) };
+  return { rental_paid_amount: input.paymentVerified === true ? base : paid, rental_refunded_amount: Number(rental.rental_refunded_amount || 0) };
 }
 
 function transactionScanCheck(input, rental) {
@@ -139,10 +143,10 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
     if (customerDoc.exists && customerDoc.data().is_active === false) fail(403, 'The customer account is inactive.');
     const customer = customerDoc.exists ? customerDoc.data() : actor;
     const fee = await frozenQuote(tx, db, item, { ...input, mode: input.mode || 'TIMED' }, now);
-    if (input.expectedQuote && (input.expectedQuote.rentalFee !== fee.rental_fee || input.expectedQuote.depositAmount !== fee.deposit_amount || input.expectedQuote.billedMinutes !== fee.billed_minutes)) fail(409, 'The rates changed. Refresh the quote and review the new total.');
+    if (input.expectedQuote && (input.expectedQuote.rentalFee !== fee.rental_fee || input.expectedQuote.billedMinutes !== fee.billed_minutes)) fail(409, 'The rates changed. Refresh the quote and review the new total.');
     const rental = { rental_code: `R-${rentalRef.id.slice(-10).toUpperCase()}`, item_id: itemId, item_name: item.name, item_code: item.item_code || item.qrCode || '', customer_id: customerId, customer_name: customer.full_name || customer.name || customer.email || 'Customer', customer_email: customer.email || null, customer_phone: customer.phone || null,
       status: staff ? 'APPROVED' : 'PENDING_ADMIN_APPROVAL', booking_mode: input.mode || 'TIMED', resort_checkout_input: input.resortCheckoutAt || null, booking_qr_token: `rp-rental-${randomBytes(24).toString('hex')}`, hold_expires_at: new Date(now.getTime() + ttl(staff ? 'RENTAL_PICKUP_HOLD_SECONDS' : 'RENTAL_REQUEST_HOLD_SECONDS', staff ? 1800 : 900)),
-      rental_fee: fee.rental_fee, deposit_amount: fee.deposit_amount, fee_breakdown: fee, estimated_due_at: fee.due_at, start_at: null, due_at: null, confirmed_rental_at: null, confirmed_return_at: null, received_at: null, delivery_location: location, payment_method: paymentMethod, payment_confirmed_by_admin: false, payment_proof_status: paymentProof ? 'PENDING_REVIEW' : 'NOT_REQUIRED', payment_proof_reference: paymentProof?.reference || null, payment_proof_note: null, payment_proof_revision: 0, rental_paid_amount: 0, deposit_collected_amount: 0, deposit_applied_amount: 0, deposit_refunded_amount: 0, rental_refunded_amount: 0, delivery_status: 'NOT_PREPARED', delivery_preparation: null, request_source: requestSource, release_condition: null, return_condition: null, created_at: now, updated_at: now, created_by: actorId(actor), ...(staff ? { admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_at: now } } : {}) };
+      rental_fee: fee.rental_fee, fee_breakdown: fee, estimated_due_at: fee.due_at, start_at: null, due_at: null, confirmed_rental_at: null, confirmed_return_at: null, received_at: null, delivery_location: location, payment_method: paymentMethod, payment_confirmed_by_admin: false, payment_proof_status: paymentProof ? 'PENDING_REVIEW' : 'NOT_REQUIRED', payment_proof_reference: paymentProof?.reference || null, payment_proof_note: null, payment_proof_revision: 0, rental_paid_amount: 0, rental_refunded_amount: 0, delivery_status: 'NOT_PREPARED', delivery_preparation: null, request_source: requestSource, release_condition: null, return_condition: null, created_at: now, updated_at: now, created_by: actorId(actor), ...(staff ? { admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_at: now } } : {}) };
     Object.assign(rental, paymentSummary(rental));
     if (!customerDoc.exists) tx.create(record(db, 'customers', customerId), { full_name: rental.customer_name, customer_code: generatedCustomerCode, email: rental.customer_email, phone: rental.customer_phone, auth_uid: customerId, is_active: true, created_at: now, updated_at: now });
     tx.create(rentalRef, rental);
@@ -243,12 +247,11 @@ export async function reviewRentalPaymentProof(db, actor, id, input, now = new D
       return { rental: { ...rental, ...changes } };
     }
     if (!itemDoc.exists || itemDoc.data().is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(itemDoc.data().status) || itemDoc.data().reserved_rental_id !== rentalId) fail(409, 'This equipment is no longer reserved for this rental request.');
-    const expectedAmount = round(Number(rental.rental_fee || 0) + Number(rental.deposit_amount || 0));
+    const expectedAmount = round(Number(rental.rental_fee || 0));
     if (!money(expectedAmount)) fail(409, 'The saved rental total is invalid. Review the price before approving payment.');
     const changes = {
       status: 'APPROVED', payment_proof_status: 'VERIFIED', payment_proof_note: note || null,
       payment_confirmed_by_admin: true, rental_paid_amount: Number(rental.rental_fee || 0),
-      deposit_collected_amount: Number(rental.deposit_amount || 0),
       hold_expires_at: new Date(now.getTime() + ttl('RENTAL_PICKUP_HOLD_SECONDS', 1800)),
       booking_qr_token: rental.booking_qr_token || `rp-rental-${randomBytes(24).toString('hex')}`,
       admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_by_name: actor.full_name || actor.name || actorId(actor), reviewed_at: now, notes: note || 'QR payment proof verified.' }, updated_at: now
@@ -494,7 +497,7 @@ export async function changeAssignedUnit(db, actor, id, input, now = new Date())
     const sameProduct = before.pricing_product_id ? after.pricing_product_id === before.pricing_product_id : after.name === before.name && after.category_id === before.category_id;
     if (!sameProduct || after.is_active === false || after.status !== 'AVAILABLE' || after.reserved_rental_id || rows(related).some(open)) fail(409, 'Choose an available unit of the same equipment product.');
     const quote = await frozenQuote(tx, db, docData(newDoc), { durationMinutes: rental.fee_breakdown?.requested_minutes, mode: rental.booking_mode || 'TIMED', ...(rental.resort_checkout_input ? { resortCheckoutAt: rental.resort_checkout_input } : {}) }, now);
-    if (quote.rental_fee !== rental.rental_fee || quote.deposit_amount !== rental.deposit_amount || quote.overtime_rate !== rental.fee_breakdown?.overtime_rate) fail(409, 'This unit has different pricing. Cancel and prepare a new rental request so the customer can review the price.');
+    if (quote.rental_fee !== rental.rental_fee || quote.overtime_rate !== rental.fee_breakdown?.overtime_rate) fail(409, 'This unit has different pricing. Cancel and prepare a new rental request so the customer can review the price.');
     const changes = { item_id: target.id, item_name: after.name, item_code: after.item_code || after.qrCode || '', delivery_status: 'NOT_PREPARED', delivery_preparation: null, updated_at: now };
     tx.update(oldDoc.ref, { reserved_rental_id: null, ...(before.status === 'RESERVED_PENDING' ? { status: 'AVAILABLE' } : {}), updated_at: now });
     tx.update(newDoc.ref, { reserved_rental_id: id, updated_at: now }); tx.update(rentalDoc.ref, changes);
@@ -514,17 +517,20 @@ export async function settleRentalPayment(db, actor, id, input, now = new Date()
     const rental = docData(rentalDoc);
     if (existing.exists) {
       const saved = existing.data();
-      if (saved.payment_amount !== received || saved.deposit_applied_amount !== depositApplied || saved.deposit_refund_amount !== refunded || saved.rental_refund_amount !== rentalRefund || saved.notes !== note) fail(409, 'This settlement key belongs to different amounts.');
+      if (saved.payment_amount !== received || Number(saved.deposit_applied_amount || 0) !== depositApplied || Number(saved.deposit_refund_amount || 0) !== refunded || saved.rental_refund_amount !== rentalRefund || saved.notes !== note) fail(409, 'This settlement key belongs to different amounts.');
       return { rental, duplicate: true };
     }
     if (!['COMPLETED', 'CANCELLED', 'REJECTED', 'EXPIRED'].includes(state(rental))) fail(409, 'Complete the physical return or close the rental request before settling its final balance.');
     if (!Object.hasOwn(rental, 'rental_paid_amount')) fail(409, 'Legacy payment receipts were not recorded. Review them before using settlement.');
     const current = paymentSummary(rental), closed = state(rental) !== 'COMPLETED';
-    if (received + depositApplied > current.balance_due || depositApplied + refunded > current.deposit_remaining || rentalRefund > Number(rental.rental_paid_amount || 0) - Number(rental.rental_refunded_amount || 0) || !closed && rentalRefund > 0 || closed && received + depositApplied > 0) fail(400, 'The entered amounts exceed the outstanding balance or refundable payments.');
-    const changes = { rental_paid_amount: round(Number(rental.rental_paid_amount || 0) + received), deposit_applied_amount: round(Number(rental.deposit_applied_amount || 0) + depositApplied), deposit_refunded_amount: round(Number(rental.deposit_refunded_amount || 0) + refunded), rental_refunded_amount: round(Number(rental.rental_refunded_amount || 0) + rentalRefund), updated_at: now };
+    if (received + depositApplied > current.balance_due || depositApplied + refunded > remainingDeposit(rental) || rentalRefund > Number(rental.rental_paid_amount || 0) - Number(rental.rental_refunded_amount || 0) || !closed && rentalRefund > 0 || closed && received + depositApplied > 0) fail(400, 'The entered amounts exceed the outstanding balance or refundable payments.');
+    const hasLegacyDeposit = ['deposit_collected_amount', 'deposit_applied_amount', 'deposit_refunded_amount'].some(field => Object.hasOwn(rental, field));
+    const changes = { rental_paid_amount: round(Number(rental.rental_paid_amount || 0) + received), rental_refunded_amount: round(Number(rental.rental_refunded_amount || 0) + rentalRefund), updated_at: now };
+    if (hasLegacyDeposit) Object.assign(changes, { deposit_applied_amount: round(Number(rental.deposit_applied_amount || 0) + depositApplied), deposit_refunded_amount: round(Number(rental.deposit_refunded_amount || 0) + refunded) });
     Object.assign(changes, paymentSummary(rental, changes)); tx.update(rentalDoc.ref, changes);
-    tx.create(settlementRef, { rental_id: id, payment_amount: received, deposit_applied_amount: depositApplied, deposit_refund_amount: refunded, rental_refund_amount: rentalRefund, notes: note, recorded_by: actorId(actor), recorded_at: now });
-    audit(tx, db, actor, 'RENTAL_PAYMENT_SETTLED', id, now, { payment_amount: received, deposit_applied_amount: depositApplied, deposit_refund_amount: refunded, rental_refund_amount: rentalRefund });
+    const legacySettlement = hasLegacyDeposit ? { deposit_applied_amount: depositApplied, deposit_refund_amount: refunded } : {};
+    tx.create(settlementRef, { rental_id: id, payment_amount: received, ...legacySettlement, rental_refund_amount: rentalRefund, notes: note, recorded_by: actorId(actor), recorded_at: now });
+    audit(tx, db, actor, 'RENTAL_PAYMENT_SETTLED', id, now, { payment_amount: received, ...legacySettlement, rental_refund_amount: rentalRefund });
     return { rental: { ...rental, ...changes } };
   }));
 }

@@ -2,7 +2,8 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
-import { FirebaseSessions, publicUser } from './auth.mjs';
+import { FirebaseSessions, publicUser, changeWorkspacePassword } from './auth.mjs';
+import { createEmailDomainValidator, emailError, normalizeEmail, validationFailure, validateEmailFormat } from './account-validation.mjs';
 import { firebaseAuth as defaultFirebaseAuth, firebaseMessaging as defaultMessaging, firestore as defaultFirestore, requireFirebaseConfig } from './firebase.mjs';
 import { loadDashboard, loadAnalyticsSummary } from './dashboard.mjs';
 import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
@@ -17,6 +18,7 @@ import { createBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt,
 import { listNotifications, markNotificationsRead, registerNotificationDevice, unregisterNotificationDevice, createNotificationDispatcher } from './notifications.mjs';
 import { isCustomerRole, isOwnerRole, isStaffRole, normalizeRole } from './roles.mjs';
 import { createRegistrationOtpService } from './registration-otp.mjs';
+import { createRentalEventHub } from './rental-events.mjs';
 
 const webRoot = nodePath.resolve(fileURLToPath(new URL('../../web/dist/', import.meta.url)));
 const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
@@ -48,6 +50,7 @@ async function serveWeb(req, res, requestPath) {
 
 export function createFirebaseServices({ db = defaultFirestore, auth = defaultFirebaseAuth, messaging = defaultMessaging, now = () => new Date(), superAdminUid = process.env.SUPER_ADMIN_UID || '' } = {}) {
   const firestore = db, firebaseAuth = auth;
+  const validateEmail = createEmailDomainValidator();
   const registrationOtp = createRegistrationOtpService({ db: firestore, auth: firebaseAuth, now });
   const ownerUid = String(superAdminUid).trim();
   // Display data is refreshed on writes and on explicit manual refresh. A
@@ -64,6 +67,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   });
   let healthCheckedAt = -Infinity, healthError = null, healthPending = null;
   const services = {
+    validateEmail,
+    changeStaffPassword: (user, input, sessions) => changeWorkspacePassword(firebaseAuth, firestore, user, input, sessions, now()),
     listNotifications: (actor, options) => listNotifications(firestore, actor, options),
     markNotificationsRead: (actor, input) => markNotificationsRead(firestore, actor, input, now()),
     registerNotificationDevice: async (actor, input) => {
@@ -166,7 +171,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
       if (String(claims.uid) === ownerUid) result.user.role = 'OWNER';
       return result;
     },
-    sendRegistrationCode: input => registrationOtp.sendCode(input?.email),
+    sendRegistrationCode: async input => registrationOtp.sendCode(await validateEmail(input?.email)),
     verifyRegistrationCode: input => registrationOtp.verifyCode(input?.email, input?.code),
     completeMobileRegistration: (claims, input) => registrationOtp.completeRegistration({
       claims,
@@ -189,7 +194,10 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
       }
       return quoteRental(await loadPricing(firestore), input);
     },
-    createCustomer: (actor, input) => createCustomer(firestore, actor, input), createMobileCustomerAccount: (actor, input) => createMobileCustomerAccount(firebaseAuth, firestore, actor, input), updateCustomer: (actor, id, input) => updateCustomer(firestore, actor, id, input, new Date(), firebaseAuth), changeCustomerPassword: (actor, id, input) => changeCustomerPassword(firestore, actor, id, input, firebaseAuth), deleteArchivedCustomer: (actor, id, input) => deleteArchivedCustomer(firestore, actor, id, input, firebaseAuth), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: (actor, input) => saveSettings(firestore, actor, input), createUser: (actor, input) => createWorkspaceUser(firebaseAuth, firestore, actor, input), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, actor, id, input)
+    createCustomer: (actor, input) => createCustomer(firestore, actor, input),
+    createMobileCustomerAccount: (actor, input) => createMobileCustomerAccount(firebaseAuth, firestore, actor, input, now(), { validateEmail: validateEmailFormat }),
+    updateCustomer: (actor, id, input) => updateCustomer(firestore, actor, id, input, now(), firebaseAuth),
+    changeCustomerPassword: (actor, id, input) => changeCustomerPassword(firestore, actor, id, input, firebaseAuth), deleteArchivedCustomer: (actor, id, input) => deleteArchivedCustomer(firestore, actor, id, input, firebaseAuth), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: (actor, input) => saveSettings(firestore, actor, input), createUser: (actor, input) => createWorkspaceUser(firebaseAuth, firestore, actor, input, now(), { validateEmail: validateEmailFormat }), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input)
   };
   services.updateUser = (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input, now(), { ownerUid });
 
@@ -232,7 +240,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     saveRate: ['item_rates', 'audit_logs'],
     saveSettings: ['settings', 'audit_logs'],
     createUser: ['users', 'audit_logs'],
-    updateUser: ['users', 'audit_logs']
+    updateUser: ['users', 'audit_logs'],
+    changeStaffPassword: ['users', 'audit_logs']
   };
   const rentalScopedInvalidations = new Set([
     'createCounterBooking', 'releaseBooking', 'prepareRentalDelivery', 'reviewRentalPaymentProof',
@@ -272,6 +281,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
 const defaultServices = createFirebaseServices();
 
 export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices, notificationWorker = services === defaultServices, hardwareEnabled = process.env.ENABLE_ESP32 === 'true' } = {}) {
+  const checkEmail = services.validateEmail || (async value => { validationFailure(emailError(value)); return normalizeEmail(value); });
+  const rentalEvents = createRentalEventHub();
   const attempts = new Map();
   const registrationAttempts = new Map();
   const quotaBackoff = createQuotaBackoff();
@@ -289,6 +300,17 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     } catch { return false; }
   };
   function send(res, status, value, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers }); res.end(JSON.stringify(value)); }
+  function stopRentalEventStream(res) { res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); }
+  function sendRentalUpdate(res, status, value, { rentalId = '', customerId = '' } = {}) {
+    if (value?.duplicate !== true) {
+      const rental = value?.rental || value?.data?.rental || value?.request?.rental || {};
+      rentalEvents.publishRental({
+        rentalId: rental.id || rental.rental_id || rentalId,
+        customerId: rental.customer_id || rental.customerId || customerId
+      });
+    }
+    return send(res, status, value);
+  }
   function limitRegistrationRequests(req, action, max) {
     const key = `${action}:${req.socket.remoteAddress || 'unknown'}`;
     const at = Date.now();
@@ -330,6 +352,19 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     try {
       const mutation = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method);
       if (mutation && ((origin && !allowedOrigin(origin)) || (!origin && req.headers['sec-fetch-site'] === 'cross-site'))) return send(res, 403, { error: 'Request origin is not allowed.' });
+      if (path === '/api/rental-events') {
+        if (req.method !== 'GET') return send(res, 405, { error: 'Method not allowed.' });
+        quotaBackoff.assertAvailable();
+        const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
+        const claims = bearer ? await services.verifyMobileToken?.(bearer) : await sessions.verify(token);
+        if (!claims) return stopRentalEventStream(res);
+        const profile = await services.getUser(claims.uid);
+        if (!profile?.is_active || profile.must_change_password === true) return stopRentalEventStream(res);
+        const role = normalizeRole(profile.role);
+        if (!isStaffRole(role) && !isCustomerRole(role)) return stopRentalEventStream(res);
+        rentalEvents.subscribe(res, { uid: claims.uid, staff: isStaffRole(role) });
+        return;
+      }
       if (path === '/api/auth/logout' && req.method === 'POST') { if (await sessions.verify(token)) sessions.revoke?.(token); return send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0, true) }); }
       if (path === '/api/health' && req.method === 'GET') {
         try {
@@ -343,10 +378,28 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
           return send(res, 200, { database: false, provider: 'firebase', warning: failure.error, code: failure.code, retryAfterSeconds: failure.retryAfterSeconds }, { 'Retry-After': String(failure.retryAfterSeconds) });
         }
       }
+      if (path === '/api/auth/email-check' && req.method === 'POST') {
+        limitRegistrationRequests(req, 'email-check', 60);
+        const input = await body(req);
+        return send(res, 200, { email: await checkEmail(input?.email), valid: true });
+      }
       if (path === '/api/auth/password-reset' && req.method === 'POST') {
-        const input = await body(req), email = typeof input?.email === 'string' ? input.email.trim().toLowerCase() : '';
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(res, 400, { error: 'Enter a valid email address.' });
-        await sessions.sendPasswordReset(email).catch(() => { }); return send(res, 200, { ok: true });
+        limitRegistrationRequests(req, 'password-reset', 10);
+        const input = await body(req), email = validateEmailFormat(input?.email);
+        await sessions.sendPasswordReset(email);
+        return send(res, 200, { ok: true, email, message: 'If an account exists for this email, a reset link has been requested. Check your inbox and spam folder.' });
+      }
+      if (path === '/api/auth/change-password' && req.method === 'POST') {
+        quotaBackoff.assertAvailable();
+        const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
+        const claims = bearer ? await services.verifyMobileToken?.(bearer) : await sessions.verify(token);
+        if (!claims) return send(res, 401, { error: 'Please sign in again to change your password.' });
+        const user = await services.getUser(claims.uid);
+        if (!user?.is_active || !isStaffRole(user.role)) return send(res, 403, { error: 'Only active Owner or Operator accounts can use this password-change flow.' });
+        limitRegistrationRequests(req, 'password-change', 10);
+        const input = await body(req), updated = await services.changeStaffPassword(user, input, sessions);
+        const session = !bearer ? await sessions.signIn(user.email, input.newPassword, input.remember === true).catch(() => null) : null;
+        return send(res, 200, { user: publicUser(updated), signInAgain: !bearer && !session }, session ? { 'Set-Cookie': cookie(session.cookie, session.seconds, input.remember === true) } : !bearer ? { 'Set-Cookie': cookie('', 0, true) } : {});
       }
       if (['/api/mobile/registration/email-code', '/api/mobile/registration/verify-email-code', '/api/mobile/registration/complete'].includes(path)) {
         if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed.' });
@@ -373,6 +426,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (!claims) return send(res, 401, { error: 'Please sign in to view notifications.' });
         const profile = await services.getUser(claims.uid);
         if (!profile || profile.is_active === false) return send(res, 403, { error: 'Your account is inactive or missing.' });
+        if (profile.must_change_password === true) return send(res, 403, { error: 'Change your temporary password before accessing the workspace.', code: 'PASSWORD_CHANGE_REQUIRED' });
         const actor = { ...profile, id: claims.uid };
         if (path === '/api/notifications' && req.method === 'GET') {
           const params = new URL(req.url, 'http://localhost').searchParams;
@@ -390,6 +444,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const claims = bearer ? await services.verifyMobileToken?.(bearer) : null;
         if (!claims) return send(res, 401, { error: 'Please sign in to access your profile.' });
         if (!['GET', 'POST', 'PATCH'].includes(req.method)) return send(res, 405, { error: 'Method not allowed.' });
+        if (req.method === 'PATCH' && (await services.getUser(claims.uid))?.must_change_password === true) return send(res, 403, { error: 'Change your temporary password first.', code: 'PASSWORD_CHANGE_REQUIRED' });
         const result = await services.mobileProfile(claims, req.method === 'GET' ? {} : await body(req), req.method);
         return send(res, 200, { ...result, firebaseProjectId: services.firebaseProjectId });
       }
@@ -407,19 +462,20 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const [, id, action] = mobileRentalRoute || [];
         if (id && action === 'ticket' && req.method === 'GET') return send(res, 200, await services.rentalTicket(actor, id));
         if (mobileRentalRoute && req.method === 'GET' && !action) return send(res, 200, await services.mobileRentalList(actor, id));
-        if (id && action === 'payment-proof' && req.method === 'POST') return send(res, 200, await services.submitRentalPaymentProof(actor, id, await body(req, 550000)));
+        if (id && action === 'payment-proof' && req.method === 'POST') return sendRentalUpdate(res, 200, await services.submitRentalPaymentProof(actor, id, await body(req, 550000)), { rentalId: id, customerId: actor.id });
         if (mobileRentalRoute && req.method === 'POST') {
-          if (!id) return send(res, 201, await services.createMobileRentalRequest(actor, await body(req, 550000)));
-          if (action === 'cancel') return send(res, 200, await services.cancelMobileRentalRequest(actor, id));
-          if (action === 'return') return send(res, 200, await services.requestMobileReturn(actor, id, await body(req)));
+          if (!id) return sendRentalUpdate(res, 201, await services.createMobileRentalRequest(actor, await body(req, 550000)), { customerId: actor.id });
+          if (action === 'cancel') return sendRentalUpdate(res, 200, await services.cancelMobileRentalRequest(actor, id), { rentalId: id, customerId: actor.id });
+          if (action === 'return') return sendRentalUpdate(res, 200, await services.requestMobileReturn(actor, id, await body(req)), { rentalId: id, customerId: actor.id });
         }
         return send(res, 405, { error: 'Method not allowed.' });
       }
       if (path === '/api/auth/login' && req.method === 'POST') {
         const ip = req.socket.remoteAddress, now = Date.now(); for (const [key, value] of attempts) if (now - value.since > 900000) attempts.delete(key);
         const entry = attempts.get(ip) || { since: now, count: 0 }; if (entry.count >= 10) return send(res, 429, { error: 'Too many attempts. Try again in 15 minutes.' }); attempts.set(ip, { ...entry, count: entry.count + 1 });
-        const input = await body(req); if (typeof input?.email !== 'string' || typeof input?.password !== 'string' || input.email.length > 191 || input.password.length > 1024 || !input.password) return send(res, 400, { error: 'Enter your email and password.' });
-        const session = await sessions.signIn(input.email.trim().toLowerCase(), input.password, input.remember === true);
+        const input = await body(req); if (typeof input?.email !== 'string' || typeof input?.password !== 'string' || input.email.length > 254 || input.password.length > 1024 || !input.password) return send(res, 400, { error: 'Enter your email and password.' });
+        const email = validateEmailFormat(input.email);
+        const session = await sessions.signIn(email, input.password, input.remember === true);
         if (!session) return send(res, 401, { error: 'Email or password is incorrect.' });
         const user = await services.getUser(session.uid);
         if (!user) return send(res, 403, { error: 'Your account has no workspace profile. Ask the owner to set up your access.' });
@@ -438,7 +494,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const key = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const terminal = await services.authenticateTerminal(terminalId, key);
         if (action === 'pending' && req.method === 'GET') return send(res, 200, await services.terminalPending(terminal));
-        if (action === 'confirm' && req.method === 'POST') return send(res, 200, await services.terminalConfirm(terminal, await body(req)));
+        if (action === 'confirm' && req.method === 'POST') return sendRentalUpdate(res, 200, await services.terminalConfirm(terminal, await body(req)));
         return send(res, 405, { error: 'Method not allowed.' });
       }
       const inspectionRoute = path.match(/^\/api\/verification-requests\/([A-Za-z0-9_-]{1,128})\/inspection$/);
@@ -456,6 +512,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const mobileToken = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
         const user = await services.getUser(claims.uid); if (!user?.is_active || !isStaffRole(user.role)) return send(res, 401, { error: 'Please sign in with an active operator or owner account.' });
+        if (path !== '/api/auth/me' && user.must_change_password === true) return send(res, 403, { error: 'Change your temporary password before accessing the workspace.', code: 'PASSWORD_CHANGE_REQUIRED' });
         if (req.method === 'GET' && req.headers['cache-control'] === 'no-cache') {
           if (path === '/api/dashboard') services.invalidateReadCache?.();
           else {
@@ -464,14 +521,18 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
           }
         }
         user.role = normalizeRole(user.role);
-        if (counterBookingRoute && req.method === 'POST') return send(res, 201, await services.createCounterBooking(user, await body(req)));
+        if (counterBookingRoute && req.method === 'POST') {
+          const input = await body(req);
+          return sendRentalUpdate(res, 201, await services.createCounterBooking(user, input), { customerId: input.customerId });
+        }
         if (rentalLookupRoute && req.method === 'POST') return send(res, 200, await services.lookupRental(await body(req)));
         if (inspectionPhotoRoute && req.method === 'GET') return send(res, 200, await services.inspectionPhoto(inspectionPhotoRoute[1]));
         if (rentalFlowRoute && req.method === 'GET' && rentalFlowRoute[2] === 'payment-proof') return send(res, 200, await services.rentalPaymentProof(rentalFlowRoute[1]));
         if (rentalFlowRoute && req.method === 'POST') {
           const [, id, action] = rentalFlowRoute;
           const operations = { 'release-verification': 'verifyReleaseCodes', release: 'releaseBooking', 'prepare-delivery': 'prepareRentalDelivery', 'payment-review': 'reviewRentalPaymentProof', receipt: 'recordRentalReceipt', 'complete-return': 'completeRentalReturn', assignment: 'changeAssignedUnit', settlement: 'settleRentalPayment' };
-          return send(res, 200, await services[operations[action]](user, id, await body(req, 550000)));
+          const result = await services[operations[action]](user, id, await body(req, 550000));
+          return sendRentalUpdate(res, 200, result, { rentalId: id });
         }
         if (rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) return send(res, 405, { error: 'Method not allowed.' });
         if (path === '/api/auth/me') return send(res, 200, { user: publicUser(user), firebaseProjectId: services.firebaseProjectId });
@@ -479,11 +540,19 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (path === '/api/workspace' && req.method === 'GET') return send(res, 200, await services.workspace(user.role));
         if (path === '/api/mobile/admin-workspace' && req.method === 'GET') return send(res, 200, await services.mobileAdminWorkspace(user.role));
         if (path === '/api/analytics') return req.method === 'GET' ? send(res, 200, await services.analyticsSummary()) : send(res, 405, { error: 'Method not allowed.' });
-        if (path === '/api/rentals' && req.method === 'POST') return hardwareEnabled ? send(res, 201, await services.createRentalRequest(user, await body(req))) : send(res, 409, { error: 'ESP32 is on standby. Prepare a booking in the rental desk.' });
-        if (path === '/api/returns' && req.method === 'POST') return hardwareEnabled ? send(res, 201, await services.createReturnRequest(user, await body(req))) : send(res, 409, { error: 'ESP32 is on standby. Record physical receipt in the return desk.' });
-        if (mobileReviewRoute && req.method === 'POST') return send(res, 200, await services.reviewMobileRental({ id: user.id, full_name: user.full_name || user.name }, mobileReviewRoute[1], await body(req)));
-        if (mobileReturnReviewRoute && req.method === 'POST') return send(res, 200, await services.reviewMobileReturn({ id: user.id, full_name: user.full_name || user.name }, mobileReturnReviewRoute[1], await body(req)));
-        if (inspectionRoute && req.method === 'PUT') return send(res, 200, { request: await services.saveRequestInspection(user, inspectionRoute[1], await body(req)) });
+        if (path === '/api/rentals' && req.method === 'POST') {
+          if (!hardwareEnabled) return send(res, 409, { error: 'ESP32 is on standby. Prepare a booking in the rental desk.' });
+          const input = await body(req);
+          return sendRentalUpdate(res, 201, await services.createRentalRequest(user, input), { customerId: input.customerId });
+        }
+        if (path === '/api/returns' && req.method === 'POST') {
+          if (!hardwareEnabled) return send(res, 409, { error: 'ESP32 is on standby. Record physical receipt in the return desk.' });
+          const input = await body(req);
+          return sendRentalUpdate(res, 201, await services.createReturnRequest(user, input), { rentalId: input.rentalId, customerId: input.customerId });
+        }
+        if (mobileReviewRoute && req.method === 'POST') return sendRentalUpdate(res, 200, await services.reviewMobileRental({ id: user.id, full_name: user.full_name || user.name }, mobileReviewRoute[1], await body(req)), { rentalId: mobileReviewRoute[1] });
+        if (mobileReturnReviewRoute && req.method === 'POST') return sendRentalUpdate(res, 200, await services.reviewMobileReturn({ id: user.id, full_name: user.full_name || user.name }, mobileReturnReviewRoute[1], await body(req)), { rentalId: mobileReturnReviewRoute[1] });
+        if (inspectionRoute && req.method === 'PUT') return sendRentalUpdate(res, 200, { request: await services.saveRequestInspection(user, inspectionRoute[1], await body(req)) });
         if (transactionRoute) return send(res, 405, { error: 'Method not allowed.' });
         if (itemCategoriesRoute) { const [, id] = itemCategoriesRoute; if (req.method === 'POST' && !id) return send(res, 201, { category: await services.createItemCategory(user.id, await body(req)) }); if (req.method === 'DELETE' && id) return send(res, 200, { category: await services.deleteItemCategory(user.id, id) }); return send(res, 405, { error: 'Method not allowed.' }); }
         if (inventoryQrLabelsRoute && req.method === 'GET') return send(res, 200, await services.inventoryQrLabels());
@@ -496,7 +565,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (path === '/api/rates' && req.method === 'POST') return send(res, 201, { rate: await services.saveRate(user.id, await body(req)) });
         if (path === '/api/settings' && req.method === 'PATCH') { if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the super admin owner can change business settings.' }); return send(res, 200, { settings: await services.saveSettings(user.id, await body(req)) }); }
         if (path === '/api/settings/payment' && req.method === 'PATCH') { if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the workspace owner can change InstaPay payment instructions.' }); return send(res, 200, { settings: await services.savePaymentSettings(user.id, await body(req, 350000)) }); }
-        if (userRoute) { if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the super admin owner can manage workspace accounts.' }); const [, id] = userRoute; if (req.method === 'POST' && !id) return send(res, 201, { user: await services.createUser(user.id, await body(req)) }); if (req.method === 'PATCH' && id) return send(res, 200, { user: await services.updateUser(user.id, id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
+        if (userRoute) { if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only an Owner can manage staff accounts.' }); const [, id] = userRoute; if (req.method === 'POST' && !id) return send(res, 201, { user: await services.createUser(user.id, await body(req)) }); if (req.method === 'PATCH' && id) return send(res, 200, { user: await services.updateUser(user.id, id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
         if (inventoryRoute) {
           const [, id, action] = inventoryRoute;
           if (req.method === 'GET' && !id) return send(res, 200, await services.inventoryList());
@@ -512,7 +581,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
       send(res, 404, { error: 'API endpoint not found.' });
     } catch (error) {
-      if (Number.isInteger(error.status) && error.status >= 400 && error.status < 600 && !isQuotaError(error)) send(res, error.status, { error: error.message });
+      if (Number.isInteger(error.status) && error.status >= 400 && error.status < 600 && !isQuotaError(error)) send(res, error.status, { error: error.message, ...(error.code ? { code: error.code } : {}) });
       else {
         quotaBackoff.record(error);
         const { status, ...failure } = firebaseFailure(error);
@@ -525,7 +594,11 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     const stop = startExpiryWorker(defaultFirestore, {
       sweep: async () => {
         quotaBackoff.assertAvailable();
-        try { return await services.sweepVerificationRequests(); } catch (error) { quotaBackoff.record(error); throw error; }
+        try {
+          const result = await services.sweepVerificationRequests();
+          if (result?.expiredRentals) rentalEvents.publishRental({ allCustomers: true });
+          return result;
+        } catch (error) { quotaBackoff.record(error); throw error; }
       }
     });
     server.once('close', stop);
@@ -551,6 +624,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     metricsTimer.unref?.();
     server.once('close', () => clearInterval(metricsTimer));
   }
+  const closeServer = server.close.bind(server);
+  server.close = callback => { rentalEvents.close(); return closeServer(callback); };
   return server;
 }
 

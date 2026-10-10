@@ -36,7 +36,7 @@ function content(type, rental, reason) {
     RETURN_REQUESTED: ['New return request', `${customer} requested to return ${item}. Arrange collection or receive the equipment at the desk. The timer stops at physical receipt.`],
     RETURN_REQUEST_REJECTED: ['Return request rejected', `Your return request for ${item} was rejected.${extra} The rental remains active until the admin physically receives the equipment.`],
     RETURN_RECEIVED: ['Equipment received', `The admin received ${item}. Your rental timer has stopped. Inspection is still pending.`],
-    RETURN_COMPLETED: ['Return confirmed', `The return of ${item} is confirmed after inspection. Check your rental details for any balance or deposit refund.`],
+    RETURN_COMPLETED: ['Return confirmed', `The return of ${item} is confirmed after inspection. Check your rental details for any outstanding balance.`],
   })[type];
 }
 

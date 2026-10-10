@@ -7,6 +7,7 @@ const output = path.join(root, 'dist');
 const sourceFiles = [
     'app.js',
     'api-client.js',
+    'account-validation.js',
     'notifications.js',
     'date-time.js',
     'workspace-navigation.js',

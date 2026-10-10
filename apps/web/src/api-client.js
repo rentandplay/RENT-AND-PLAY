@@ -1,6 +1,6 @@
 export function createApiClient({ fetcher = fetch, now = Date.now } = {}) {
   let retryAt = 0, quotaError = null;
-  const independent = new Set(['/auth/logout', '/auth/password-reset', '/health']);
+  const independent = new Set(['/auth/logout', '/auth/password-reset', '/auth/email-check', '/health']);
   return {
     canRefresh: () => now() >= retryAt,
     async request(path, options = {}) {

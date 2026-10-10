@@ -16,7 +16,7 @@ try {
   if (labeled && (await resolveMobileItem(firestore, { code: labeled.qr_token })).item.id !== labeled.id) throw Error('Equipment QR lookup failed.');
   console.log(`Verified Firebase project ${process.env.FIREBASE_PROJECT_ID}: ${admin.items.length} admin records, ${mobile.items.length} configured customer catalog records, matching admin equipment IDs.`);
   const hidden = expected.filter(item => !mobileIds.includes(item.id));
-  console.log(`${mobile.items.filter(item => item.can_rent).length} available and configured for rental; ${hidden.length} active records hidden from customers until rates and required deposits are configured.`);
+  console.log(`${mobile.items.filter(item => item.can_rent).length} available and configured for rental; ${hidden.length} active records hidden from customers until rental rates are configured.`);
   if (hidden.length) console.log('Equipment requiring configuration: ' + hidden.map(item => item.name).join(', '));
   const rentals = await firestore.collection('rentals').get();
   const active = rentals.docs.map(doc => doc.data()).filter(row => ['ACTIVE', 'PENDING_ESP32_RETURN', 'PENDING_RETURN_VERIFICATION'].includes(String(row.status).toUpperCase()));

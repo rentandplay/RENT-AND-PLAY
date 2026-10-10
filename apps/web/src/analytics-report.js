@@ -9,7 +9,7 @@ const hours=value=>value===null?'—':`${number(value)} h`;
 const elapsed=seconds=>seconds===null?'—':seconds<60?`${number(seconds)} sec`:seconds<3600?`${number(seconds/60)} min`:`${number(seconds/3600)} h`;
 
 export const analyticsDefinitions=[
-  ['Revenue trend','Sum of recorded rental fees for ACTIVE or COMPLETED rentals, grouped by rental confirmation date. Deposits, pending requests and cancelled rentals are excluded. This measures charges, not verified cash payments.'],
+  ['Revenue trend','Sum of recorded rental fees for ACTIVE or COMPLETED rentals, grouped by rental confirmation date. Pending requests and cancelled rentals are excluded. This measures charges, not verified cash payments.'],
   ['Rentals trend','Number of confirmed rentals by day, calendar week (Monday–Sunday), or calendar month. The first and last buckets can be partial periods.'],
   ['Equipment utilization','Rented hours ÷ observed calendar hours × 100. Rental intervals are clipped to the period and overlapping records are counted once per item. Observation starts at the later of item creation or period start; recorded archived intervals are removed. Nights and maintenance hours remain in the denominator. Missing creation dates use period start and are noted below.'],
   ['Most rented equipment','Top five items by confirmed rental count in the period. Ties use rental fees, then equipment name.'],
@@ -83,11 +83,21 @@ export function renderAnalyticsReport(model,selection,view,h) {
     const action=String(row.action||'Unknown action').replaceAll('_',' ').toLowerCase().replace(/\b\w/g,letter=>letter.toUpperCase());
     return `<tr ${recordAttrs('audit', row.id, 'audit record')}><td>${e(when)}</td><td><strong>${e(row.actor_name||'Unknown user')}</strong><small>${e(row.actor_type||'USER')}</small></td><td>${e(action)}</td><td><strong>${e(row.entity_label||row.entity_type||'Record')}</strong><small>${e(row.entity_type||'Record')} · ${e(row.entity_id||'No record ID')}</small></td></tr>`;
   }).join('');
-  const selectedSection=['rental','equipment','service','audit'].includes(view.section)?view.section:'rental';
-  const sections=[['rental','Rental performance'],['equipment','Equipment insights'],['service','Service & operations'],['audit','Audit logs']];
+  const selectedSection=['rental','equipment','service','forecast','recommendations','audit'].includes(view.section)?view.section:'rental';
+  const sections=[['rental','Rental performance'],['equipment','Equipment insights'],['service','Service & operations'],['forecast','Forecasts'],['recommendations','Recommendations'],['audit','Audit logs']];
+  const forecast=result.forecast,forecastUnit=forecast.groupBy==='daily'?'days':forecast.groupBy==='weekly'?'weeks':'months';
+  const forecastRentals=forecast.points.reduce((sum,row)=>sum+row.rentals,0),forecastFees=forecast.points.reduce((sum,row)=>sum+row.fees,0);
+  const forecastRows=forecast.points.map(row=>`<tr><td>${e(row.label)}<small>${row.from} – ${row.to}</small></td><td>${number(row.rentals)}</td><td>${cash(Math.round(row.fees))}</td><td>${row.samplePeriods}</td></tr>`).join('');
+  const forecastContent=forecast.available?`<div class="analytics-kpis analytics-kpis-two">
+      ${card(`Estimated rentals · next ${forecast.horizon} ${forecastUnit}`,number(forecastRentals),`Sum of ${forecast.horizon} reporting-period estimates`)}
+      ${card(`Estimated fees · next ${forecast.horizon} ${forecastUnit}`,cash(Math.round(forecastFees)),'Recorded rental fees; estimate rounded to whole pesos')}
+    </div>
+    <section class="panel analytics-equipment-table">${head('Estimate by period',forecast.method)}${table(['PERIOD','EST. RENTALS','EST. FEES','HISTORICAL SAMPLES'],forecastRows)}</section>
+    <p class="analytics-advisory-note">Uses complete periods only and excludes the current partial day, week, or month. Forecast dates follow the selected range, so a custom range ending in the past produces a retrospective projection. The estimate does not account for special events, weather, rate changes, or supply changes.</p>`:empty('Forecast needs more history',forecast.reason);
+  const recommendationContent=result.recommendations.length?`<div class="analytics-recommendation-list">${result.recommendations.map(row=>`<article class="panel analytics-recommendation-card"><div class="analytics-recommendation-heading"><span>${e(row.type)}</span><h3>${e(row.title)}</h3></div><p>${e(row.action)}</p><small><strong>Why this appeared:</strong> ${e(row.basis)}</small></article>`).join('')}</div><p class="analytics-advisory-note">These are suggestions from visible rules and recorded data. Review the business context before acting; nothing is changed automatically.</p>`:empty('No recommendation rules matched','This does not guarantee that there are no issues; the selected records did not meet the configured thresholds.');
 
   return `${header}${filters}
-    <p class="analytics-scope">${e(range.label)} · Philippine time · Recorded rental fees exclude deposits. ${range.to===today?'Today is a partial day.':''}</p>
+    <p class="analytics-scope">${e(range.label)} · Philippine time · Recorded rental fees. ${range.to===today?'Today is a partial day.':''}</p>
     <div class="analytics-tabs" role="tablist" aria-label="Report sections">${sections.map(([id,label])=>`<button type="button" id="analytics-tab-${id}" role="tab" aria-controls="analytics-panel-${id}" aria-selected="${selectedSection===id}" tabindex="${selectedSection===id?'0':'-1'}" data-analytics-tab="${id}">${label}</button>`).join('')}</div>
     <section class="analytics-tab-panel" id="analytics-panel-rental" role="tabpanel" aria-labelledby="analytics-tab-rental" tabindex="0" data-analytics-panel="rental" ${selectedSection==='rental'?'':'hidden'}>
     <div class="analytics-kpis">
@@ -137,5 +147,11 @@ export function renderAnalyticsReport(model,selection,view,h) {
     </section>
     <section class="analytics-tab-panel" id="analytics-panel-audit" role="tabpanel" aria-labelledby="analytics-tab-audit" tabindex="0" data-analytics-panel="audit" ${selectedSection==='audit'?'':'hidden'}>
     <section class="panel analytics-equipment-table">${head('Recent activity','Latest 200 recorded actions by users, terminals, and system processes')}${auditRows?table(['WHEN · PHILIPPINE TIME','ACTOR','ACTION','RECORD'],auditRows)+auditView.footer:auditAvailable?empty('No audit log entries','Recorded system and workspace actions will appear here.'):empty('Activity history unavailable','Refresh to reload activity history. If it remains unavailable, reconnect to the workspace.')}</section>
+    </section>
+    <section class="analytics-tab-panel" id="analytics-panel-forecast" role="tabpanel" aria-labelledby="analytics-tab-forecast" tabindex="0" data-analytics-panel="forecast" ${selectedSection==='forecast'?'':'hidden'}>
+      ${forecastContent}
+    </section>
+    <section class="analytics-tab-panel" id="analytics-panel-recommendations" role="tabpanel" aria-labelledby="analytics-tab-recommendations" tabindex="0" data-analytics-panel="recommendations" ${selectedSection==='recommendations'?'':'hidden'}>
+      <section class="panel analytics-recommendations-panel">${head('Suggested next steps','Rule-based prompts from the current report filters; evidence and thresholds are shown on each suggestion.')}${recommendationContent}</section>
     </section>`;
 }

@@ -13,6 +13,7 @@ test('API protects dashboard, uses Firebase session cookies, checks profiles, an
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     assert.equal((await fetch(base + '/api/dashboard')).status, 401);
+    assert.equal((await fetch(base + '/api/rental-events')).status, 204);
     assert.equal((await fetch(base + '/api/inventory')).status, 401);
     assert.equal((await fetch(base + '/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
     const login = async (password, headers = {}) => fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ email: row.email, password }) });
@@ -27,7 +28,14 @@ test('API protects dashboard, uses Firebase session cookies, checks profiles, an
     assert.equal((await response.json()).user.password_hash, undefined);
     const dashboard = await fetch(base + '/api/dashboard', { headers: { Cookie: cookie } });
     assert.equal(dashboard.status, 200);
-    const workspace = await fetch(base + '/api/workspace', { headers: { Cookie: cookie } }); assert.equal(workspace.status, 200); assert.equal((await workspace.json()).role, 'ADMIN');
+    const eventStream = await fetch(base + '/api/rental-events', { headers: { Cookie: cookie } });
+    assert.equal(eventStream.status, 200);
+    assert.match(eventStream.headers.get('content-type'), /text\/event-stream/);
+    const eventReader = eventStream.body.getReader();
+    const readyFrame = await eventReader.read();
+    assert.match(new TextDecoder().decode(readyFrame.value), /event: ready/);
+    await eventReader.cancel();
+    const workspace = await fetch(base + '/api/workspace', { headers: { Cookie: cookie } }); assert.equal(workspace.status, 200); assert.equal((await workspace.json()).role, 'OPERATOR');
     const customer = await fetch(base + '/api/customers', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ fullName: 'Customer' }) }); assert.equal(customer.status, 201);
     row.role = 'user';
     assert.equal((await fetch(base + '/api/dashboard', { headers: { Cookie: cookie } })).status, 401);
@@ -39,11 +47,11 @@ test('API protects dashboard, uses Firebase session cookies, checks profiles, an
     row.role = 'admin';
     const lowercaseLogin = await login('test-password-with-length');
     assert.equal(lowercaseLogin.status, 200);
-    assert.equal((await lowercaseLogin.json()).user.role, 'ADMIN');
+    assert.equal((await lowercaseLogin.json()).user.role, 'OPERATOR');
     row.role = 'admin';
     const lowercaseWorkspace = await fetch(base + '/api/workspace', { headers: { Cookie: cookie } });
     assert.equal(lowercaseWorkspace.status, 200);
-    assert.equal((await lowercaseWorkspace.json()).role, 'ADMIN');
+    assert.equal((await lowercaseWorkspace.json()).role, 'OPERATOR');
     row.is_active = 0;
     assert.equal((await fetch(base + '/api/dashboard', { headers: { Cookie: cookie } })).status, 401);
     row.is_active = 1;

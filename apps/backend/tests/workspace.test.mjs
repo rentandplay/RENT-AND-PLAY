@@ -4,23 +4,24 @@ import { validateCustomer, loadWorkspace, createWorkspaceUser, updateCustomer } 
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
 test('customer validation normalizes safe directory fields', () => {
-  assert.deepEqual(validateCustomer({ fullName: '  Maria Santos ', code: ' cust-001 ', email: ' MARIA@EXAMPLE.COM ', phone: ' 09171234567 ', address: ' Los Baños ' }), { full_name: 'Maria Santos', customer_code: 'CUST-001', email: 'maria@example.com', phone: '09171234567', address: 'Los Baños' });
+  assert.deepEqual(validateCustomer({ fullName: '  Maria Santos ', code: ' cust-001 ', email: 'MARIA@EXAMPLE.COM', phone: ' 09171234567 ', address: ' Los Baños ' }), { full_name: 'Maria Santos', customer_code: 'CUST-001', email: 'maria@example.com', phone: '09171234567', address: 'Los Baños' });
 });
 
 test('customer validation rejects unsafe or incomplete records', () => {
   for (const value of [{ fullName: '', code: 'C-1' }, { fullName: 'Customer', code: 'bad code' }, { fullName: 'Customer', code: 'CUST-1', email: 'invalid' }]) assert.throws(() => validateCustomer(value), error => error.status === 400);
 });
 
-test('workspace account creation permits staff roles and rejects customer or legacy roles', async () => {
+test('workspace account creation stores canonical staff roles and rejects customer roles', async () => {
   const auth = { createUser: async input => ({ uid: 'admin-uid', ...input }), deleteUser: async () => { } };
   const db = memoryFirestore();
-  for (const role of ['OPERATOR', 'USER', 'CUSTOMER']) await assert.rejects(() => createWorkspaceUser(auth, db, 'actor-admin', { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role }), error => error.status === 400);
-  const result = await createWorkspaceUser(auth, db, 'actor-admin', { fullName: 'Test Admin', email: 'admin@example.test', password: 'test-password-with-length', role: 'ADMIN' });
-  assert.equal(result.role, 'ADMIN');
-  assert.equal(db.data('users', 'admin-uid').role, 'ADMIN');
+  const details = { fullName: 'Test Operator', email: 'admin@example.test', password: 'TestPassword9', confirmPassword: 'TestPassword9' }, options = { validateEmail: async value => value };
+  for (const role of ['USER', 'CUSTOMER']) await assert.rejects(() => createWorkspaceUser(auth, db, 'actor-admin', { ...details, role }), error => error.status === 400);
+  const result = await createWorkspaceUser(auth, db, 'actor-admin', { ...details, role: 'OPERATOR' }, new Date(), options);
+  assert.equal(result.role, 'OPERATOR');
+  assert.equal(db.data('users', 'admin-uid').role, 'OPERATOR');
   assert.equal(db.data('users', 'admin-uid').is_active, true);
   const ownerDb = memoryFirestore();
-  const owner = await createWorkspaceUser(auth, ownerDb, 'actor-owner', { fullName: 'Test Owner', email: 'owner@example.test', password: 'test-password-with-length', role: 'OWNER' });
+  const owner = await createWorkspaceUser(auth, ownerDb, 'actor-owner', { ...details, fullName: 'Test Owner', role: 'OWNER' }, new Date(), options);
   assert.equal(owner.role, 'OWNER');
   assert.equal(ownerDb.data('users', 'admin-uid').role, 'OWNER');
 });

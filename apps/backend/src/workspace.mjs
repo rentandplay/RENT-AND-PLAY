@@ -5,6 +5,12 @@ import { auditFields, stageAudit } from './audit.mjs';
 import { isStaffRole, normalizeRole } from './roles.mjs';
 import { allocateCustomerCode } from './customer-codes.mjs';
 import { validateInstapayQr } from './payment-proof.mjs';
+import { randomBytes } from 'node:crypto';
+import { emailError, nameError, passwordError, passwordMatchError, phoneError, validationFailure, createEmailDomainValidator } from './account-validation.mjs';
+import { createAccountMailer } from './account-mail.mjs';
+
+const validateEmailDomain = createEmailDomainValidator();
+const sendAccountCredentials = createAccountMailer();
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const rows = snapshot => snapshot.docs.map(docData);
@@ -24,16 +30,15 @@ export function validateCustomer(input = {}) {
     if (value.length > max) fail(400, `${label} must be ${max} characters or fewer.`);
     return value;
   };
-  const full_name = bounded('fullName', 150, 'customer name'), customer_code = bounded('code', 50, 'customer code').toUpperCase(), email = bounded('email', 191, 'customer email').toLowerCase(), phone = bounded('phone', 40, 'phone number'), address = bounded('address', 500, 'customer address');
-  if (full_name.length < 2) fail(400, 'Enter the customer’s full name.');
+  const full_name = bounded('fullName', 150, 'customer name'), customer_code = bounded('code', 50, 'customer code').toUpperCase(), email = bounded('email', 254, 'customer email').toLowerCase(), phone = bounded('phone', 40, 'phone number'), address = bounded('address', 500, 'customer address');
+  validationFailure(nameError(full_name));
   if (!/^[A-Z0-9][A-Z0-9_-]{1,49}$/.test(customer_code)) fail(400, 'Customer code must use letters, numbers, dashes, or underscores.');
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(400, 'Enter a valid customer email.');
-  const phoneDigits = phone.replace(/\D/g, '').length;
-  if (phone && (!/^\+?[0-9\s().-]+$/.test(phone) || phoneDigits < 7 || phoneDigits > 15)) fail(400, 'Enter a phone number with 7–15 digits.');
+  validationFailure(emailError(input.email || '', false));
+  validationFailure(phoneError(phone, false));
   return { full_name, customer_code, email: email || null, phone: phone || null, address: address || null };
 }
 
-export async function loadWorkspace(db, role = 'ADMIN', now = new Date(), { ownerUid = '' } = {}) {
+export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { ownerUid = '' } = {}) {
   role = normalizeRole(role);
   const names = ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history', 'item_condition_records'];
   const auditCollection = db.collection('audit_logs');
@@ -53,7 +58,6 @@ export async function loadWorkspace(db, role = 'ADMIN', now = new Date(), { owne
       due_at: record.due_at ?? record.dueDate,
       created_at: record.created_at ?? record.startDate,
       rental_fee: record.rental_fee ?? record.rateFee,
-      deposit_amount: record.deposit_amount ?? record.deposit,
       delivery_location: record.delivery_location ?? record.deliveryLocation,
       payment_method: record.payment_method ?? record.paymentMethod,
       payment_confirmed_by_admin: record.payment_confirmed_by_admin ?? record.paymentConfirmedByAdmin,
@@ -115,7 +119,7 @@ export async function loadWorkspace(db, role = 'ADMIN', now = new Date(), { owne
   const statusHistory = source.item_status_history.map(({ id, item_id, old_status, new_status, changed_at }) => serial({ id, item_id, old_status, new_status, changed_at }));
   const customers = source.customers.map(customer => {
     const linkedProfile = customer.auth_uid ? userProfiles.get(String(customer.auth_uid)) : null;
-    return linkedProfile && normalizeRole(linkedProfile.role) === 'USER'
+    return linkedProfile && normalizeRole(linkedProfile.role) === 'CUSTOMER'
       ? { ...customer, full_name: linkedProfile.full_name || linkedProfile.name || customer.full_name, email: linkedProfile.email || customer.email, phone: linkedProfile.phone || customer.phone }
       : customer;
   });
@@ -131,12 +135,14 @@ export async function createCustomer(db, actor, input, now = new Date()) {
   return serial({ id: ref.id, ...value, is_active: true, created_at: now, updated_at: now });
 }
 
-export async function createMobileCustomerAccount(auth, db, actor, input, now = new Date()) {
+export async function createMobileCustomerAccount(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailDomain } = {}) {
   const validated = validateCustomer(input), password = typeof input?.password === 'string' ? input.password : '', confirmPassword = typeof input?.confirmPassword === 'string' ? input.confirmPassword : '';
   if (!actor) fail(401, 'An authenticated administrator is required.');
   if (!validated.email) fail(400, 'An email address is required for mobile app sign-in.');
-  if (password.length < 12 || password.length > 128 || !password.trim()) fail(400, 'Password must be 12–128 characters.');
-  if (confirmPassword !== password) fail(400, 'Passwords do not match.');
+  validationFailure(passwordError(password));
+  validationFailure(passwordMatchError(password, confirmPassword));
+  validationFailure(phoneError(validated.phone));
+  await validateEmail(validated.email);
   if (!(await db.collection('users').where('email', '==', validated.email).limit(1).get()).empty) fail(409, 'An account with that email already exists. Activate or recover the existing account instead.');
   if (!(await db.collection('customers').where('email', '==', validated.email).limit(1).get()).empty) fail(409, 'A customer with that email already exists. Edit the existing customer or use another email.');
 
@@ -145,19 +151,19 @@ export async function createMobileCustomerAccount(auth, db, actor, input, now = 
   try {
     created = await auth.createUser({ displayName: value.full_name, email: value.email, password, emailVerified: false, disabled: false });
     const uid = String(created.uid), userRef = db.collection('users').doc(uid), customerRef = db.collection('customers').doc(uid), batch = db.batch();
-    const profile = { full_name: value.full_name, email: value.email, phone: value.phone, role: 'USER', is_active: true, hasAcceptedTerms: false, created_at: now, updated_at: now, last_login_at: null };
+    const profile = { full_name: value.full_name, email: value.email, phone: value.phone, role: 'CUSTOMER', is_active: true, hasAcceptedTerms: false, created_at: now, updated_at: now, last_login_at: null };
     const customer = { ...value, auth_uid: uid, is_active: true, created_at: now, updated_at: now, created_by: String(actor) };
     batch.create(userRef, profile);
     batch.create(customerRef, customer);
     stageAudit(batch, db, actor, 'USER_CREATED', 'USER', uid, { after: { ...profile, hasAcceptedTerms: false }, now });
     stageAudit(batch, db, actor, 'CUSTOMER_CREATED', 'CUSTOMER', uid, { after: customer, now });
     await batch.commit();
-    return serial({ id: uid, ...customer, role: 'USER' });
+    return serial({ id: uid, ...customer, role: 'CUSTOMER' });
   } catch (error) {
     if (created?.uid) await auth.deleteUser(String(created.uid)).catch(() => { });
     if (error.code === 'auth/email-already-exists') fail(409, 'That email already has a sign-in account. Use the existing account or another email.');
     if (error.code === 'auth/invalid-email') fail(400, 'Enter a valid email address.');
-    if (error.code === 'auth/invalid-password') fail(400, 'Password must be at least 12 characters.');
+    if (error.code === 'auth/invalid-password') fail(400, 'Use at least 8 characters, one capital letter, and one number.');
     throw error;
   }
 }
@@ -173,7 +179,7 @@ export async function updateCustomer(db, actor, id, input, now = new Date(), aut
       if (!auth) fail(503, 'Mobile account status updates are unavailable.');
       userRef = db.collection('users').doc(authUid);
       const userSnap = await userRef.get();
-      if (!userSnap.exists || String(userSnap.data().role || '').toUpperCase() !== 'USER') fail(409, 'The linked mobile account is missing or has an unexpected role.');
+      if (!userSnap.exists || normalizeRole(userSnap.data().role) !== 'CUSTOMER') fail(409, 'The linked mobile account is missing or has an unexpected role.');
       userProfile = userSnap.data();
       try { authUser = await auth.getUser(authUid); }
       catch (error) { if (error.code === 'auth/user-not-found') fail(409, 'The linked Firebase sign-in account could not be found.'); throw error; }
@@ -203,7 +209,7 @@ export async function updateCustomer(db, actor, id, input, now = new Date(), aut
     if (!auth) fail(503, 'Mobile account updates are unavailable.');
     userRef = db.collection('users').doc(authUid);
     const userSnap = await userRef.get();
-    if (!userSnap.exists || String(userSnap.data().role || '').toUpperCase() !== 'USER') fail(409, 'The linked mobile account is missing or has an unexpected role.');
+    if (!userSnap.exists || normalizeRole(userSnap.data().role) !== 'CUSTOMER') fail(409, 'The linked mobile account is missing or has an unexpected role.');
     userProfile = userSnap.data();
     try { linkedAuthUser = await auth.getUser(authUid); }
     catch (error) { if (error.code === 'auth/user-not-found') fail(409, 'The linked Firebase sign-in account could not be found.'); throw error; }
@@ -237,8 +243,8 @@ export async function changeCustomerPassword(db, actor, id, input, auth = null, 
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) fail(400, 'A valid customer ID is required.');
   if (!input || typeof input.newPassword !== 'string' || typeof input.confirmNewPassword !== 'string') fail(400, 'Enter and confirm the new password.');
   const password = input.newPassword;
-  if (password.length < 12 || password.length > 128 || !password.trim()) fail(400, 'Password must be 12–128 characters.');
-  if (input.confirmNewPassword !== password) fail(400, 'Passwords do not match.');
+  validationFailure(passwordError(password));
+  validationFailure(passwordMatchError(password, input.confirmNewPassword));
   if (!auth) fail(503, 'Mobile account password changes are unavailable.');
 
   const customerRef = db.collection('customers').doc(id), customerDoc = await customerRef.get();
@@ -246,12 +252,12 @@ export async function changeCustomerPassword(db, actor, id, input, auth = null, 
   const customer = customerDoc.data(), authUid = typeof customer.auth_uid === 'string' ? customer.auth_uid : '';
   if (!authUid) fail(409, 'This customer does not have a linked mobile app login.');
   const userDoc = await db.collection('users').doc(authUid).get();
-  if (!userDoc.exists || String(userDoc.data().role || '').toUpperCase() !== 'USER') fail(409, 'The linked mobile account is missing or has an unexpected role.');
+  if (!userDoc.exists || normalizeRole(userDoc.data().role) !== 'CUSTOMER') fail(409, 'The linked mobile account is missing or has an unexpected role.');
   try { await auth.getUser(authUid); }
   catch (error) { if (error.code === 'auth/user-not-found') fail(409, 'The linked Firebase sign-in account could not be found.'); throw error; }
   try { await auth.updateUser(authUid, { password }); }
   catch (error) {
-    if (error.code === 'auth/invalid-password') fail(400, 'Password must be 12–128 characters.');
+    if (error.code === 'auth/invalid-password') fail(400, 'Use at least 8 characters, one capital letter, and one number.');
     throw error;
   }
 
@@ -309,7 +315,7 @@ export async function deleteArchivedCustomer(db, actor, id, input, auth = null, 
         userDoc = await tx.get(db.collection('users').doc(authUid));
         if (userDoc.exists) {
           user = userDoc.data();
-          if (String(user.role || '').toUpperCase() !== 'USER') fail(409, 'The linked mobile account has an unexpected role and cannot be deleted with this customer.');
+          if (normalizeRole(user.role) !== 'CUSTOMER') fail(409, 'The linked mobile account has an unexpected role and cannot be deleted with this customer.');
         }
       }
       tx.delete(customerRef);
@@ -334,16 +340,16 @@ export async function deleteArchivedCustomer(db, actor, id, input, auth = null, 
 
 export async function saveRate(db, actor, input, now = new Date()) {
   const itemId = clean(input.itemId, 128), rateType = clean(input.rateType, 20).toUpperCase();
-  const rentalRate = Number(input.rentalRate), deposit = Number(input.deposit || 0), late = Number(input.latePenalty || 0);
-  if (!itemId || !['DAILY', 'HOURLY', 'FLAT'].includes(rateType) || ![rentalRate, deposit, late].every(Number.isFinite) || rentalRate < 0 || deposit < 0 || late < 0) fail(400, 'Enter valid non-negative rate values.');
+  const rentalRate = Number(input.rentalRate), late = Number(input.latePenalty || 0);
+  if (!itemId || !['DAILY', 'HOURLY', 'FLAT'].includes(rateType) || ![rentalRate, late].every(Number.isFinite) || rentalRate < 0 || late < 0) fail(400, 'Enter valid non-negative rate values.');
   const item = await db.collection('items').doc(itemId).get(); if (!item.exists) fail(404, 'Equipment not found.');
   const active = await db.collection('item_rates').where('item_id', '==', itemId).get(), batch = db.batch();
   for (const doc of active.docs) if (doc.data().is_active !== false) batch.update(doc.ref, { is_active: false, effective_to: now });
-  const ref = db.collection('item_rates').doc(), value = { item_id: itemId, rate_type: rateType, rental_rate: rentalRate, deposit_amount: deposit, late_penalty_rate: late, is_active: true };
+  const ref = db.collection('item_rates').doc(), value = { item_id: itemId, rate_type: rateType, rental_rate: rentalRate, late_penalty_rate: late, is_active: true };
   batch.create(ref, { ...value, effective_from: now, effective_to: null, created_by: String(actor) });
   stageAudit(batch, db, actor, 'RATE_UPDATED', 'ITEM_RATE', ref.id, { after: { ...value, item_name: item.data().name || null }, now });
   await batch.commit();
-  return { id: ref.id, item_id: itemId, rate_type: rateType, rental_rate: rentalRate, deposit_amount: deposit, late_penalty_rate: late, is_active: true };
+  return { id: ref.id, item_id: itemId, rate_type: rateType, rental_rate: rentalRate, late_penalty_rate: late, is_active: true };
 }
 
 export async function savePricing(db, actor, input, now = new Date()) {
@@ -376,25 +382,35 @@ export async function savePaymentSettings(db, actor, input, now = new Date()) {
   return { ...value };
 }
 
-export async function createWorkspaceUser(auth, db, actor, input, now = new Date()) {
-  const full_name = clean(input.fullName, 150), email = clean(input.email, 191).toLowerCase(), password = String(input.password || ''), role = clean(input.role, 20).toUpperCase();
-  if (full_name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12 || !['ADMIN', 'OWNER'].includes(role)) fail(400, 'Enter a valid name, email, operator or owner role, and password of at least 12 characters.');
+export async function createWorkspaceUser(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailDomain, sendCredentials = sendAccountCredentials } = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Account details are required.');
+  validationFailure(nameError(input.fullName));
+  validationFailure(emailError(input.email));
+  const full_name = input.fullName.trim().replace(/\s+/g, ' '), email = input.email.toLowerCase(), role = normalizeRole(input.role);
+  if (!['OPERATOR', 'OWNER'].includes(role)) fail(400, 'Choose Owner or Operator for this staff account.');
+  const mode = input.passwordMode || 'manual';
+  if (!['generated', 'manual'].includes(mode)) fail(400, 'Choose how to set the temporary password.');
+  const password = mode === 'generated' ? 'Rp9!' + randomBytes(18).toString('base64url') : input.password;
+  validationFailure(passwordError(password));
+  if (mode === 'manual') validationFailure(passwordMatchError(password, input.confirmPassword));
+  await validateEmail(email);
   let created;
   try {
     created = await auth.createUser({ displayName: full_name, email, password, emailVerified: false, disabled: false });
-    const value = { full_name, email, role, is_active: true }, batch = db.batch();
+    const value = { full_name, email, role, is_active: true, must_change_password: true }, batch = db.batch();
     batch.create(db.collection('users').doc(created.uid), { ...value, created_at: now, last_login_at: null });
     stageAudit(batch, db, actor, 'USER_CREATED', 'USER', created.uid, { after: value, now });
-    await batch.commit(); return { id: created.uid, name: full_name, email, role, is_active: true };
+    if (mode === 'generated') await sendCredentials({ email, fullName: full_name, role, password });
+    await batch.commit(); return { id: created.uid, name: full_name, email, role, is_active: true, mustChangePassword: true, credentialsEmailSent: mode === 'generated' };
   } catch (error) { if (created) await auth.deleteUser(created.uid).catch(() => { }); if (error.code === 'auth/email-already-exists') fail(409, 'That email is already in use.'); throw error; }
 }
 
 export async function updateWorkspaceUser(auth, db, actor, id, input, now = new Date(), { ownerUid = process.env.SUPER_ADMIN_UID || '' } = {}) {
   if (String(actor) === String(id) && input.isActive === false) fail(400, 'You cannot deactivate your own account.');
   const ref = db.collection('users').doc(String(id)), snap = await ref.get(); if (!snap.exists) fail(404, 'User not found.');
-  const account = snap.data(), currentRole = String(account.role || '').toUpperCase();
-  const role = clean(input.role ?? currentRole, 20).toUpperCase(), is_active = input.isActive !== false;
-  if (!['ADMIN', 'USER', 'OWNER'].includes(currentRole) || role !== currentRole) fail(400, 'Account roles cannot be changed here.');
+  const account = snap.data(), currentRole = normalizeRole(account.role);
+  const role = normalizeRole(input.role ?? currentRole), is_active = input.isActive !== false;
+  if (!['OPERATOR', 'CUSTOMER', 'OWNER'].includes(currentRole) || role !== currentRole) fail(400, 'Account roles cannot be changed here.');
   if ((currentRole === 'OWNER' || String(id) === String(ownerUid).trim()) && !is_active) fail(400, 'Owner accounts cannot be deactivated from the account list.');
   const before = auditFields(account, accountFields), batch = db.batch();
   await auth.updateUser(String(id), { disabled: !is_active });
@@ -403,11 +419,11 @@ export async function updateWorkspaceUser(auth, db, actor, id, input, now = new 
     const action = before.is_active !== is_active ? is_active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED' : 'USER_UPDATED';
     stageAudit(batch, db, actor, action, 'USER', id, { before, after: { ...before, is_active }, now });
 
-    if (currentRole === 'USER' && is_active) {
+    if (currentRole === 'CUSTOMER' && is_active) {
       const customerRef = db.collection('customers').doc(String(id)), customerSnap = await customerRef.get();
       const currentCustomer = customerSnap.exists ? customerSnap.data() : {};
       const full_name = clean(account.full_name, 150) || 'Customer';
-      const email = clean(account.email, 191).toLowerCase();
+      const email = clean(account.email, 254).toLowerCase();
       const phone = clean(account.phone, 40);
       const customer_code = /^CUST-\d+$/i.test(currentCustomer.customer_code || '')
         ? currentCustomer.customer_code

@@ -17,7 +17,7 @@ const server = http.createServer(async (req, res) => {
     const upstream = http.request({ hostname: '127.0.0.1', port: Number(process.env.API_PORT || 3000), path: req.url, method: req.method, headers }, apiRes => {
       res.writeHead(apiRes.statusCode, apiRes.headers); apiRes.pipe(res);
     });
-    upstream.setTimeout(10000, () => upstream.destroy());
+    upstream.setTimeout(req.url.startsWith('/api/users') || req.url.includes('/registration/email-code') ? 30000 : 10000, () => upstream.destroy());
     upstream.on('error', () => {
       if (!res.headersSent) res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify({ error: 'Backend is not running. Start apps/backend with npm run dev.' }));

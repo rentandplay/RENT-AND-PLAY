@@ -1,12 +1,16 @@
 # Data Dictionary
 
+## Account profiles
+
+`users/{uid}` stores `full_name`, lowercase `email`, `role` (`OWNER`, `OPERATOR`, `CUSTOMER`), `is_active`, and timestamps. Legacy role aliases remain compatible. New staff accounts set `must_change_password: true`; the authenticated password-change procedure clears it and writes `password_changed_at`. Firebase Authentication holds passwords; Firestore and audit logs never store them. See [account access](../architecture/account-access.md).
+
 ## Pricing configuration
 
 `settings/pricing` is the saved business rate sheet. When the document is absent, the backend supplies client-sheet defaults. Invalid saved values raise an error instead of silently changing quoted prices.
 
-- `products[]`: stable `id`, display `name`, group, included items, high-value flag, refundable `deposit_amount`, `overtime_rate_per_hour`, optional new-product `sale_price`, and `rate_options[]`.
+- `products[]`: stable `id`, display `name`, group, included items, `overtime_rate_per_hour`, optional new-product `sale_price`, and `rate_options[]`.
 - `rate_options[]`: stable option `id`, display label, amount in PHP, duration in minutes, and billing kind (`SHORT`, `HOURLY`, `PACKAGE`, `BLOCK`, or `WHOLE_STAY`). Whole-stay options use the resort guest's checkout time as their due time.
-- `rules`: daily opening and closing time, valid-ID requirement, high-value deposit requirement, lost board-game piece fee, booking phone/channel, overtime and after-hours return guidance, whole-stay definition, bike safety, care/damage, and return reminders.
+- `rules`: daily opening and closing time, valid-ID requirement, lost board-game piece fee, booking phone/channel, overtime and after-hours return guidance, whole-stay definition, bike safety, care/damage, and return reminders.
 - `updated_at`, `updated_by`: last save timestamp and workspace user ID.
 
 Each physical `items/{id}` record may include `pricing_product_id`, which connects its QR label to a product in the rate sheet. Existing `item_rates` remain in place for legacy per-item rates and pricing history.
@@ -16,7 +20,7 @@ Each physical `items/{id}` record may include `pricing_product_id`, which connec
 - Each started rental block is charged in full. Hourly rates round up to the next full hour; five-hour card/game rates round up to the next five-hour block.
 - A package is considered once the requested duration reaches its covered number of hourly blocks; the lowest applicable package/hourly amount is used.
 - Overtime adds one configured product rate for every started hour after the due time. Returns after closing are accepted when service reopens; overtime continues until return.
-- Whole-stay board-game rentals are due at the resort guest's checkout. The quote reports valid-ID and refundable-deposit requirements; a zero high-value deposit generates a setup warning.
+- Whole-stay board-game rentals are due at the resort guest's checkout. New quotes contain the rental fee and applicable rental rules; they do not include a deposit.
 - The ₱50 lost-piece fee is configured for board games, matching the note under the board-games section of the client sheet.
 
 ## Existing operational records
@@ -34,17 +38,17 @@ Other collections and fields are documented in [the backend README](../../apps/b
 - QR payment fields: `payment_proof_status` (`NOT_REQUIRED`, `PENDING_REVIEW`, `VERIFIED`, or `REJECTED`), optional `payment_proof_reference`, `payment_proof_note`, and `payment_proof_revision`. `rental_payment_proofs/{rentalId}` stores the latest screenshot, transfer reference, customer ID, review status/note, operator, amount, and timestamps. The screenshot is available only on staff payment review routes, not customer rental list responses.
 - Business payment settings: `settings/business.instapay_qr_data_url`, `instapay_account_name`, `instapay_account_number`, and `instapay_instructions` are owner-managed and returned to authenticated customer checkout.
 - Physical receipt: server `received_at`/`received_by` and `receipt_verification` stop overtime before inspection. `confirmed_return_at`/`confirmed_return_by` record inspection completion. Fees use receipt time rather than the inspection delay.
-- Payment fields: `rental_paid_amount`, `deposit_collected_amount`, `deposit_applied_amount`, `deposit_refunded_amount`, `rental_refunded_amount`, `balance_due`, `refund_due`, `deposit_remaining`, `payment_status`. Recorded payments survive hold cancellation/expiry; equipment availability does not clear money owed.
-- `rental_settlements/{rentalId_requestKey}`: immutable actual payment/deposit deduction/refund amounts, notes, admin ID, time, and retry key. A repeated identical movement returns the existing record.
+- Payment fields: `rental_paid_amount`, `rental_refunded_amount`, `balance_due`, `refund_due`, and `payment_status`. Older records may retain legacy deposit fields; new rentals do not create or expose them. Recorded payments survive hold cancellation/expiry; equipment availability does not clear money owed.
+- `rental_settlements/{rentalId_requestKey}`: immutable actual rental payment/refund amounts, notes, admin ID, time, and retry key. A repeated identical movement returns the existing record. Legacy deposit settlement fields may remain in historical documents.
 - `item_condition_photos/{id}`: admin-only JPEG data URL, rental/item IDs, RELEASE/RETURN phase, creator and time. Inspection snapshots contain `photo_ids` and `accessories_checked`; photos are loaded separately to keep list responses small.
-- `rentals/{id}`: item/customer IDs, lifecycle status, rental/deposit amounts, due/confirmation/actual-return times; `rental_request_id`, `latest_return_request_id/status/reason`, confirming terminal IDs, and `final_reason`.
-- `fee_breakdown`: pricing snapshot saved at reservation. Includes version/source (`RATE_SHEET` or `ITEM_RATE`), product/rate IDs, package label and kind, component units/prices/totals, requested/billed minutes, start/due times, PHP base fee, refundable deposit, overtime unit/rate, saved grace period and lost-piece fee. A valid return appends actual return time, overtime units/amount, explicit penalty/reason, final rental charges, and finalization time. Pricing edits never replace the original snapshot.
+- `rentals/{id}`: item/customer IDs, lifecycle status, rental fee, due/confirmation/actual-return times; `rental_request_id`, `latest_return_request_id/status/reason`, confirming terminal IDs, and `final_reason`. Older records may have deposit fields.
+- `fee_breakdown`: pricing snapshot saved at reservation. Includes version/source (`RATE_SHEET` or `ITEM_RATE`), product/rate IDs, package label and kind, component units/prices/totals, requested/billed minutes, start/due times, PHP base fee, overtime unit/rate, saved grace period and lost-piece fee. A valid return appends actual return time, overtime units/amount, explicit penalty/reason, final rental charges, and finalization time. Pricing edits never replace the original snapshot.
 - `release_condition`, `return_condition`: condition, notes, inspector ID/name and time, result (`AVAILABLE` or `UNDER_MAINTENANCE`), terminal ID/code, confirmation time, and immutable record ID. Repair changes current inventory condition without rewriting these snapshots.
 - `item_condition_records/{id}`: append-only confirmation records with rental/item/request IDs, phase (`RELEASE` or `RETURN`), and inspection snapshot. Pending inspections remain drafts on their requests until trusted confirmation.
 - `maintenance_records/{id}`: damaged/inspection-required returns add `rental_id`, `verification_request_id`, `condition_record_id`, `inspection_notes`, and `inspected_by`. Repair notes remain in `details`; original inspection notes are retained.
 - `items/{id}.reserved_rental_id`: reservation pointer. Item state stays AVAILABLE while dashboard/inventory derive Pending from its open rental. Confirmation clears the pointer and sets RENTED; expiry/rejection releases it without changing another rental's state.
 
-Rate-sheet overtime bills each started hour. Per-item HOURLY and FLAT late rates bill each started hour; per-item DAILY late rates bill each started day. Refundable deposits are excluded from final rental charges. Rental requests do not accept final fee values from the client.
+Rate-sheet overtime bills each started hour. Per-item HOURLY and FLAT late rates bill each started hour; per-item DAILY late rates bill each started day. Rental requests do not accept final fee values from the client. New rentals collect only the quoted rental fee; legacy records remain intact.
 
 Legacy data is shown without inventing history. Absent penalty, overtime, package, duration, or inspection fields are labelled not recorded. Returning a legacy rental saves its new inspection and explicit penalty while unprovable overtime/final charges remain unknown; current rates cannot backfill an old agreement.
 

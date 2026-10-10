@@ -26,5 +26,5 @@ test('Firebase rejects invalid credentials without creating a session',async()=>
 });
 
 test('user response exposes profile fields only',()=>{
-  assert.deepEqual(publicUser({id:'uid',full_name:'Owner',email:'owner@example.test',role:'OWNER',password_hash:'secret'}),{id:'uid',name:'Owner',email:'owner@example.test',role:'OWNER'});
+  assert.deepEqual(publicUser({id:'uid',full_name:'Owner',email:'owner@example.test',role:'OWNER',password_hash:'secret'}),{id:'uid',name:'Owner',email:'owner@example.test',role:'OWNER',mustChangePassword:false});
 });

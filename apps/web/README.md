@@ -4,9 +4,11 @@ Responsive admin login and dashboard using the supplied logo. Built with HTML, C
 
 ## Run
 
+New Owner/Operator accounts must change their temporary password before opening the workspace. Account creation is under **Settings → Staff** for Owners. Forms show inline errors and forgot password confirms the recipient. See [account access](../../docs/architecture/account-access.md).
+
 Configure and start the backend first; see `../backend/README.md` for database setup and first-account creation. In a second VS Code terminal, from `apps/web`, run `npm run dev`, then open http://127.0.0.1:5173.
 
-Sign in with a separate, active staff account. `ADMIN` is the operator role and `OWNER` is the super admin role. `USER` accounts are customers for the mobile app and cannot sign in to the web workspace. Set backend `SUPER_ADMIN_UID` to bootstrap the initial owner from an existing Firebase Auth account.
+Sign in with a separate, active staff account. `OPERATOR` is the operator role and `OWNER` is the super admin role. `CUSTOMER` accounts are customers for the mobile app and cannot sign in to the web workspace. Set backend `SUPER_ADMIN_UID` to bootstrap the initial owner from an existing Firebase Auth account.
 
 `npm run check` checks JavaScript syntax. `npm test` checks analytics calculations, settings and MX10 printer commands/transfer behavior.
 
@@ -17,7 +19,7 @@ Sign in with a separate, active staff account. `ADMIN` is the operator role and 
 - Customer directory with search, add/edit, and reversible archive/restore controls.
 - Dedicated rental, return, and complete transaction-history views backed by Firestore records.
 - Rental and return request forms with release/return inspections, recorded penalties, and an in-dialog confirmation check. When automatic refresh is enabled, pending handoff dialogs update every 30 seconds. Physical terminal confirmation remains required.
-- Pricing workspace with compact pricing settings and a quote preview. Admins can manage hourly and package prices, card sale prices, deposits, overtime, service hours, and rental rules. Physical equipment can be linked to a pricing product by its QR inventory record; legacy per-item rates keep their history.
+- Pricing workspace with compact pricing settings and a quote preview. Admins can manage hourly and package prices, card sale prices, overtime, service hours, and rental rules. Physical equipment can be linked to a pricing product by its QR inventory record; legacy per-item rates keep their history.
 - Reports with all 14 business analytics: revenue and rental-count trends; equipment utilization; most/least rented (including zero-rental items); revenue per item and category; overdue and on-time rates; average rental duration; repeat customer rate; maintenance frequency and downtime; terminal verification time with average, median and P95.
 - Analytics filters for 7/30/90/365 days or custom dates (up to 366 days), daily/calendar-week/calendar-month grouping, category, and equipment. Full equipment performance, trend values, category totals and terminal results use 5-row pagination where needed. CSV exports all matching rows, not just the current page.
 - In-page definitions and data-coverage notes explain formulas, exclusions, missing timestamps and partial periods. See `../../docs/analytics-demo-guide.md` for the panel demonstration guide.
@@ -37,7 +39,7 @@ Sign in with a separate, active staff account. `ADMIN` is the operator role and 
 
 The web dashboard reads real database records through `/api/dashboard`, proxied to the backend on port 3000. Database credentials never go to the browser. Empty tables show empty lists and zero totals.
 
-Reports use ACTIVE/COMPLETED rentals and their recorded fees, not verified payment receipts. Refundable deposits, pending requests, and cancelled rentals are excluded. Date filters use Philippine time; calendar weeks start on Monday. Current equipment status and the "overdue now" count are live snapshots. The overdue rate uses rentals due in the period; the on-time rate uses completed returns in the period, so the two rates are not complements.
+Reports use ACTIVE/COMPLETED rentals and their recorded rental fees, not verified payment receipts. Pending requests and cancelled rentals are excluded. Date filters use Philippine time; calendar weeks start on Monday. Current equipment status and the "overdue now" count are live snapshots. The overdue rate uses rentals due in the period; the on-time rate uses completed returns in the period, so the two rates are not complements.
 
 Utilization merges overlapping rental intervals and divides by observed calendar hours since item creation, excluding recorded archived intervals. Nights and maintenance remain in the denominator. Missing creation dates use the period start and are disclosed; insufficient archive history excludes that item from utilization. Downtime merges maintenance intervals per item, including work carried over into the period. Terminal timing requires valid request/confirmation dates and a terminal ID, with explicit rental/return confirmation fallback. Missing samples show a dash instead of a fabricated average.
 

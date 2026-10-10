@@ -56,6 +56,76 @@ function trendBuckets(range,groupBy) {
   return result;
 }
 
+function completeTrendBuckets(trend,groupBy,today) {
+  return trend.filter(bucket=>{
+    if(bucket.to>=today)return false;
+    if(groupBy==='daily')return bucket.from===bucket.to;
+    const start=new Date(`${bucket.from}T00:00:00Z`),end=new Date(`${bucket.to}T00:00:00Z`);
+    const days=Math.round((end-start)/DAY)+1;
+    if(groupBy==='weekly')return start.getUTCDay()===1&&end.getUTCDay()===0&&days===7;
+    if(start.getUTCDate()!==1)return false;
+    const next=new Date(Date.UTC(start.getUTCFullYear(),start.getUTCMonth()+1,1));
+    next.setUTCDate(next.getUTCDate()-1);
+    return next.toISOString().slice(0,10)===bucket.to;
+  });
+}
+
+function forecastAnalytics(trend,groupBy,range,today) {
+  const completed=completeTrendBuckets(trend,groupBy,today);
+  const requirements={daily:28,weekly:8,monthly:8},horizons={daily:7,weekly:4,monthly:3};
+  const requiredPeriods=requirements[groupBy]||28,horizon=horizons[groupBy]||7;
+  const historyWindow=groupBy==='monthly'?completed.slice(-6):completed.slice(-requiredPeriods);
+  const base={available:false,groupBy,requiredPeriods,completedPeriods:completed.length,horizon,points:[],method:groupBy==='daily'?'Same-weekday average from up to 4 recent weeks':groupBy==='weekly'?'Average of the last 8 complete weeks':'Average of the last 6 complete months'};
+  if(completed.length<requiredPeriods)return {...base,reason:`Need ${requiredPeriods} complete ${groupBy} periods; found ${completed.length}.`};
+  if(historyWindow.reduce((sum,row)=>sum+row.rentals,0)<4)return {...base,reason:'Need at least 4 confirmed rentals in the completed history window.'};
+
+  let from=shiftDate(range.to,1);
+  if(groupBy==='weekly')while(new Date(`${from}T00:00:00Z`).getUTCDay()!==1)from=shiftDate(from,1);
+  if(groupBy==='monthly'){
+    const next=new Date(`${range.to.slice(0,7)}-01T00:00:00Z`);next.setUTCMonth(next.getUTCMonth()+1);from=next.toISOString().slice(0,10);
+  }
+  const points=[];
+  for(let index=0;index<horizon;index++){
+    let to,label,samples=historyWindow;
+    if(groupBy==='daily'){
+      to=from;label=labelDate(from);
+      const weekday=new Date(`${from}T00:00:00Z`).getUTCDay();
+      samples=historyWindow.filter(row=>new Date(`${row.from}T00:00:00Z`).getUTCDay()===weekday).slice(-4);
+    }else if(groupBy==='weekly'){
+      to=shiftDate(from,6);label=`${labelDate(from)}–${labelDate(to)}`;
+    }else{
+      const next=new Date(`${from.slice(0,7)}-01T00:00:00Z`);next.setUTCMonth(next.getUTCMonth()+1);next.setUTCDate(next.getUTCDate()-1);
+      to=next.toISOString().slice(0,10);label=monthFormatter.format(new Date(`${from}T00:00:00Z`));
+    }
+    points.push({from,to,label,rentals:average(samples.map(row=>row.rentals))??0,fees:average(samples.map(row=>row.fees))??0,samplePeriods:samples.length});
+    from=shiftDate(to,1);
+  }
+  return {...base,available:true,completedPeriods:historyWindow.length,points};
+}
+
+function buildRecommendations(performance,totals,range) {
+  const recommendations=[];
+  const add=(type,title,action,basis)=>recommendations.push({type,title,action,basis});
+  if(totals.dueRentals>=5&&totals.overdueRate!==null&&totals.overdueRate>=.2){
+    add('Operations','Review overdue follow-up','Check reminder timing and the return handoff process before changing due-date policies.',`${totals.overdueRentals} of ${totals.dueRentals} valid rentals due in this period were late (${Math.round(totals.overdueRate*100)}%).`);
+  }
+  if(totals.verificationCount>=5&&totals.verificationP95Seconds>=60){
+    add('Operations','Review terminal handoff delays','Check the operator queue and terminal/network conditions; this measure includes both queue and operator wait.',`${totals.verificationCount} confirmations measured; P95 was ${Math.round(totals.verificationP95Seconds)} seconds.`);
+  }
+  const repeatService=performance.filter(row=>row.known&&row.maintenanceCount>=2).sort((a,b)=>b.maintenanceCount-a.maintenanceCount||b.downtimeHours-a.downtimeHours).slice(0,2);
+  for(const row of repeatService)add('Reliability',`Review repeat service for ${row.name}`,'Check whether the recent service records point to a recurring issue or a preventive inspection schedule.',`${row.maintenanceCount} maintenance records started in this period, including inspections; ${row.downtimeHours.toFixed(1)} item-hours of downtime.`);
+
+  const active=performance.filter(row=>row.known&&row.active&&row.status!=='UNDER_MAINTENANCE'&&row.observedHours>0);
+  const topCount=Math.max(1,Math.ceil(active.length*.25));
+  const highDemand=[...active].sort((a,b)=>b.rentals-a.rentals||b.fees-a.fees||a.name.localeCompare(b.name)).slice(0,topCount).filter(row=>row.rentals>=3);
+  for(const row of highDemand)add('Equipment',`Review capacity for ${row.name}`,'Check availability and booking pressure before deciding whether another unit is worthwhile.',`${row.rentals} confirmed rentals in the period; this item is in the top quarter of active equipment by rental count.`);
+  if(range.days>=30&&totals.rentals>=5){
+    const noDemand=active.filter(row=>row.rentals===0).slice(0,3);
+    for(const row of noDemand)add('Equipment',`Review listing for ${row.name}`,'Check visibility, relevance, and rate fit; keep the item available while you review the context.',`No confirmed rentals in ${range.days} days while the item was active for ${row.observedHours.toFixed(0)} observed hours.`);
+  }
+  return recommendations.slice(0,6);
+}
+
 // Merge overlaps so one physical item never contributes the same hour twice.
 function mergeIntervals(intervals) {
   const result=[];
@@ -109,11 +179,11 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const repeatCustomers=[...customerCounts.values()].filter(count=>count>=2).length;
   const performanceMap=new Map(selectedItems.filter(item=>ms(item.created_at)===null||ms(item.created_at)<asOf).map(item=>[String(item.id),{
     id:String(item.id),name:item.name,code:item.item_code||'',category:categoryMap.get(String(item.category_id))||'Uncategorized',
-    active:item.is_active!==false,known:true,rentals:0,fees:0,maintenanceCount:0,rentedHours:0,downtimeHours:0,observedHours:0,utilization:null
+    active:item.is_active!==false,status:item.status||'',known:true,rentals:0,fees:0,maintenanceCount:0,rentedHours:0,downtimeHours:0,observedHours:0,utilization:null
   }]));
   function itemRow(id,source={}){
     const key=String(id);
-    if(!performanceMap.has(key))performanceMap.set(key,{id:key,name:source.item_name||'Unknown equipment',code:source.item_code||'',category:'Uncategorized',active:false,known:false,rentals:0,fees:0,maintenanceCount:0,rentedHours:0,downtimeHours:0,observedHours:null,utilization:null});
+    if(!performanceMap.has(key))performanceMap.set(key,{id:key,name:source.item_name||'Unknown equipment',code:source.item_code||'',category:'Uncategorized',active:false,status:'',known:false,rentals:0,fees:0,maintenanceCount:0,rentedHours:0,downtimeHours:0,observedHours:null,utilization:null});
     return performanceMap.get(key);
   }
   const categoryTotals=new Map();
@@ -201,17 +271,25 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
     {count:assumedCollectionStart,text:'items have no added date; their observed calendar time starts at the selected period start.'},
     {count:unknownCollectionTime,text:'items have insufficient collection history and are excluded from utilization.'}
   ].filter(row=>row.count>0);
-  return {range,groupBy,asOf:new Date(asOf).toISOString(),confirmed,returns,trend,equipment,leastRented,revenueEquipment,performance,categoryRevenue,equipmentStatus,maintenanceFrequency,maintenanceDowntime,terminalPerformance,linkedConfirmationTimes,quality,totals};
+  const forecast=forecastAnalytics(trend,groupBy,range,manilaDateKey(now));
+  const recommendations=buildRecommendations(performance,totals,range);
+  return {range,groupBy,asOf:new Date(asOf).toISOString(),confirmed,returns,trend,equipment,leastRented,revenueEquipment,performance,categoryRevenue,equipmentStatus,maintenanceFrequency,maintenanceDowntime,terminalPerformance,linkedConfirmationTimes,quality,totals,forecast,recommendations};
 }
 
 export function analyticsCsv(result,data,selection={}) {
   if(result.error)throw new Error(result.error);
   const t=result.totals,number=value=>value===null?'Not enough data':Math.round(value*10000)/10000;
   const category=(data.categories||[]).find(row=>String(row.id)===String(selection.categoryId)),item=(data.items||[]).find(row=>String(row.id)===String(selection.itemId));
+  const forecastRows=result.forecast.available
+    ?[['Method',result.forecast.method],['Completed periods used',result.forecast.completedPeriods],['From','To','Label','Estimated rental fees (PHP)','Estimated rentals'],...result.forecast.points.map(row=>[row.from,row.to,row.label,row.fees,row.rentals])]
+    :[['Status','Unavailable'],['Reason',result.forecast.reason],['Complete periods found',result.forecast.completedPeriods],['Complete periods required',result.forecast.requiredPeriods]];
+  const recommendationRows=result.recommendations.length
+    ?result.recommendations.map(row=>[row.type,row.title,row.action,row.basis])
+    :[['No recommendation thresholds were met for the selected period.']];
   const rows=[
     ['Rent & Play analytics'],['Period',result.range.from,result.range.to],['Grouping',result.groupBy],['Measured through (UTC)',result.asOf],
     ['Category',category?.name||'All categories'],['Equipment',item?.name||'All equipment'],
-    ['Basis','Confirmed rental fees exclude refundable deposits. Dates are grouped in Philippine time.'],[],
+    ['Basis','Confirmed rental fees are grouped in Philippine time.'],[],
     ['Metric','Value','Basis'],
     ['Confirmed rental fees (PHP)',t.fees,'Rental confirmed in period'],['Confirmed rentals',t.rentals,'Rental confirmed in period'],
     ['Average fee (PHP)',number(t.averageFee),'Confirmed fees / confirmed rentals'],
@@ -225,14 +303,16 @@ export function analyticsCsv(result,data,selection={}) {
     ['Maintenance downtime (item-hours)',number(t.downtimeHours),'Merged time per item within period'],
     ['Average terminal verification (seconds)',number(t.verificationSeconds),`${t.verificationCount} valid confirmations in period`],
     ['Median terminal verification (seconds)',number(t.verificationMedianSeconds)],['P95 terminal verification (seconds)',number(t.verificationP95Seconds)],[],
+    ['FORECAST'],...forecastRows,[],
+    ['PRESCRIPTIVE RECOMMENDATIONS'],['Type','Recommendation','Suggested action','Evidence'],...recommendationRows,[],
     ['TREND'],['From','To','Label','Rental fees (PHP)','Rentals'],...result.trend.map(row=>[row.from,row.to,row.label,row.fees,row.rentals]),[],
     ['EQUIPMENT PERFORMANCE'],['Equipment','Item code','Category','Active now','Rentals','Rental fees (PHP)','Rented hours','Observed hours','Utilization (%)','Maintenance started','Downtime hours'],
     ...result.performance.map(row=>[row.name,row.code,row.category,row.active?'Yes':'No',row.rentals,row.fees,number(row.rentedHours),number(row.observedHours),number(row.utilization===null?null:row.utilization*100),row.maintenanceCount,number(row.downtimeHours)]),[],
     ['CATEGORY FEES'],['Category','Rental fees (PHP)','Rentals'],...result.categoryRevenue.map(row=>[row.name,row.fees,row.rentals]),[],
     ['TERMINAL VERIFICATION'],['Terminal','Code','Confirmations','Average seconds','Median seconds','P95 seconds'],...result.terminalPerformance.map(row=>[row.name,row.code,row.count,number(row.averageSeconds),number(row.medianSeconds),number(row.p95Seconds)]),[],
     ['DATA COVERAGE'],...result.quality.map(row=>[row.count,row.text]),['Linked confirmation timestamps',result.linkedConfirmationTimes],[],
-    ['CONFIRMED RENTALS'],['Rental code','Equipment','Customer','Confirmed rental','Status','Rental fee','Refundable deposit','Due','Returned'],
-    ...result.confirmed.map(row=>[row.rental_code||row.id,row.item_name||(data.items||[]).find(item=>String(item.id)===String(row.item_id))?.name||'Unknown equipment',row.customer_name||'',row.confirmed_rental_at,row.status,row.rental_fee,row.deposit_amount,row.due_at,row.confirmed_return_at])
+    ['CONFIRMED RENTALS'],['Rental code','Equipment','Customer','Confirmed rental','Status','Rental fee','Due','Returned'],
+    ...result.confirmed.map(row=>[row.rental_code||row.id,row.item_name||(data.items||[]).find(item=>String(item.id)===String(row.item_id))?.name||'Unknown equipment',row.customer_name||'',row.confirmed_rental_at,row.status,row.rental_fee,row.due_at,row.confirmed_return_at])
   ];
   const cell=value=>{const text=String(value??''),safe=/^[\s]*[=+@-]|^[\t\r\n]/.test(text)?"'"+text:text;return '"'+safe.replaceAll('"','""')+'"';};
   return '\uFEFF'+rows.map(row=>row.map(cell).join(',')).join('\r\n');

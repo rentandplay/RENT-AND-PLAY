@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import nodemailer from 'nodemailer';
+import { emailError, nameError, validationFailure } from './account-validation.mjs';
 
 const CODE_LIFETIME_MS = 10 * 60 * 1000;
 const PROOF_LIFETIME_MS = 10 * 60 * 1000;
@@ -16,6 +17,7 @@ const timestampMs = value => {
   return Number.NaN;
 };
 const normalizeEmail = value => {
+  validationFailure(emailError(value));
   if (typeof value !== 'string') fail(400, 'Enter a valid email address.');
   const email = value.trim().toLowerCase();
   const [localPart] = email.split('@');
@@ -182,9 +184,7 @@ export function createRegistrationOtpService({ db, auth, now = () => new Date() 
     const phone = typeof input?.phone === 'string' ? input.phone.trim() : '';
     if (!uid || email !== claimEmail) fail(403, 'The verified email must match your account.');
     if (!proof || proof.length > 128) fail(400, 'Verify your email before creating the account.');
-    if (name.length < 2 || name.length > 120 || !/^[\p{L}\p{M}]+(?:[ '\u2019.\-][\p{L}\p{M}]+)*$/u.test(name)) {
-      fail(400, 'Enter a valid first and last name.');
-    }
+    validationFailure(nameError(name, { max: 120 }));
     if (!/^\+639\d{9}$/.test(phone)) fail(400, 'Enter a valid Philippine mobile number.');
 
     const ref = db.collection('email_registration_otps').doc(emailKey(email));

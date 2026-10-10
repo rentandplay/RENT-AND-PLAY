@@ -64,7 +64,7 @@ export function validateItem(input,{codeRequired=true}={}) {
   if(pricingProductId&&!/^[a-z0-9-]{1,80}$/.test(pricingProductId))fail(400,'Choose a valid client rate sheet product.');
   if(pricingProductId&&!DEFAULT_PRICING.products.some(product=>product.id===pricingProductId))fail(400,'Choose a product from the client rate sheet.');
   if(pricingProductId&&customRateOptions.length)fail(400,'Choose either customer rate options or a shared pricing product.');
-  return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,rateType,rentalRate,deposit:amount(input.deposit,'Deposit'),latePenalty:amount(input.latePenalty,'Late penalty'),pricingProductId,customRateOptions,imageData:validateImageData(input.imageData)};
+  return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,rateType,rentalRate,latePenalty:amount(input.latePenalty,'Late penalty'),pricingProductId,customRateOptions,imageData:validateImageData(input.imageData)};
 }
 export function equipmentItemCode(sequence) {
   if(!Number.isSafeInteger(sequence)||sequence<1)fail(400,'Equipment code sequence must be a positive whole number.');
@@ -81,7 +81,7 @@ const mapItem=(item,category,rates,rentals,maintenance)=>{
   const rate=currentRate(rates)||{};
   const open=openRentals(rentals).length;
   const status=String(item.status||'UNAVAILABLE').toUpperCase();
-  return serialize({...item,id:String(item.id),status,category_id:String(item.category_id),category:category?.name||item.category||'Uncategorized',rate_type:rate.rate_type??null,rental_rate:rate.rental_rate??null,deposit_amount:rate.deposit_amount??null,late_penalty_rate:rate.late_penalty_rate??null,pricing_product_id:item.pricing_product_id||null,open_rentals:open,open_maintenance:openMaintenance(maintenance).length,effective_status:item.is_active===false?'INACTIVE':status==='AVAILABLE'&&(open>0||item.reserved_rental_id)?'RESERVED_PENDING':status});
+  return serialize({...item,id:String(item.id),status,category_id:String(item.category_id),category:category?.name||item.category||'Uncategorized',rate_type:rate.rate_type??null,rental_rate:rate.rental_rate??null,late_penalty_rate:rate.late_penalty_rate??null,pricing_product_id:item.pricing_product_id||null,open_rentals:open,open_maintenance:openMaintenance(maintenance).length,effective_status:item.is_active===false?'INACTIVE':status==='AVAILABLE'&&(open>0||item.reserved_rental_id)?'RESERVED_PENDING':status});
 };
 
 export async function inventoryList(db) {
@@ -172,7 +172,7 @@ export async function inventoryQrLabels(db) {
 
 const audit=(db,actor,id,action,before,after,now)=>({ref:db.collection('audit_logs').doc(),data:{user_id:String(actor),actor_type:'USER',action,entity_type:'ITEM',entity_id:id,old_values:before||null,new_values:after,created_at:now}});
 const statusRecord=(db,actor,id,oldStatus,newStatus,reference,now)=>oldStatus===newStatus?null:{ref:db.collection('item_status_history').doc(),data:{item_id:id,old_status:oldStatus||null,new_status:newStatus,source:'WEB',reference_type:reference,changed_by:String(actor),changed_at:now}};
-const rateRecord=(actor,id,item,now)=>({item_id:id,rate_type:item.rateType,rental_rate:item.rentalRate,deposit_amount:item.deposit,late_penalty_rate:item.latePenalty,custom_rate_options:item.customRateOptions||[],custom_rate_options_version:2,created_by:String(actor),is_active:true,effective_from:now,effective_to:null});
+const rateRecord=(actor,id,item,now)=>({item_id:id,rate_type:item.rateType,rental_rate:item.rentalRate,late_penalty_rate:item.latePenalty,custom_rate_options:item.customRateOptions||[],custom_rate_options_version:2,created_by:String(actor),is_active:true,effective_from:now,effective_to:null});
 
 export async function createItem(db,actor,input) {
   const item=validateItem(input,{codeRequired:false});
@@ -214,7 +214,7 @@ export async function updateItem(db,actor,id,input) {
     if(String(current.status).toUpperCase()==='AVAILABLE'&&!['GOOD','FAIR'].includes(next.condition))fail(400,'Start maintenance before marking equipment damaged or needing inspection.');
     const now=new Date(),rate=currentRate(rows(ratesSnap));
     const customRatesChanged=JSON.stringify(next.customRateOptions||[])!==JSON.stringify(current.custom_rate_options||[]);
-    const rateChanged=!rate||rate.rate_type!==next.rateType||Number(rate.rental_rate)!==next.rentalRate||Number(rate.deposit_amount)!==next.deposit||Number(rate.late_penalty_rate)!==next.latePenalty||customRatesChanged;
+    const rateChanged=!rate||rate.rate_type!==next.rateType||Number(rate.rental_rate)!==next.rentalRate||Number(rate.late_penalty_rate)!==next.latePenalty||customRatesChanged;
     if(rateChanged){for(const old of rows(ratesSnap).filter(r=>r.is_active!==false))tx.update(db.collection('item_rates').doc(old.id),{is_active:false,effective_to:now});tx.create(db.collection('item_rates').doc(),rateRecord(actor,id,next,now));}
     const changes={category_id:next.categoryId,name:next.name,description:next.description,pricing_product_id:next.pricingProductId,custom_rate_options:next.customRateOptions||[],custom_rate_options_version:2,condition_status:next.condition,updated_at:now};
     if(next.imageData!==undefined)changes.image_data=next.imageData;

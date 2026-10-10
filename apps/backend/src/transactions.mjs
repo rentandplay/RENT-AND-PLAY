@@ -41,7 +41,7 @@ const expired = (request, now) => { const deadline = asDate(request.expires_at);
 export function serializeTransaction(value) {
   if (value instanceof Date || typeof value?.toDate === 'function') return localDateTime(value);
   if (Array.isArray(value)) return value.map(serializeTransaction);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, serializeTransaction(entry)]));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !/deposit/i.test(key)).map(([key, entry]) => [key, serializeTransaction(entry)]));
   return value;
 }
 
@@ -67,7 +67,8 @@ export function validateInspection(input, actor, type, now = new Date()) {
   if (type === 'RENTAL' && !['GOOD', 'FAIR'].includes(condition)) fail(400, 'Release inspection must confirm good or fair condition.');
   const result = input.result || (['GOOD', 'FAIR'].includes(condition) ? 'AVAILABLE' : 'UNDER_MAINTENANCE');
   if (!['AVAILABLE', 'UNDER_MAINTENANCE'].includes(result) || (type === 'RENTAL' && result !== 'AVAILABLE') || (['DAMAGED', 'NEEDS_INSPECTION'].includes(condition) && result !== 'UNDER_MAINTENANCE')) fail(400, 'Damaged equipment must return to Under Maintenance.');
-  return { condition, notes: type === 'RENTAL' ? optionalText(input.notes, 2000, 'Inspection notes') : text(input.notes, 2000, 'Inspection notes'), inspected_by: String(actor.id || actor), inspected_by_name: String(actor.full_name || actor.name || actor.id || actor), inspected_at: now, result };
+  const notesRequired = type === 'RETURN' && ['DAMAGED', 'NEEDS_INSPECTION'].includes(condition);
+  return { condition, notes: notesRequired ? text(input.notes, 2000, 'Inspection notes') : optionalText(input.notes, 2000, 'Inspection notes'), inspected_by: String(actor.id || actor), inspected_by_name: String(actor.full_name || actor.name || actor.id || actor), inspected_at: now, result };
 }
 
 export function validatePenalty(input) {
@@ -85,7 +86,7 @@ export function finalCharges(rental, request) {
   const overtime = known ? round(units * saved.overtime_rate) : null;
   const penalty = request.penalty_amount ?? null;
   const total = known && amount(penalty) ? round(saved.rental_fee + overtime + penalty) : null;
-  return { ...saved, snapshot_version: saved.snapshot_version || null, pricing_source: saved.pricing_source || 'LEGACY_INCOMPLETE', rental_fee: amount(saved.rental_fee) ? saved.rental_fee : amount(rental.rental_fee) ? rental.rental_fee : null, deposit_amount: saved.deposit_amount ?? rental.deposit_amount ?? null, due_at: saved.due_at || rental.due_at || null, actual_return_at: request.actual_return_at, overtime_units: units, overtime_fee: overtime, penalty_amount: penalty, penalty_reason: request.penalty_reason || null, final_rental_charges: total, finalized_at: null };
+  return { ...saved, snapshot_version: saved.snapshot_version || null, pricing_source: saved.pricing_source || 'LEGACY_INCOMPLETE', rental_fee: amount(saved.rental_fee) ? saved.rental_fee : amount(rental.rental_fee) ? rental.rental_fee : null, due_at: saved.due_at || rental.due_at || null, actual_return_at: request.actual_return_at, overtime_units: units, overtime_fee: overtime, penalty_amount: penalty, penalty_reason: request.penalty_reason || null, final_rental_charges: total, finalized_at: null };
 }
 
 export async function frozenQuote(tx, db, item, input, now) {
@@ -96,29 +97,28 @@ export async function frozenQuote(tx, db, item, input, now) {
   const activeRate = rows(rateDocs).filter(row => row.is_active !== false && asDate(row.effective_from) <= now && (!row.effective_to || asDate(row.effective_to) > now)).sort((a, b) => asDate(b.effective_from) - asDate(a.effective_from))[0];
   let saved;
   if (Array.isArray(item.custom_rate_options) && item.custom_rate_options.length) {
-    if (!activeRate || !amount(activeRate.deposit_amount) || !amount(activeRate.late_penalty_rate)) fail(400, 'Configure a valid deposit and late penalty for this equipment.');
+    if (!activeRate || !amount(activeRate.late_penalty_rate)) fail(400, 'Configure a valid late penalty for this equipment.');
     const pricing = pricingDoc.exists ? validatePricing(pricingDoc.data()) : structuredClone(DEFAULT_PRICING);
     const customProductId = `custom-${item.id}`;
     const customOptions = Array.isArray(activeRate.custom_rate_options) ? activeRate.custom_rate_options : item.custom_rate_options;
     const rateOptions = Number(activeRate.custom_rate_options_version ?? item.custom_rate_options_version) >= 2 ? equipmentRateOptions(activeRate.rate_type, activeRate.rental_rate, customOptions) : customOptions;
-    pricing.products.push({ id: customProductId, name: item.name, group: 'Custom equipment', rate_options: rateOptions, deposit_amount: activeRate.deposit_amount, overtime_rate_per_hour: activeRate.late_penalty_rate, high_value: false, included_items: [], sale_price: null });
+    pricing.products.push({ id: customProductId, name: item.name, group: 'Custom equipment', rate_options: rateOptions, overtime_rate_per_hour: activeRate.late_penalty_rate, included_items: [], sale_price: null });
     const checkout = input.mode === 'WHOLE_STAY' ? dateValue(input.resortCheckoutAt, 'Resort checkout time').toISOString() : undefined;
     const q = quoteRental(pricing, { ...input, ...(checkout ? { resortCheckoutAt: checkout } : {}), productId: customProductId, startAt: start.toISOString(), actualReturnAt: null }, now);
-    saved = { pricing_source: 'ITEM_CUSTOM_RATES', product_id: null, product_name: item.name, rate_id: q.rate_id, rate_label: q.rate_label, rate_kind: q.rate_kind, rate_components: q.rate_components, mode: input.mode === 'WHOLE_STAY' ? 'WHOLE_STAY' : 'TIMED', requested_minutes: q.requested_minutes, billed_minutes: q.billed_minutes, rental_fee: q.rental_fee, deposit_amount: q.deposit_amount, start_at: start, due_at: new Date(q.due_at), overtime_rate: q.overtime_rate_per_hour, overtime_unit_minutes: 60, lost_piece_fee: q.lost_piece_fee, overtime_basis: q.overtime_basis, after_hours_return_note: q.after_hours_return_note };
+    saved = { pricing_source: 'ITEM_CUSTOM_RATES', product_id: null, product_name: item.name, rate_id: q.rate_id, rate_label: q.rate_label, rate_kind: q.rate_kind, rate_components: q.rate_components, mode: input.mode === 'WHOLE_STAY' ? 'WHOLE_STAY' : 'TIMED', requested_minutes: q.requested_minutes, billed_minutes: q.billed_minutes, rental_fee: q.rental_fee, start_at: start, due_at: new Date(q.due_at), overtime_rate: q.overtime_rate_per_hour, overtime_unit_minutes: 60, lost_piece_fee: q.lost_piece_fee, overtime_basis: q.overtime_basis, after_hours_return_note: q.after_hours_return_note };
   } else if (item.pricing_product_id) {
     const pricing = pricingDoc.exists ? validatePricing(pricingDoc.data()) : structuredClone(DEFAULT_PRICING);
     const checkout = input.mode === 'WHOLE_STAY' ? dateValue(input.resortCheckoutAt, 'Resort checkout time').toISOString() : undefined;
     const q = quoteRental(pricing, { ...input, ...(checkout ? { resortCheckoutAt: checkout } : {}), productId: item.pricing_product_id, startAt: start.toISOString(), actualReturnAt: null }, now);
-    if (!q.deposit_configured) fail(400, 'Configure the required refundable deposit before requesting this rental.');
-    saved = { pricing_source: 'RATE_SHEET', product_id: q.product_id, product_name: q.product_name, rate_id: q.rate_id, rate_label: q.rate_label, rate_kind: q.rate_kind, rate_components: q.rate_components, mode: input.mode === 'WHOLE_STAY' ? 'WHOLE_STAY' : 'TIMED', requested_minutes: q.requested_minutes, billed_minutes: q.billed_minutes, rental_fee: q.rental_fee, deposit_amount: q.deposit_amount, start_at: start, due_at: new Date(q.due_at), overtime_rate: q.overtime_rate_per_hour, overtime_unit_minutes: 60, lost_piece_fee: q.lost_piece_fee, overtime_basis: q.overtime_basis, after_hours_return_note: q.after_hours_return_note };
+    saved = { pricing_source: 'RATE_SHEET', product_id: q.product_id, product_name: q.product_name, rate_id: q.rate_id, rate_label: q.rate_label, rate_kind: q.rate_kind, rate_components: q.rate_components, mode: input.mode === 'WHOLE_STAY' ? 'WHOLE_STAY' : 'TIMED', requested_minutes: q.requested_minutes, billed_minutes: q.billed_minutes, rental_fee: q.rental_fee, start_at: start, due_at: new Date(q.due_at), overtime_rate: q.overtime_rate_per_hour, overtime_unit_minutes: 60, lost_piece_fee: q.lost_piece_fee, overtime_basis: q.overtime_basis, after_hours_return_note: q.after_hours_return_note };
   } else {
     const rate = activeRate;
-    if (!rate || !['HOURLY', 'DAILY', 'FLAT'].includes(rate.rate_type) || ![rate.rental_rate, rate.deposit_amount, rate.late_penalty_rate].every(amount)) fail(400, 'Configure a valid equipment rate or link a rate sheet product.');
+    if (!rate || !['HOURLY', 'DAILY', 'FLAT'].includes(rate.rate_type) || ![rate.rental_rate, rate.late_penalty_rate].every(amount)) fail(400, 'Configure a valid equipment rate or link a rate sheet product.');
     const minutes = Number(input.durationMinutes);
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080 || input.mode === 'WHOLE_STAY') fail(400, 'Choose a timed rental duration between 1 minute and 7 days.');
     const unitMinutes = rate.rate_type === 'DAILY' ? 1440 : rate.rate_type === 'HOURLY' ? 60 : minutes;
     const units = Math.ceil(minutes / unitMinutes), billed = units * unitMinutes;
-    saved = { pricing_source: 'ITEM_RATE', product_id: null, product_name: item.name, rate_id: rate.id, rate_label: `${rate.rate_type} equipment rate`, rate_kind: rate.rate_type, rate_components: [{ rate_id: rate.id, label: rate.rate_type, kind: rate.rate_type, units, unit_amount: rate.rental_rate, duration_minutes: unitMinutes, total_amount: round(units * rate.rental_rate) }], mode: 'TIMED', requested_minutes: minutes, billed_minutes: billed, rental_fee: round(units * rate.rental_rate), deposit_amount: rate.deposit_amount, start_at: start, due_at: new Date(start.getTime() + billed * 60000), overtime_rate: rate.late_penalty_rate, overtime_unit_minutes: rate.rate_type === 'DAILY' ? 1440 : 60, lost_piece_fee: null };
+    saved = { pricing_source: 'ITEM_RATE', product_id: null, product_name: item.name, rate_id: rate.id, rate_label: `${rate.rate_type} equipment rate`, rate_kind: rate.rate_type, rate_components: [{ rate_id: rate.id, label: rate.rate_type, kind: rate.rate_type, units, unit_amount: rate.rental_rate, duration_minutes: unitMinutes, total_amount: round(units * rate.rental_rate) }], mode: 'TIMED', requested_minutes: minutes, billed_minutes: billed, rental_fee: round(units * rate.rental_rate), start_at: start, due_at: new Date(start.getTime() + billed * 60000), overtime_rate: rate.late_penalty_rate, overtime_unit_minutes: rate.rate_type === 'DAILY' ? 1440 : 60, lost_piece_fee: null };
   }
   if (saved.due_at <= now || start > new Date(now.getTime() + 5 * 60000) || start < new Date(now.getTime() - 5 * 60000)) fail(400, 'Rental starts must be within five minutes of now and due after now.');
   return { ...saved, snapshot_version: 1, currency: 'PHP', saved_at: now, grace_minutes: grace * 60, actual_return_at: null, overtime_units: null, overtime_fee: null, penalty_amount: null, penalty_reason: null, final_rental_charges: null, finalized_at: null };
@@ -142,7 +142,7 @@ export async function quoteEquipmentRental(db, input, now = new Date()) {
     if (item.is_active === false || String(item.status).toUpperCase() !== 'AVAILABLE' || item.reserved_rental_id || rows(openDocs).some(isOpen)) fail(409, 'This equipment already has an open rental or is unavailable.');
     return frozenQuote(tx, db, item, input, now);
   });
-  return serializeTransaction({ quote: { ...fee, total_to_collect: round(fee.rental_fee + fee.deposit_amount), overtime_rate_per_hour: fee.overtime_rate, warnings: [] } });
+  return serializeTransaction({ quote: { ...fee, total_to_collect: fee.rental_fee, overtime_rate_per_hour: fee.overtime_rate, warnings: [] } });
 }
 
 export async function createRentalRequest(db, actor, input, now = new Date(), ttlSeconds = 600) {
@@ -159,7 +159,7 @@ export async function createRentalRequest(db, actor, input, now = new Date(), tt
     const fee = await frozenQuote(tx, db, item, input, now);
     const inspection = input.inspection ? validateInspection(input.inspection, actor, 'RENTAL', now) : null;
     const request = { ...requestRecord(rentalRef.id, itemId, terminal, 'RENTAL', now, ttlSeconds), requested_by: actorId(actor), inspection, inspection_revision: inspection ? 1 : 0 };
-    const rental = { rental_code: `R-${rentalRef.id.slice(0, 10).toUpperCase()}`, item_id: itemId, customer_id: customerId, status: 'PENDING_VERIFICATION', due_at: fee.due_at, rental_fee: fee.rental_fee, deposit_amount: fee.deposit_amount, fee_breakdown: fee, rental_request_id: requestRef.id, release_condition: null, return_condition: null, confirmed_rental_at: null, confirmed_return_at: null, created_at: now, updated_at: now, created_by: actorId(actor) };
+    const rental = { rental_code: `R-${rentalRef.id.slice(0, 10).toUpperCase()}`, item_id: itemId, customer_id: customerId, status: 'PENDING_VERIFICATION', due_at: fee.due_at, rental_fee: fee.rental_fee, fee_breakdown: fee, rental_request_id: requestRef.id, release_condition: null, return_condition: null, confirmed_rental_at: null, confirmed_return_at: null, created_at: now, updated_at: now, created_by: actorId(actor) };
     tx.create(rentalRef, rental); tx.create(requestRef, request);
     tx.update(itemDoc.ref, { reserved_rental_id: rentalRef.id, updated_at: now });
     audit(tx, db, actorId(actor), 'RENTAL_REQUESTED', requestRef.id, now, { rental_id: rentalRef.id });
@@ -368,7 +368,10 @@ export function createExpirySweep(db, { intervalMs = 60000, now = Date.now, onEx
       if (!force && now() - lastSuccess < intervalMs) return Promise.resolve({ expired: 0 });
       const sweepAt = new Date(now());
       pending = Promise.all([expireVerificationRequests(db, sweepAt), import('./rental-flow.mjs').then(flow => flow.expireRentalHolds(db, sweepAt))]).then(results => {
-        const result = { expired: results.reduce((total, entry) => total + entry.expired, 0) };
+        const result = {
+          expired: results.reduce((total, entry) => total + entry.expired, 0),
+          expiredRentals: results[1].expired
+        };
         lastSuccess = now();
         if (result.expired) onExpired(result);
         return result;

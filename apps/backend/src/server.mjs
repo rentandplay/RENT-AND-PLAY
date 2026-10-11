@@ -10,7 +10,7 @@ import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createI
 import { updateProfile } from './profile.mjs';
 import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
-import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending } from './transactions.mjs';
+import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, terminalPending } from './transactions.mjs';
 import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions } from './mobile.mjs';
 import { createReadCache } from './read-cache.mjs';
 import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-errors.mjs';
@@ -19,6 +19,7 @@ import { listNotifications, markNotificationsRead, registerNotificationDevice, u
 import { isCustomerRole, isOwnerRole, isStaffRole, normalizeRole } from './roles.mjs';
 import { createRegistrationOtpService } from './registration-otp.mjs';
 import { createRentalEventHub } from './rental-events.mjs';
+import { createBackgroundWorker } from './background-worker.mjs';
 
 const webRoot = nodePath.resolve(fileURLToPath(new URL('../../web/dist/', import.meta.url)));
 const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
@@ -58,8 +59,10 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   // same collections every few seconds.
   const readCache = createReadCache(firestore, { ttlMs: 300000, maxEntries: 4096 });
   const readDatabase = readCache.database;
-  const verificationSweep = createExpirySweep(firestore, { now: () => now().getTime(), onExpired: () => {
+  const expiryListeners = new Set();
+  const verificationSweep = createExpirySweep(firestore, { idleIntervalMs: 300000, now: () => now().getTime(), onExpired: result => {
     for (const collection of ['verification_requests', 'rentals', 'items', 'audit_logs']) readCache.invalidate(collection);
+    for (const listener of expiryListeners) listener(result);
   } });
   const notificationDispatcher = createNotificationDispatcher(firestore, messaging, {
     now, ownerUid, deviceDb: readDatabase, profileDb: readDatabase,
@@ -134,7 +137,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     mobileAdminWorkspace: async role => {
       await verificationSweep.run();
       const [workspace, dashboard, inventory] = await Promise.all([
-        loadWorkspace(readDatabase, role, now(), { ownerUid }),
+        loadWorkspace(readDatabase, role, now(), { ownerUid, mobile: true }),
         loadDashboard(readDatabase, now()),
         inventoryList(readDatabase)
       ]);
@@ -254,13 +257,14 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     services[name] = async (...args) => {
       const result = await operation(...args);
       if (result?.duplicate === true) return result;
+      verificationSweep.schedule(result);
       for (const collection of cacheInvalidations[name]) {
         if (collection === 'rentals' && rentalScopedInvalidations.has(name)) {
           const rental = result?.rental || result?.data?.rental;
           const customerId = String(rental?.customer_id || rental?.customerId || '');
           const rentalId = String(rental?.id || rental?.rental_id || '');
           if (!customerId || !rentalId) readCache.invalidate('rentals');
-          else readCache.invalidate('rentals', clauses => !clauses.length || clauses.some(clause =>
+          else readCache.invalidate('rentals', clauses => !clauses.some(clause => clause[0] === 'doc' || clause[0] === 'where' && ['customer_id', 'customerId'].includes(clause[1])) || clauses.some(clause =>
             clause[0] === 'doc' && clause[1] === rentalId ||
             clause[0] === 'where' && ['customer_id', 'customerId'].includes(clause[1]) && clause[3] === customerId
           ));
@@ -274,7 +278,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
       if (!collection) return readCache.invalidate();
       for (const name of Array.isArray(collection) ? collection : [collection]) readCache.invalidate(name);
     },
-    sweepVerificationRequests: () => verificationSweep.run()
+    sweepVerificationRequests: () => verificationSweep.run(),
+    subscribeRentalExpiries: listener => { expiryListeners.add(listener); return () => expiryListeners.delete(listener); }
   });
 }
 
@@ -283,6 +288,7 @@ const defaultServices = createFirebaseServices();
 export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices, notificationWorker = services === defaultServices, hardwareEnabled = process.env.ENABLE_ESP32 === 'true' } = {}) {
   const checkEmail = services.validateEmail || (async value => { validationFailure(emailError(value)); return normalizeEmail(value); });
   const rentalEvents = createRentalEventHub();
+  let pushWorker, holdWorker;
   const attempts = new Map();
   const registrationAttempts = new Map();
   const quotaBackoff = createQuotaBackoff();
@@ -308,6 +314,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         rentalId: rental.id || rental.rental_id || rentalId,
         customerId: rental.customer_id || rental.customerId || customerId
       });
+      pushWorker?.wake();
+      holdWorker?.wake();
     }
     return send(res, status, value);
   }
@@ -532,6 +540,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
           const [, id, action] = rentalFlowRoute;
           const operations = { 'release-verification': 'verifyReleaseCodes', release: 'releaseBooking', 'prepare-delivery': 'prepareRentalDelivery', 'payment-review': 'reviewRentalPaymentProof', receipt: 'recordRentalReceipt', 'complete-return': 'completeRentalReturn', assignment: 'changeAssignedUnit', settlement: 'settleRentalPayment' };
           const result = await services[operations[action]](user, id, await body(req, 550000));
+          if (action === 'release-verification') return send(res, 200, result);
           return sendRentalUpdate(res, 200, result, { rentalId: id });
         }
         if (rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) return send(res, 405, { error: 'Method not allowed.' });
@@ -590,31 +599,30 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
     }
   });
-  if (expiryWorker) {
-    const stop = startExpiryWorker(defaultFirestore, {
-      sweep: async () => {
-        quotaBackoff.assertAvailable();
-        try {
-          const result = await services.sweepVerificationRequests();
-          if (result?.expiredRentals) rentalEvents.publishRental({ allCustomers: true });
-          return result;
-        } catch (error) { quotaBackoff.record(error); throw error; }
-      }
-    });
-    server.once('close', stop);
+  const publishExpiries = result => {
+    const changes = [...new Map((result?.changes || []).map(change => [change.rentalId, change])).values()];
+    if (changes.length) {
+      for (const change of changes) rentalEvents.publishRental(change);
+    } else if (result?.expired) rentalEvents.publishRental({ allCustomers: true });
+    pushWorker?.wake();
+  };
+  const unsubscribeExpiries = services.subscribeRentalExpiries?.(publishExpiries);
+  server.once('close', () => unsubscribeExpiries?.());
+  if (expiryWorker && services.sweepVerificationRequests) {
+    holdWorker = createBackgroundWorker(async () => {
+      quotaBackoff.assertAvailable();
+      const result = await services.sweepVerificationRequests();
+      if (result?.expired && !unsubscribeExpiries) publishExpiries(result);
+      return result;
+    }, { onError: error => { quotaBackoff.record(error); console.warn(`Rental expiry worker failed (${error.code || 'FIREBASE_ERROR'}).`); } });
+    server.once('listening', () => holdWorker.wake());
+    server.once('close', () => holdWorker.stop());
   }
   if (notificationWorker && services.dispatchNotifications) {
-    let busy = false;
-    const dispatch = async () => {
-      if (busy) return;
-      busy = true;
-      try { quotaBackoff.assertAvailable(); await services.dispatchNotifications(); }
-      catch (error) { quotaBackoff.record(error); }
-      finally { busy = false; }
-    };
-    const timer = setInterval(dispatch, 60000); timer.unref?.();
-    server.once('listening', dispatch);
-    server.once('close', () => clearInterval(timer));
+    pushWorker = createBackgroundWorker(async () => { quotaBackoff.assertAvailable(); return services.dispatchNotifications(); },
+      { onError: error => quotaBackoff.record(error) });
+    server.once('listening', () => pushWorker.wake());
+    server.once('close', () => pushWorker.stop());
   }
   if (services.readCacheStats) {
     const metricsTimer = setInterval(() => {

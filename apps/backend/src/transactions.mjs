@@ -246,7 +246,7 @@ function closeUnconfirmed(tx, db, requestDoc, rentalDoc, itemDoc, status, reason
   audit(tx, db, terminal?.id || 'expiry-worker', `VERIFICATION_${status}`, requestDoc.id, now, { actor_type: terminal ? 'TERMINAL' : 'SYSTEM', rental_id: request.rental_id, reason });
 }
 
-export async function expireVerificationRequests(db, now = new Date()) {
+export async function expireVerificationRequests(db, now = new Date(), { onExpired = () => {} } = {}) {
   const pending = await db.collection('verification_requests').where('status', '==', 'PENDING').where('expires_at', '<=', now).get();
   let count = 0;
   for (const candidate of pending.docs.filter(doc => expired(doc.data(), now))) {
@@ -257,9 +257,9 @@ export async function expireVerificationRequests(db, now = new Date()) {
       const itemId = request.item_id || (rentalDoc.exists ? rentalDoc.data().item_id : null);
       const itemDoc = itemId ? await tx.get(ref(db, 'items', itemId)) : null;
       closeUnconfirmed(tx, db, requestDoc, rentalDoc, itemDoc, 'EXPIRED', 'Confirmation deadline elapsed.', now);
-      return true;
+      return { rentalId: rentalDoc.id, customerId: rentalDoc.exists ? rentalDoc.data().customer_id || rentalDoc.data().customerId : request.customer_id };
     });
-    if (changed) count++;
+    if (changed) { count++; onExpired(changed); }
   }
   return { expired: count };
 }
@@ -360,19 +360,49 @@ export async function terminalPending(db, terminal, now = new Date(), { expire =
   return serializeTransaction({ terminal_id: terminal.id, requests: pending });
 }
 
-export function createExpirySweep(db, { intervalMs = 60000, now = Date.now, onExpired = () => {} } = {}) {
-  let pending = null, lastSuccess = -Infinity;
+export function createExpirySweep(db, { intervalMs = 60000, idleIntervalMs = intervalMs, now = Date.now, onExpired = () => {} } = {}) {
+  let pending = null, nextRunAt = -Infinity, scheduleVersion = 0, pendingDeadline = Infinity;
+  const holdStatuses = ['PENDING_ADMIN_APPROVAL', 'PENDING_ESP32_RENT', 'APPROVED'];
+  const deadlines = async () => {
+    const snapshots = await Promise.all([
+      db.collection('verification_requests').where('status', '==', 'PENDING').orderBy('expires_at').limit(1).get(),
+      db.collection('rentals').where('status', 'in', holdStatuses).orderBy('hold_expires_at').limit(1).get()
+    ]);
+    return snapshots.map((snapshot, index) => asDate(snapshot.docs[0]?.data()[index ? 'hold_expires_at' : 'expires_at'])?.getTime() ?? Infinity);
+  };
   return {
+    schedule(result = {}) {
+      const rental = result?.rental || result?.data?.rental, request = result?.request;
+      const dates = [holdStatuses.includes(rental?.status) ? rental.hold_expires_at : null, request?.status === 'PENDING' ? request.expires_at : null];
+      for (const value of dates) {
+        const deadline = asDate(value)?.getTime();
+        if (Number.isFinite(deadline)) {
+          pendingDeadline = Math.min(pendingDeadline, deadline);
+          nextRunAt = Math.min(nextRunAt, deadline);
+          scheduleVersion++;
+        }
+      }
+    },
     run({ force = false } = {}) {
       if (pending) return pending;
-      if (!force && now() - lastSuccess < intervalMs) return Promise.resolve({ expired: 0 });
+      if (!force && now() < nextRunAt) return Promise.resolve({ expired: 0, nextRunAt });
       const sweepAt = new Date(now());
-      pending = Promise.all([expireVerificationRequests(db, sweepAt), import('./rental-flow.mjs').then(flow => flow.expireRentalHolds(db, sweepAt))]).then(results => {
+      const version = scheduleVersion;
+      pendingDeadline = Infinity;
+      const changes = [];
+      const onChanged = change => changes.push(change);
+      pending = deadlines().then(async due => {
+        const results = await Promise.all([
+          due[0] <= sweepAt.getTime() ? expireVerificationRequests(db, sweepAt, { onExpired: onChanged }) : { expired: 0 },
+          due[1] <= sweepAt.getTime() ? import('./rental-flow.mjs').then(flow => flow.expireRentalHolds(db, sweepAt, { onExpired: onChanged })) : { expired: 0 }
+        ]);
+        const upcoming = due.some(value => value <= sweepAt.getTime()) ? await deadlines() : due;
+        const next = Math.min(now() + idleIntervalMs, ...upcoming.map(value => value <= now() ? now() + intervalMs : value));
+        nextRunAt = version === scheduleVersion ? next : Math.min(pendingDeadline, next);
         const result = {
           expired: results.reduce((total, entry) => total + entry.expired, 0),
-          expiredRentals: results[1].expired
+          expiredRentals: results[1].expired, nextRunAt, changes
         };
-        lastSuccess = now();
         if (result.expired) onExpired(result);
         return result;
       }).finally(() => { pending = null; });

@@ -38,12 +38,18 @@ export function validateCustomer(input = {}) {
   return { full_name, customer_code, email: email || null, phone: phone || null, address: address || null };
 }
 
-export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { ownerUid = '' } = {}) {
+export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { ownerUid = '', mobile = false } = {}) {
   role = normalizeRole(role);
   const names = ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history', 'item_condition_records'];
   const auditCollection = db.collection('audit_logs');
   const auditQuery = typeof auditCollection.orderBy === 'function' ? auditCollection.orderBy('created_at', 'desc').limit(200) : auditCollection;
-  const [snapshots, auditSnapshot] = await Promise.all([Promise.all(names.map(name => db.collection(name).get())), isStaffRole(role) ? auditQuery.get() : Promise.resolve({ docs: [] })]);
+  // The mobile counter uses rentals, customers and equipment. Keep complete
+  // rental history, but skip the web-only audit, administration and repair logs.
+  const mobileCollections = new Set(['customers', 'rentals', 'items']);
+  const [snapshots, auditSnapshot] = await Promise.all([
+    Promise.all(names.map(name => !mobile || mobileCollections.has(name) ? db.collection(name).get() : Promise.resolve({ docs: [] }))),
+    !mobile && isStaffRole(role) ? auditQuery.get() : Promise.resolve({ docs: [] })
+  ]);
   const source = Object.fromEntries(names.map((name, index) => [name, rows(snapshots[index])]));
   source.audit_logs = auditSnapshot.docs.map(docData);
   const itemMap = new Map(source.items.map(item => [item.id, item]));
@@ -76,11 +82,14 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   }).sort((a, b) => (asDate(b.created_at) || 0) - (asDate(a.created_at) || 0));
   const maintenance = source.maintenance_records.map(record => ({ ...record, item_name: itemMap.get(String(record.item_id))?.name || 'Unknown equipment', item_code: itemMap.get(String(record.item_id))?.item_code || '' })).sort((a, b) => (asDate(b.started_at) || 0) - (asDate(a.started_at) || 0));
   const rates = source.item_rates.map(rate => ({ ...rate, item_name: itemMap.get(String(rate.item_id))?.name || 'Unknown equipment', item_code: itemMap.get(String(rate.item_id))?.item_code || '' })).sort((a, b) => (asDate(b.effective_from) || 0) - (asDate(a.effective_from) || 0));
-  const [settingsDoc, pricing] = await Promise.all([db.collection('settings').doc('business').get(), loadPricing(db, { allowInvalidFallback: true })]);
+  const [settingsDoc, pricing] = await Promise.all([
+    mobile ? Promise.resolve({ exists: false }) : db.collection('settings').doc('business').get(),
+    mobile ? Promise.resolve({}) : loadPricing(db, { allowInvalidFallback: true })
+  ]);
   const settings = settingsDoc.exists ? settingsDoc.data() : { business_name: 'Rent & Play', location: 'Los Baños, Laguna', currency: 'PHP', timezone: 'Asia/Manila', default_late_grace_hours: 0 };
   let users = [];
   const userProfiles = new Map();
-  if (role === 'OWNER') {
+  if (role === 'OWNER' && !mobile) {
     users = rows(await db.collection('users').get()).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(user => serial({ ...user, role: String(user.id) === String(ownerUid) ? 'OWNER' : normalizeRole(user.role) || user.role }));
     for (const user of users) userProfiles.set(String(user.id), user);
   }
@@ -117,7 +126,13 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
     action: log.action || 'UNKNOWN_ACTION', entity_type: log.entity_type || '', entity_id: log.entity_id || '', entity_label: auditLabel(log), created_at: log.created_at || null
   })).sort((a, b) => (asDate(b.created_at) || 0) - (asDate(a.created_at) || 0)).slice(0, 200) : [];
   const statusHistory = source.item_status_history.map(({ id, item_id, old_status, new_status, changed_at }) => serial({ id, item_id, old_status, new_status, changed_at }));
-  const customers = source.customers.map(customer => {
+  // Staff may still have customer records from an earlier role. Keep those
+  // records available for rental history without listing staff as customers.
+  const customers = source.customers.filter(customer => {
+    if (!customer.auth_uid) return true;
+    const linkedUid = String(customer.auth_uid);
+    return linkedUid !== String(ownerUid) && !isStaffRole(userProfiles.get(linkedUid)?.role);
+  }).map(customer => {
     const linkedProfile = customer.auth_uid ? userProfiles.get(String(customer.auth_uid)) : null;
     return linkedProfile && normalizeRole(linkedProfile.role) === 'CUSTOMER'
       ? { ...customer, full_name: linkedProfile.full_name || linkedProfile.name || customer.full_name, email: linkedProfile.email || customer.email, phone: linkedProfile.phone || customer.phone }

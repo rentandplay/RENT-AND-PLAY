@@ -4,7 +4,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createApi, createFirebaseServices } from '../src/server.mjs';
 import { createReadCache } from '../src/read-cache.mjs';
 import { createQuotaBackoff } from '../src/firebase-errors.mjs';
-import { startExpiryWorker, terminalPending } from '../src/transactions.mjs';
+import { createExpirySweep, startExpiryWorker, terminalPending } from '../src/transactions.mjs';
+import { inventoryList } from '../src/inventory.mjs';
 import { DEFAULT_PRICING } from '../src/pricing.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
@@ -24,10 +25,10 @@ test('display models share collection reads, and saved equipment invalidates all
   const fixture = countedDatabase({ item_categories: { sports: { name: 'Sports equipment' } }, users: { admin: { full_name: 'Admin', role: 'ADMIN', is_active: true } } });
   const services = createFirebaseServices({ db: fixture.db });
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 15); // Shared display reads plus two due-only expiry queries.
+  assert.equal(fixture.reads.length, 17); // Shared displays, bounded inventory queries and two next-deadline reads.
   for (const name of ['items', 'item_categories', 'item_rates', 'rentals', 'customers', 'verification_requests', 'terminals']) assert.equal(fixture.reads.filter(read => read.label === name).length, 1);
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 15);
+  assert.equal(fixture.reads.length, 17);
   const created = await services.createItem('admin', { categoryId: 'sports', name: 'Basketball', condition: 'GOOD', rateType: 'HOURLY', rentalRate: 50, deposit: 100, latePenalty: 10 });
   const [dashboard, workspace, inventory] = await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
   assert.equal(dashboard.items[0].id, created.id); assert.equal(workspace.items[0].id, created.id); assert.equal(inventory.items[0].id, created.id);
@@ -152,4 +153,113 @@ test('device polling reads only pending requests and throttles healthy terminal 
   const later = new Date(now.getTime() + 30000);
   await terminalPending(fixture.db, terminal, later, { expire: async () => {} });
   assert.equal(fixture.raw.data('terminals', 'counter').last_seen_at.getTime(), later.getTime());
+});
+
+test('inventory reads only open rentals and repairs, including legacy lowercase reservations', async () => {
+  const rentals = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`old-${i}`, { item_id: 'bike', status: 'COMPLETED' }]));
+  const maintenance = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`old-${i}`, { item_id: 'bike', status: 'COMPLETED' }]));
+  rentals.current = { item_id: 'bike', status: 'ACTIVE' };
+  rentals.legacy = { itemId: 'bike', status: 'approved' };
+  maintenance.current = { item_id: 'bike', status: 'OPEN' };
+  const fixture = countedDatabase({ items: { bike: { name: 'Bike', status: 'AVAILABLE' } }, rentals, maintenance_records: maintenance });
+  const result = await inventoryList(fixture.db);
+  assert.equal(result.items[0].open_rentals, 2);
+  assert.equal(result.items[0].effective_status, 'RESERVED_PENDING');
+  assert.equal(result.items[0].open_maintenance, 1);
+  assert.equal(fixture.reads.find(read => read.label.startsWith('rentals')).documents, 2);
+  assert.equal(fixture.reads.find(read => read.label.startsWith('maintenance_records')).documents, 1);
+});
+
+test('mobile staff retains completed rental history while skipping web-only administration reads', async () => {
+  const fixture = countedDatabase({ rentals: { history: { status: 'COMPLETED', item_id: 'bike', customer_id: 'customer' } },
+    customers: { customer: { full_name: 'Customer' } }, items: { bike: { name: 'Bike', status: 'AVAILABLE' } },
+    audit_logs: { log: { created_at: new Date() } }, item_status_history: { old: {} }, item_condition_records: { old: {} }, users: { owner: { role: 'OWNER' } } });
+  const services = createFirebaseServices({ db: fixture.db });
+  const workspace = await services.mobileAdminWorkspace('OWNER');
+  assert.equal(workspace.transactions[0].status, 'COMPLETED');
+  assert.equal(workspace.transactions[0].customer_name, 'Customer');
+  assert.ok(workspace._dashboard); assert.ok(workspace._inventory);
+  for (const name of ['audit_logs', 'item_status_history', 'item_condition_records', 'users', 'settings']) {
+    assert.equal(fixture.reads.some(read => read.label === name || read.label.startsWith(name + '.')), false, name);
+  }
+  assert.equal(fixture.reads.some(read => read.label === 'maintenance_records'), false);
+  await services.workspace('OWNER');
+  assert.ok(fixture.reads.some(read => read.label.startsWith('audit_logs')));
+  assert.ok(fixture.reads.some(read => read.label === 'users'));
+});
+
+test('a newly committed booking invalidates filtered availability and only its customer rental cache', async () => {
+  const now = new Date('2026-10-07T02:00:00Z'), customer = { id: 'customer', role: 'CUSTOMER', full_name: 'Customer', is_active: true };
+  const fixture = countedDatabase({ users: { customer }, customers: { customer },
+    settings: { pricing: structuredClone(DEFAULT_PRICING) },
+    items: { bike: { name: 'Bike', pricing_product_id: 'bike', status: 'AVAILABLE', is_active: true } } });
+  const services = createFirebaseServices({ db: fixture.db, now: () => now });
+  await services.mobileRentalList(customer);
+  await services.mobileRentalList({ ...customer, id: 'another-customer' });
+  await services.inventoryList();
+  const otherReads = fixture.reads.filter(read => read.label.includes('another-customer')).length;
+  const { rental } = await services.createMobileRentalRequest(customer, { itemId: 'bike', durationMinutes: 180, requestKey: 'a'.repeat(32) });
+  assert.equal((await services.inventoryList()).items[0].open_rentals, 1);
+  assert.equal((await services.mobileRentalList(customer)).rentals[0].id, rental.id);
+  await services.mobileRentalList({ ...customer, id: 'another-customer' });
+  assert.equal(fixture.reads.filter(read => read.label.includes('another-customer')).length, otherReads);
+  await services.cancelMobileRentalRequest(customer, rental.id);
+  assert.equal((await services.inventoryList()).items[0].open_rentals, 0);
+  assert.equal((await services.mobileRentalList(customer)).rentals[0].status, 'CANCELLED');
+});
+
+test('a scheduled hold expires at its deadline, skips premature reads and identifies its customer', async () => {
+  const start = new Date('2026-10-07T02:00:00Z').getTime(); let clock = start;
+  const deadline = new Date(start + 20000);
+  const fixture = countedDatabase({ items: { bike: { name: 'Bike', status: 'RESERVED_PENDING', reserved_rental_id: 'rental' } },
+    rentals: { rental: { status: 'APPROVED', item_id: 'bike', customer_id: 'customer', hold_expires_at: deadline, rental_fee: 50 } } });
+  const expired = [];
+  const sweep = createExpirySweep(fixture.db, { idleIntervalMs: 300000, now: () => clock, onExpired: result => expired.push(result) });
+  assert.equal((await sweep.run()).nextRunAt, deadline.getTime());
+  assert.equal(fixture.reads.length, 2);
+  clock += 19999; await sweep.run(); assert.equal(fixture.reads.length, 2);
+  clock++;
+  const result = await sweep.run();
+  assert.equal(result.expiredRentals, 1); assert.equal(expired.length, 1);
+  assert.deepEqual(result.changes, [{ rentalId: 'rental', customerId: 'customer' }]);
+  assert.equal(fixture.raw.data('items', 'bike').status, 'AVAILABLE');
+  assert.equal(fixture.raw.data('rentals', 'rental').status, 'EXPIRED');
+  assert.equal((await sweep.run()).expired, 0); assert.equal(expired.length, 1);
+});
+
+test('new hold deadlines can advance an idle sweep without waiting for the five-minute recovery', async () => {
+  let clock = 0;
+  const fixture = countedDatabase();
+  const sweep = createExpirySweep(fixture.db, { idleIntervalMs: 300000, now: () => clock });
+  await sweep.run();
+  const rental = { status: 'APPROVED', hold_expires_at: new Date(15000), item_id: 'bike', customer_id: 'customer' };
+  await fixture.raw.collection('rentals').doc('rental').set(rental);
+  sweep.schedule({ rental });
+  assert.equal((await sweep.run()).nextRunAt, 15000);
+  assert.equal(fixture.reads.length, 2);
+  clock = 15000;
+  assert.equal((await sweep.run()).expired, 1);
+});
+
+test('a booking committed during startup deadline discovery cannot be delayed by the idle schedule', async () => {
+  let clock = 0, release, started, blocked = true;
+  const gate = new Promise(resolve => { release = resolve; }), discovering = new Promise(resolve => { started = resolve; });
+  const raw = memoryFirestore();
+  const wrap = (query, name) => new Proxy(query, { get(target, key) {
+    if (key === 'get') return async () => {
+      const snapshot = await target.get();
+      if (name === 'verification_requests' && blocked) { blocked = false; started(); await gate; }
+      return snapshot;
+    };
+    if (['where', 'orderBy', 'limit'].includes(key)) return (...args) => wrap(target[key](...args), name);
+    return target[key];
+  } });
+  const sweep = createExpirySweep({ ...raw, collection: name => wrap(raw.collection(name), name) }, { idleIntervalMs: 300000, now: () => clock });
+  const pending = sweep.run(); await discovering;
+  const rental = { status: 'APPROVED', hold_expires_at: new Date(15000), item_id: 'bike', customer_id: 'customer' };
+  await raw.collection('rentals').doc('rental').set(rental);
+  sweep.schedule({ rental }); release();
+  assert.equal((await pending).nextRunAt, 15000);
+  clock = 15000;
+  assert.equal((await sweep.run()).expired, 1);
 });

@@ -130,6 +130,7 @@ export function createNotificationDispatcher(db, messaging, { now = () => new Da
   async function drain() {
     const pending = await db.collection('notification_outbox').where('status', '==', 'PENDING').limit(40).get();
     const candidates = [...pending.docs];
+    let processed = 0, nextRunAt = Infinity;
     if (candidates.length < 40) {
       const retries = await db.collection('notification_outbox').where('status', '==', 'RETRY').limit(40 - candidates.length).get();
       candidates.push(...retries.docs);
@@ -138,11 +139,14 @@ export function createNotificationDispatcher(db, messaging, { now = () => new Da
       const leasedAt = now();
       const event = await db.runTransaction(async tx => {
         const doc = await tx.get(candidate.ref), row = doc.exists && doc.data();
-        if (!row || !['PENDING', 'RETRY'].includes(row.status) || asDate(row.next_attempt_at) > leasedAt || asDate(row.lease_until) > leasedAt) return null;
+        if (!row || !['PENDING', 'RETRY'].includes(row.status)) return null;
+        const availableAt = Math.max(asDate(row.next_attempt_at)?.getTime() || 0, asDate(row.lease_until)?.getTime() || 0);
+        if (availableAt > leasedAt.getTime()) { nextRunAt = Math.min(nextRunAt, availableAt); return null; }
         tx.update(doc.ref, { lease_until: new Date(leasedAt.getTime() + 120000), attempts: row.attempts + 1 });
         return { ...row, attempts: row.attempts + 1 };
       });
       if (!event) continue;
+      processed++;
       try {
         const devices = await deviceDb.collection('notification_devices').where(event.audience === 'STAFF' ? 'audience' : 'user_id', '==', event.audience === 'STAFF' ? 'STAFF' : event.customer_id).get();
         const profiles = new Map(await Promise.all([...new Set(devices.docs.map(doc => doc.data().user_id))].map(async id => [id, await profileDb.collection('users').doc(id).get()])));
@@ -165,10 +169,14 @@ export function createNotificationDispatcher(db, messaging, { now = () => new Da
         }
         await candidate.ref.update({ status: 'SENT', delivered_at: now(), lease_until: null, last_error: null });
       } catch (error) {
+        const retryTime = new Date(now().getTime() + Math.min(900000, 15000 * 2 ** (event.attempts - 1)));
         await candidate.ref.update({ status: event.attempts >= 6 ? 'FAILED' : 'RETRY', lease_until: null,
-          next_attempt_at: new Date(now().getTime() + Math.min(900000, 15000 * 2 ** (event.attempts - 1))), last_error: String(error.code || 'PUSH_UNAVAILABLE').slice(0, 100) });
+          next_attempt_at: retryTime, last_error: String(error.code || 'PUSH_UNAVAILABLE').slice(0, 100) });
+        if (event.attempts < 6) nextRunAt = Math.min(nextRunAt, retryTime.getTime());
       }
     }
+    const hasMore = processed > 0 && candidates.length === 40;
+    return { processed, hasMore, ...(Number.isFinite(nextRunAt) ? { nextRunAt: Math.min(nextRunAt, now().getTime() + (hasMore ? 1000 : 300000)) } : {}) };
   }
   return { run() { if (!running) running = drain().finally(() => { running = null; }); return running; } };
 }

@@ -427,7 +427,7 @@ export async function cancelBooking(db, actor, id, now = new Date()) {
   }));
 }
 
-export async function expireRentalHolds(db, now = new Date()) {
+export async function expireRentalHolds(db, now = new Date(), { onExpired = () => {} } = {}) {
   const snapshot = await db.collection('rentals').where('status', 'in', pendingStatuses).where('hold_expires_at', '<=', now).get();
   let expired = 0;
   for (const candidate of snapshot.docs.filter(doc => holdElapsed(doc.data(), now))) {
@@ -436,18 +436,27 @@ export async function expireRentalHolds(db, now = new Date()) {
       if (!rentalDoc.exists || !holdElapsed(rentalDoc.data(), now)) return false;
       const rental = docData(rentalDoc), itemDoc = await tx.get(record(db, 'items', rental.item_id || rental.itemId));
       closeHold(tx, db, rentalDoc, itemDoc, 'EXPIRED', 'Rental request expired before handoff.', now, 'expiry-worker');
-      return true;
+      return { rentalId: rental.id, customerId: rental.customer_id || rental.customerId };
     });
-    if (changed) expired++;
+    if (changed) { expired++; onExpired(changed); }
   }
   return { expired };
 }
 
-export async function rentalTicket(db, actor, id) {
+export async function rentalTicket(db, actor, id, now = new Date()) {
   const doc = await record(db, 'rentals', idValue(id)).get();
   if (!doc.exists) fail(404, 'Rental request not found.');
   const rental = docData(doc);
   if (String(rental.customer_id || rental.customerId) !== actorId(actor)) fail(403, 'You can only view your own rental handoff QR.');
+  if (state(rental) !== 'APPROVED') {
+    fail(409, state(rental) === 'ACTIVE'
+      ? 'This rental is already in use. The handoff QR is no longer available.'
+      : 'The handoff QR is available only after the rental is approved.');
+  }
+  if (String(rental.delivery_status || '').toUpperCase() !== 'PREPARED') fail(409, 'Your equipment is still being prepared. The handoff QR will be available when it is ready.');
+  const expiresAt = asDate(rental.hold_expires_at);
+  if (!expiresAt) fail(409, 'The handoff deadline is missing. Please ask the admin to check this rental.');
+  if (expiresAt <= now) fail(409, 'The handoff hold expired. Refresh My Rentals to check the request status.');
   if (!rental.booking_qr_token) fail(409, 'This older rental does not have a handoff QR. Ask the operator to find it by rental code.');
   return { ticket: { rental_id: id, rental_code: rental.rental_code, status: state(rental), value: rental.booking_qr_token, image_data_url: await QRCode.toDataURL(rental.booking_qr_token, { errorCorrectionLevel: 'M', margin: 4, width: 360 }), hold_expires_at: serializeFlow(rental.hold_expires_at || null) } };
 }

@@ -178,3 +178,15 @@ test('waiting push retries cannot block new request alerts', async () => {
   assert.equal(sent, 1);
   assert.equal(db.records('notification_outbox').filter(row => row.status === 'RETRY').length, 40);
 });
+
+test('a full batch leased by another dispatcher waits for its lease instead of polling every second', async () => {
+  const lease = new Date(now.getTime() + 120000);
+  const db = memoryFirestore({ notification_outbox: Object.fromEntries(Array.from({ length: 40 }, (_, index) =>
+    [`leased-${index}`, { status: 'PENDING', attempts: 1, lease_until: lease, next_attempt_at: now }])) });
+  const dispatcher = createNotificationDispatcher(db, {}, { now: () => now });
+  const result = await dispatcher.run();
+  assert.equal(result.processed, 0);
+  assert.equal(result.hasMore, false);
+  assert.equal(result.nextRunAt, lease.getTime());
+  assert.ok(db.records('notification_outbox').every(row => row.attempts === 1));
+});

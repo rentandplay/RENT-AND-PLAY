@@ -165,14 +165,17 @@ test('preflight rejects expired bookings and rechecks assignment changes before 
 });
 
 test('transaction tickets belong to their owner and both QR lookups select the exact rental', async () => {
-  const db = fixture(), rental = await active(db);
+  const db = fixture(), rental = await approved(db);
   await assert.rejects(rentalTicket(db, { id: 'other' }, rental.id), status(403));
-  const { ticket } = await rentalTicket(db, customer, rental.id);
+  const { ticket } = await rentalTicket(db, customer, rental.id, after(2));
   assert.match(ticket.image_data_url, /^data:image\/png;base64,/);
   assert.match(ticket.hold_expires_at, /Z$/);
   assert.equal((await lookupRental(db, { code: ticket.value, kind: 'BOOKING' })).rental.id, rental.id);
-  assert.equal((await lookupRental(db, { code: 'rp-qr-cards', kind: 'INVENTORY' })).rental.id, rental.id);
   await assert.rejects(lookupRental(db, { code: 'rp-qr-spare', kind: 'INVENTORY' }), status(409));
+  await assert.rejects(rentalTicket(db, customer, rental.id, after(200)), status(409));
+  await releaseBooking(db, admin, rental.id, releaseInput(rental), after(3));
+  assert.equal((await lookupRental(db, { code: 'rp-qr-cards', kind: 'INVENTORY' })).rental.id, rental.id);
+  await assert.rejects(rentalTicket(db, customer, rental.id, after(4)), error => error.status === 409 && /already in use/.test(error.message));
 });
 
 test('changing the assigned unit transfers only the hold and checks pricing', async () => {

@@ -1,10 +1,20 @@
+// Refresh alerts while a rental editor is open, and defer replacing its data
+// until the operator's draft is safe to leave.
+export async function syncLiveRentalUpdate({ notifications, isDialogOpen, refreshView }) {
+  await notifications.refresh();
+  if (isDialogOpen()) return false;
+  await refreshView();
+  return !isDialogOpen();
+}
+
 export function createRentalNotifications({ api, onChange = () => {}, onAlert = () => {} }) {
-  let account = null, generation = 0, pending = false, initialized = false, error = '', nextCursor = null, hasOlder = false;
+  let account = null, generation = 0, pending = false, refreshAgain = false, initialized = false, error = '', nextCursor = null, hasOlder = false;
   let rows = new Map(), seen = new Set(), readLocally = new Set(), revision = null;
   const state = () => ({ notifications: [...rows.values()].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.id.localeCompare(a.id)),
     unreadCount: [...rows.values()].filter(row => !row.is_read).length, loading: pending && !initialized, error, nextCursor });
   async function refresh({ older = false } = {}) {
-    if (!account || pending || older && !nextCursor) return;
+    if (!account || older && !nextCursor) return;
+    if (pending) { if (!older) refreshAgain = true; return; }
     const version = generation; pending = true;
     try {
       const response = await api(`/notifications${older ? `?before=${encodeURIComponent(nextCursor)}` : revision ? `?since=${encodeURIComponent(revision)}` : ''}`);
@@ -20,11 +30,14 @@ export function createRentalNotifications({ api, onChange = () => {}, onAlert = 
       initialized = true; error = '';
       if (arrivals.length) onAlert(arrivals[0], arrivals.length);
     } catch (problem) { if (version === generation) error = problem.message || 'Could not load notifications.'; }
-    finally { if (version === generation) { pending = false; onChange(state()); } }
+    finally { if (version === generation) {
+      pending = false; onChange(state());
+      if (refreshAgain) { refreshAgain = false; queueMicrotask(() => refresh()); }
+    } }
   }
   function setAccount(id) {
     if (id === account) return;
-    account = id || null; generation++; pending = false; initialized = false; error = ''; nextCursor = null; hasOlder = false;
+    account = id || null; generation++; pending = false; refreshAgain = false; initialized = false; error = ''; nextCursor = null; hasOlder = false;
     rows = new Map(); seen = new Set(); readLocally = new Set(); revision = null; onChange(state());
     if (account) refresh();
   }

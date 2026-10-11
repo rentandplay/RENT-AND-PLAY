@@ -1,8 +1,20 @@
 export const pageRoutes = Object.freeze({ Dashboard: '/', Inventory: '/equipment', Customers: '/customers', 'Rates & Fees': '/rates', Rentals: '/rentals', Returns: '/returns', 'Transaction History': '/transactions', Maintenance: '/maintenance', 'ESP32 terminal': '/verification', Reports: '/reports', Settings: '/settings', Profile: '/profile' });
 export const routePages = Object.fromEntries(Object.entries(pageRoutes).map(([page, route]) => [route, page]));
+const reportSectionRoutes = Object.freeze({ '/reports': 'rental', '/reports/equipment': 'equipment', '/reports/operations': 'service', '/reports/forecast': 'forecast', '/reports/recommendations': 'recommendations', '/reports/audit': 'audit' });
+const reportSectionPaths = Object.fromEntries(Object.entries(reportSectionRoutes).map(([route, section]) => [section, route]));
+
+export function reportSectionForPath(pathname) {
+  const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
+  return reportSectionRoutes[normalized] || 'rental';
+}
+
+export function reportPathForSection(section) {
+  return reportSectionPaths[section] || pageRoutes.Reports;
+}
 
 export function pageForPath(pathname) {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
+  if (Object.hasOwn(reportSectionRoutes, normalized)) return 'Reports';
   return routePages[normalized] || 'Dashboard';
 }
 

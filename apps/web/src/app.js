@@ -2,9 +2,9 @@ import { createInventory } from './inventory.js';
 import { createWorkspaceUI } from './workspace-ui.js';
 import { createConfirmationDialog } from './confirmation-dialog.js';
 import { bindRecordLinks, recordAttrs } from './record-links.js';
-import { pageRoutes, pageForPath, pageInfo } from './workspace-navigation.js';
+import { pageRoutes, pageForPath, pageInfo, reportPathForSection, reportSectionForPath } from './workspace-navigation.js';
 import { createApiClient } from './api-client.js';
-import { createRentalNotifications, renderRentalNotifications } from './notifications.js';
+import { createRentalNotifications, renderRentalNotifications, syncLiveRentalUpdate } from './notifications.js';
 import { bindAccountValidation, emailError, passwordError, passwordMatchError, passwordHelp } from './account-validation.js';
 const apiClient = createApiClient();
 const app = document.querySelector('#app');
@@ -48,7 +48,8 @@ const sportArt = `<svg class="sport-art" viewBox="0 0 320 230" aria-hidden="true
 const navGroups = [
   { id: 'management', label: 'Management', emoji: '📦', items: [['Equipment', 'Inventory'], ['Customers', 'Customers'], ['Rates & Fees', 'Rates & Fees']] },
   { id: 'transactions', label: 'Transactions', emoji: '🔄', items: [['Rentals', 'Rentals'], ['Returns', 'Returns'], ['Transaction History', 'Transaction History']] },
-  { id: 'operations', label: 'Operations', emoji: '🔧', items: [['Maintenance', 'Maintenance'], ['ESP32 / Verification', 'ESP32 terminal']] }
+  { id: 'operations', label: 'Operations', emoji: '🔧', items: [['Maintenance', 'Maintenance'], ['ESP32 / Verification', 'ESP32 terminal']] },
+  { id: 'analytics', label: 'Analytics', emoji: '📊', items: [['Report', 'Reports', 'rental'], ['Forecast', 'Reports', 'forecast'], ['Recommendations', 'Reports', 'recommendations']] }
 ];
 const navGroupExpanded = Object.fromEntries(navGroups.map(group => [group.id, true]));
 try {
@@ -71,8 +72,13 @@ function configureSidebar() {
   sidebar.id = 'workspace-navigation'; toggle.setAttribute('aria-controls', sidebar.id);
   sidebar.querySelectorAll('nav button,.sidebar-bottom>button').forEach(button => {
     const group = navGroups.find(item => item.id === button.dataset.navGroup);
-    const name = group?.label || (button.dataset.page === 'Settings' ? 'Settings' : button.dataset.page || button.textContent.trim()); button.setAttribute('aria-label', name); button.title = name;
-    if (button.dataset.page) { button.classList.toggle('active', button.dataset.page === page); if (button.dataset.page === page) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }
+    const name = group?.label || (button.dataset.analyticsSection ? button.textContent.trim() : button.dataset.page === 'Settings' ? 'Settings' : button.dataset.page || button.textContent.trim()); button.setAttribute('aria-label', name); button.title = name;
+    if (button.dataset.page) {
+      const active = button.dataset.analyticsSection
+        ? page === 'Reports' && (button.dataset.analyticsSection === 'rental' ? !['forecast', 'recommendations'].includes(workspaceUI.reportSection()) : workspaceUI.reportSection() === button.dataset.analyticsSection)
+        : button.dataset.page === page;
+      button.classList.toggle('active', active); if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    }
     for (const node of Array.from(button.childNodes)) if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
       const span = document.createElement('span'); span.className = 'sidebar-label'; span.textContent = node.textContent; node.replaceWith(span);
     }
@@ -141,10 +147,11 @@ function toast(message) {
   const el = document.querySelector('#toast'); el.textContent = message; el.classList.add('visible');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('visible'), 4000);
 }
-function goTo(next, replace = false, nextFilter = 'All rentals', nextCategory = '') {
-  if (workspacePages.has(next)) invalidateWorkspace();
+function goTo(next, replace = false, nextFilter = 'All rentals', nextCategory = '', nextReportSection = '') {
+  if (next === 'Reports') workspaceUI.setReportSection(nextReportSection || (page === 'Reports' ? workspaceUI.reportSection() : 'rental'));
+  if (workspacePages.has(next) && !(next === 'Reports' && page === 'Reports')) invalidateWorkspace();
   page = next; profileEditing = false; category = nextCategory; filter = nextFilter; query = ''; rentalPage = 0; verificationPage = 0;
-  const route = pageRoutes[next] || '/'; if (location.pathname !== route) history[replace ? 'replaceState' : 'pushState']({ page: next }, '', route);
+  const route = next === 'Reports' ? reportPathForSection(workspaceUI.reportSection()) : pageRoutes[next] || '/'; if (location.pathname !== route) history[replace ? 'replaceState' : 'pushState']({ page: next }, '', route);
   const group = navGroups.find(group => group.items.some(([, target]) => target === next));
   if (group) navGroupExpanded[group.id] = true;
   render(); window.scrollTo(0, 0); document.querySelector('#workspace-content')?.focus({ preventScroll: true });
@@ -178,7 +185,7 @@ function scheduleRentalEventSync() {
   rentalEventSyncTimer = setTimeout(async () => {
     rentalEventSyncTimer = null;
     if (!user || user.mustChangePassword || logoutPending) return;
-    if (!apiClient.canRefresh() || document.visibilityState !== 'visible' || modal.open) {
+    if (!apiClient.canRefresh() || document.visibilityState !== 'visible') {
       rentalEventSyncPending = true;
       return;
     }
@@ -186,14 +193,18 @@ function scheduleRentalEventSync() {
     rentalEventSyncPending = false;
     rentalEventSyncing = true;
     try {
-      await rentalNotifications.refresh();
-      if (page === 'Dashboard' || page === 'ESP32 terminal') await refresh();
-      else if (liveRentalPages.has(page)) {
-        const refreshedPage = page;
-        const changed = await workspaceUI.refresh();
-        if (modal.open) rentalEventSyncPending = true;
-        else if (changed && page === refreshedPage && user) render();
-      }
+      const synced = await syncLiveRentalUpdate({
+        notifications: rentalNotifications, isDialogOpen: () => modal.open,
+        refreshView: async () => {
+          if (page === 'Dashboard' || page === 'ESP32 terminal') await refresh();
+          else if (liveRentalPages.has(page)) {
+            const refreshedPage = page;
+            const changed = await workspaceUI.refresh();
+            if (!modal.open && changed && page === refreshedPage && user) render();
+          }
+        }
+      });
+      if (!synced) rentalEventSyncPending = true;
     } catch (problem) {
       if (problem.status === 429 || !apiClient.canRefresh()) rentalEventSyncPending = true;
       if (problem.status !== 401) toast(problem.message);
@@ -241,7 +252,9 @@ function endSession() {
 }
 function pageHeading() {
   const [caption, description, glyph] = pageInfo[page] || pageInfo.Dashboard;
-  return `<header class="page-heading"><div class="page-heading-copy"><span class="page-eyebrow">${escape(caption)}</span><h1>${escape(pageLabels[page] || page)}</h1>${description ? `<p>${escape(description)}</p>` : ''}</div><span class="page-heading-icon" aria-hidden="true">${icon(glyph)}</span></header>`;
+  const reportInfo = { rental: ['BUSINESS ANALYTICS', 'Review rental activity, fees, equipment, and customer performance.'], equipment: ['DIAGNOSTIC ANALYTICS', 'Understand what drives equipment performance.'], service: ['DIAGNOSTIC ANALYTICS', 'Review maintenance and service performance.'], forecast: ['PREDICTIVE ANALYTICS', 'Explore projections based on confirmed rental history.'], recommendations: ['PRESCRIPTIVE ANALYTICS', 'Review practical suggestions based on recorded data.'], audit: ['ACTIVITY HISTORY', 'Review recorded workspace actions.'] }[workspaceUI.reportSection()];
+  const title = page === 'Reports' ? ({ rental: 'Report', equipment: 'Report', service: 'Report', forecast: 'Forecast', recommendations: 'Recommendations', audit: 'Report' }[workspaceUI.reportSection()] || 'Report') : pageLabels[page] || page;
+  return `<header class="page-heading"><div class="page-heading-copy"><span class="page-eyebrow">${escape(page === 'Reports' ? reportInfo[0] : caption)}</span><h1>${escape(title)}</h1>${description ? `<p>${escape(page === 'Reports' ? reportInfo[1] : description)}</p>` : ''}</div><span class="page-heading-icon" aria-hidden="true">${icon(glyph)}</span></header>`;
 }
 function sessionLoading() {
   app.innerHTML = `<main class="session-loading" aria-live="polite"><div class="session-loading-card"><img class="session-logo" src="/public/logo.png" alt="Rent and Play"/><div class="session-brand-copy"><strong>rent<span class="orange">&</span>play</strong><small>RENTAL MANAGEMENT</small></div><span class="session-spinner" aria-hidden="true"></span><p>Opening your workspace…</p></div></main>`;
@@ -335,7 +348,7 @@ function login(message = '') {
     document.querySelector('#login-error').textContent = '';
     try {
       const result = await api('/auth/login', { method: 'POST', body: JSON.stringify(body) });
-      user = result.user; page = pageForPath(location.pathname); history.replaceState({ page }, '', pageRoutes[page]); await refresh();
+      user = result.user; page = pageForPath(location.pathname); if (page === 'Reports') workspaceUI.setReportSection(reportSectionForPath(location.pathname)); history.replaceState({ page }, '', page === 'Reports' ? reportPathForSection(workspaceUI.reportSection()) : pageRoutes[page]); await refresh();
     } catch (error) {
       const el = document.querySelector('#login-error'); if (el) el.textContent = error.message;
     } finally {
@@ -482,13 +495,19 @@ function render() {
   const body = !data ? `<section class="panel">${empty('Waiting for your database', 'Check the backend connection, then select Refresh.')}</section>` : page === 'Dashboard' ? dashboard() : page === 'Inventory' ? inventory() : page === 'Profile' ? profile() : workspacePages.has(page) ? workspaceUI.render(page, user, appearanceSettings()) : `<section class="panel">${empty('Page unavailable', 'Choose another workspace section.')}</section>`;
   const groupedNav = navGroups.map(group => {
     const expanded = navGroupExpanded[group.id];
-    return `<section class="nav-section"><button type="button" id="nav-group-toggle-${group.id}" class="nav-section-title" data-nav-group="${group.id}" aria-expanded="${expanded}" aria-controls="nav-group-${group.id}"><span class="nav-emoji" aria-hidden="true">${group.emoji}</span><span class="sidebar-label">${group.label}</span><span class="nav-group-chevron">${icon('chevron')}</span></button><div class="nav-section-items" id="nav-group-${group.id}" ${expanded ? '' : 'hidden'}>${group.items.map(([label, target]) => `<button data-page="${target}" class="nav-child ${page === target ? 'active' : ''}"><span class="sidebar-label">${label}</span>${target === 'Rentals' ? `<span class="nav-count">${data?.rentals?.length ?? '–'}</span>` : ''}</button>`).join('')}</div></section>`;
+    const children = group.items.map(([label, target, section]) => {
+      const active = section
+        ? page === 'Reports' && (section === 'rental' ? !['forecast', 'recommendations'].includes(workspaceUI.reportSection()) : workspaceUI.reportSection() === section)
+        : page === target;
+      return `<button data-page="${target}" ${section ? `data-analytics-section="${section}"` : ''} class="nav-child ${active ? 'active' : ''}"><span class="sidebar-label">${label}</span>${target === 'Rentals' ? `<span class="nav-count">${data?.rentals?.length ?? '–'}</span>` : ''}</button>`;
+    }).join('');
+    return `<section class="nav-section"><button type="button" id="nav-group-toggle-${group.id}" class="nav-section-title" data-nav-group="${group.id}" aria-expanded="${expanded}" aria-controls="nav-group-${group.id}"><span class="nav-emoji" aria-hidden="true">${group.emoji}</span><span class="sidebar-label">${group.label}</span><span class="nav-group-chevron">${icon('chevron')}</span></button><div class="nav-section-items" id="nav-group-${group.id}" ${expanded ? '' : 'hidden'}>${children}</div></section>`;
   }).join('');
-  const displayPage = pageLabels[page] || page;
+  const displayPage = page === 'Reports' ? ({ rental: 'Report', equipment: 'Report', service: 'Report', forecast: 'Forecast', recommendations: 'Recommendations', audit: 'Report' }[workspaceUI.reportSection()] || 'Report') : pageLabels[page] || page;
   document.title = `${displayPage} · Rent & Play`;
   let notificationsSeen = ''; try { notificationsSeen = localStorage.getItem('rent-play-notifications-seen') || ''; } catch { }
   const showNotificationDot = !!notificationFingerprint() && notificationFingerprint() !== notificationsSeen;
-  app.innerHTML = `<a class="skip-link" href="#workspace-content">Skip to main content</a><div class="workspace"><aside class="sidebar"><a class="brand" href="/" data-page="Dashboard" aria-label="Rent & Play home">${brand}</a><div class="store"><span class="store-icon">${icon('box')}</span><div><strong>Rent & Play</strong><small>Los Baños, Laguna</small></div></div><nav><button data-page="Dashboard" class="nav-root ${page === 'Dashboard' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">🏠</span><span class="sidebar-label">Dashboard</span></button>${groupedNav}<button data-page="Reports" class="nav-root ${page === 'Reports' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">📊</span><span class="sidebar-label">Reports</span></button></nav><div class="sidebar-bottom"><button data-page="Settings"><span class="nav-emoji" aria-hidden="true">⚙️</span> Settings</button><button id="logout"><span class="nav-emoji" aria-hidden="true">🚪</span> Logout</button><div class="demo-status"><span></span><div><strong>${connectionError ? 'Connection interrupted' : 'Connected workspace'}</strong><small>${data ? 'Cloud Firestore records' : 'Waiting for database'}</small></div></div><div class="operator"><span class="avatar">${escape(initials(user.name))}</span><div><strong>${escape(user.name)}</strong><small>${escape(user.role)}</small></div></div></div></aside><div class="workspace-body"><header class="topbar"><button class="icon-button menu-toggle" id="mobile-menu" aria-label="Toggle navigation">${icon('menu')}</button><div class="breadcrumb"><span class="breadcrumb-current">${escape(displayPage)}</span></div><div class="top-actions"><button class="text-button" id="refresh" ${manualRefreshPending ? 'disabled aria-busy="true"' : ''}>${manualRefreshPending ? 'Refreshing…' : 'Refresh'}</button>${notificationsMenu(showNotificationDot)}<div class="profile-menu"><button class="profile-menu-toggle" id="profile-menu-toggle" type="button" aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false"><span class="avatar small">${escape(initials(user.name))}</span><span class="profile-menu-chevron" aria-hidden="true">▾</span></button><div class="profile-dropdown" id="profile-dropdown" role="menu" hidden><div class="profile-dropdown-user"><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></div><button data-page="Profile" role="menuitem">${icon('users')} View profile</button><button data-page="Settings" role="menuitem">${icon('settings')} Settings</button><button data-action="logout" class="profile-dropdown-logout" role="menuitem">${icon('out')} Logout</button></div></div></div></header><main class="content" id="workspace-content" tabindex="-1">${pageHeading()}${connectionError ? `<div class="connection-banner dashboard-connection-banner" role="alert">${escape(connectionError)}${data ? ' Showing the last successfully loaded records.' : ''}</div>` : ''}${body}<footer class="content-footer"><span>© ${new Date().getFullYear()} Rent & Play</span><span>${data ? `Updated ${new Intl.DateTimeFormat('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(data.refreshedAt))}` : 'Waiting for database'}</span></footer></main></div></div>`;
+  app.innerHTML = `<a class="skip-link" href="#workspace-content">Skip to main content</a><div class="workspace"><aside class="sidebar"><a class="brand" href="/" data-page="Dashboard" aria-label="Rent & Play home">${brand}</a><div class="store"><span class="store-icon">${icon('box')}</span><div><strong>Rent & Play</strong><small>Los Baños, Laguna</small></div></div><nav><button data-page="Dashboard" class="nav-root ${page === 'Dashboard' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">🏠</span><span class="sidebar-label">Dashboard</span></button>${groupedNav}</nav><div class="sidebar-bottom"><button data-page="Settings"><span class="nav-emoji" aria-hidden="true">⚙️</span> Settings</button><button id="logout"><span class="nav-emoji" aria-hidden="true">🚪</span> Logout</button><div class="demo-status"><span></span><div><strong>${connectionError ? 'Connection interrupted' : 'Connected workspace'}</strong><small>${data ? 'Cloud Firestore records' : 'Waiting for database'}</small></div></div><div class="operator"><span class="avatar">${escape(initials(user.name))}</span><div><strong>${escape(user.name)}</strong><small>${escape(user.role)}</small></div></div></div></aside><div class="workspace-body"><header class="topbar"><button class="icon-button menu-toggle" id="mobile-menu" aria-label="Toggle navigation">${icon('menu')}</button><div class="breadcrumb"><span class="breadcrumb-current">${escape(displayPage)}</span></div><div class="top-actions"><button class="text-button" id="refresh" ${manualRefreshPending ? 'disabled aria-busy="true"' : ''}>${manualRefreshPending ? 'Refreshing…' : 'Refresh'}</button>${notificationsMenu(showNotificationDot)}<div class="profile-menu"><button class="profile-menu-toggle" id="profile-menu-toggle" type="button" aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false"><span class="avatar small">${escape(initials(user.name))}</span><span class="profile-menu-chevron" aria-hidden="true">▾</span></button><div class="profile-dropdown" id="profile-dropdown" role="menu" hidden><div class="profile-dropdown-user"><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></div><button data-page="Profile" role="menuitem">${icon('users')} View profile</button><button data-page="Settings" role="menuitem">${icon('settings')} Settings</button><button data-action="logout" class="profile-dropdown-logout" role="menuitem">${icon('out')} Logout</button></div></div></div></header><main class="content" id="workspace-content" tabindex="-1">${pageHeading()}${connectionError ? `<div class="connection-banner dashboard-connection-banner" role="alert">${escape(connectionError)}${data ? ' Showing the last successfully loaded records.' : ''}</div>` : ''}${body}<footer class="content-footer"><span>© ${new Date().getFullYear()} Rent & Play</span><span>${data ? `Updated ${new Intl.DateTimeFormat('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(data.refreshedAt))}` : 'Waiting for database'}</span></footer></main></div></div>`;
   if (existingInventory) document.querySelector('#inventory-root')?.replaceWith(existingInventory);
   const business = workspaceUI.business();
   if (business.business_name) document.querySelector('.store strong').textContent = business.business_name;
@@ -509,7 +528,7 @@ function bind() {
   if (page === 'Inventory' && data) inventoryController.mount(document.querySelector('#inventory-root'), category);
   const themeSwitch = document.querySelector('#dark-mode');
   if (themeSwitch) themeSwitch.onclick = () => setTheme(theme === 'dark' ? 'light' : 'dark');
-  document.querySelectorAll('[data-page]').forEach(el => { el.onclick = event => { event.preventDefault(); goTo(el.dataset.page, false, el.dataset.filter || 'All rentals'); if (el.dataset.target) requestAnimationFrame(() => document.getElementById(el.dataset.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })); }; if (el.getAttribute('role') === 'button') el.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); el.click(); } }; });
+  document.querySelectorAll('[data-page]').forEach(el => { el.onclick = event => { event.preventDefault(); goTo(el.dataset.page, false, el.dataset.filter || 'All rentals', '', el.dataset.analyticsSection || ''); if (el.dataset.target) requestAnimationFrame(() => document.getElementById(el.dataset.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })); }; if (el.getAttribute('role') === 'button') el.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); el.click(); } }; });
   document.querySelectorAll('[data-nav-group]').forEach(button => button.onclick = () => {
     const id = button.dataset.navGroup;
     if (sidebarCollapsed && !window.matchMedia('(max-width:720px)').matches) { sidebarCollapsed = false; navGroupExpanded[id] = true; try { localStorage.setItem('rent-play-sidebar-collapsed', 'false'); } catch { } }
@@ -629,6 +648,7 @@ async function boot() {
 }
 const inventoryController = createInventory({ api, escape, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, confirmAction, confirmSubmit });
 const workspaceUI = createWorkspaceUI({ api, escape, icon, showModal, modal, toast, money, formatDate, confirmAction, confirmSubmit, showEquipmentDetails: id => inventoryController.details(id), navigate: goTo });
+workspaceUI.setReportSection(reportSectionForPath(location.pathname));
 const rentalNotifications = createRentalNotifications({ api, onChange: syncNotifications,
   onAlert: (notification, count) => toast(count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`) });
 document.addEventListener('visibilitychange', () => {
@@ -639,7 +659,15 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 invalidateWorkspace = () => workspaceUI.invalidate();
-window.addEventListener('popstate', () => { page = pageForPath(location.pathname); if (workspacePages.has(page)) invalidateWorkspace(); if (user) { render(); document.querySelector('#workspace-content')?.focus({ preventScroll: true }); } });
+window.addEventListener('popstate', () => { const nextPage = pageForPath(location.pathname), sameReport = page === 'Reports' && nextPage === 'Reports'; page = nextPage; if (page === 'Reports') workspaceUI.setReportSection(reportSectionForPath(location.pathname)); if (workspacePages.has(page) && !sameReport) invalidateWorkspace(); if (user) { render(); document.querySelector('#workspace-content')?.focus({ preventScroll: true }); } });
+setInterval(() => {
+  if (!user || !liveRentalPages.has(page) || modal.open || document.visibilityState !== 'visible') return;
+  if (document.querySelector('#rental-search:focus,#module-search:focus,.admin-form input:focus,.admin-form textarea:focus,.admin-form select:focus,#profile-form input:focus,.analytics-filters input:focus,.analytics-filters select:focus,#analytics-sort:focus,.sidebar.open,#profile-dropdown:not([hidden]),#notification-dropdown:not([hidden])')) return;
+  const scrollTop = document.querySelector('.content')?.scrollTop || 0;
+  render();
+  const content = document.querySelector('.content');
+  if (content) content.scrollTop = scrollTop;
+}, 60000);
 setInterval(async () => {
   if (confirmation.isOpen() || logoutPending) return;
   if (!user || user.mustChangePassword || !apiClient.canRefresh() || !workspaceUI.autoRefreshEnabled() || page === 'Settings' || liveRentalPages.has(page) || document.visibilityState !== 'visible') return;

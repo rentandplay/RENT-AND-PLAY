@@ -1,6 +1,7 @@
 import { analyticsRange, calculateAnalytics, analyticsCsv } from './analytics.js';
 import { renderAnalyticsReport } from './analytics-report.js';
 import { renderSettings, settingsTabs } from './settings-ui.js';
+import { reportPathForSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
 import { actualReturnTime, chargeCell, enrichVerification, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderAdminHandoff, renderRequestHistory, savedCharges } from './transaction-records.js';
 import { createTransactionWorkflow } from './transaction-workflow.js';
@@ -78,7 +79,7 @@ export function createWorkspaceUI(h) {
   };
   const txMetric = (label, value, note, glyph, tone = "blue") => `<article><div class="transaction-metric-label"><span>${e(label)}</span><i class="transaction-metric-icon ${e(tone)}">${icon(glyph)}</i></div><strong>${e(value)}</strong><small>${e(note)}</small></article>`;
   const txFilter = (page, label, count) => `<button type="button" class="transaction-filter ${txState[page].filter === label ? "selected" : ""}" data-transaction-filter="${e(label)}" aria-pressed="${txState[page].filter === label}">${e(label)}<span>${count}</span></button>`;
-  const txDueCell = row => { if (["APPROVED","PENDING_ADMIN_APPROVAL"].includes(row.status)) return `<strong>Starts at handoff</strong><small>Hold until ${e(formatDate(row.hold_expires_at))}</small>`; const due = txDate(row.due_at), now = new Date(), label = txStatus(row); const hint = label === "Overdue" && due ? `Overdue by ${Math.max(1, Math.ceil((now - due) / 3600000))}h` : label === "Due today" ? "Due today" : label === "Pending verification" ? "Waiting at counter" : "Due date"; return `<strong>${e(formatDate(row.due_at))}</strong><small class="${label === "Overdue" ? "transaction-alert-text" : label === "Due today" ? "transaction-due-text" : ""}">${e(hint)}</small>`; };
+  const txDueCell = row => { if (["APPROVED","PENDING_ADMIN_APPROVAL"].includes(row.status)) return `<strong>Starts at handoff</strong><small>Hold until ${e(formatDate(row.hold_expires_at))}</small>`; const due = txDate(row.due_at), now = new Date(), label = txStatus(row), active = row.status === "ACTIVE", received = txDate(row.received_at || row.returned_at || row.confirmed_return_at), overdue = active && due && due < now, dueToday = active && due && due >= now && txDay(due) === txDay(now), lateAtReceipt = row.status === "RETURN_PENDING_INSPECTION" && due && received && received > due; const hint = overdue ? `${row.latest_return_request_status === "PENDING_ADMIN_APPROVAL" ? "Return requested · " : ""}overdue by ${Math.max(1, Math.ceil((now - due) / 3600000))}h` : dueToday ? "Due today" : lateAtReceipt ? "Received late · timer stopped" : row.status === "RETURN_PENDING_INSPECTION" ? "Timer stopped at receipt" : label === "Pending verification" ? "Waiting at counter" : "Due date"; const tone = overdue || lateAtReceipt ? "transaction-alert-text" : dueToday ? "transaction-due-text" : ""; return `<strong>${e(formatDate(row.due_at))}</strong><small class="${tone}">${e(hint)}</small>`; };
   const txCsvCell = value => { const quote = String.fromCharCode(34), text = String(value ?? ""), safe = /^[=+@\-\t\r]/.test(text) ? String.fromCharCode(39) + text : text; return quote + safe.replaceAll(quote, quote + quote) + quote; };
   const txHistoryMatches = (row, state) => {
     const date = txDate(row.confirmed_rental_at || row.created_at), today = txDay(new Date());
@@ -180,7 +181,7 @@ export function createWorkspaceUI(h) {
     const returned = all.filter(txIsReturned).sort((a, b) => (txDate(b.confirmed_return_at || b.updated_at || b.created_at)?.getTime() || 0) - (txDate(a.confirmed_return_at || a.updated_at || a.created_at)?.getTime() || 0));
     const pendingReturns = txPending("RETURN"), now = new Date(), today = txDay(now), state = txState[mode];
     if (mode === "Rentals") {
-      const dueToday = active.filter(row => txStatus(row) === 'Due today'), overdue = active.filter(row => { const due = txDate(row.due_at); return due && due < now; });
+      const dueToday = active.filter(row => { const due = txDate(row.due_at); return due && due >= now && txDay(due) === today; }), overdue = active.filter(row => { const due = txDate(row.due_at); return due && due < now; });
       const returnRequested = active.filter(row => row.latest_return_request_status === 'PENDING_ADMIN_APPROVAL');
       let records = all.filter(row => ["ACTIVE", "APPROVED", "RETURN_PENDING_INSPECTION", "PENDING_VERIFICATION", "PENDING_ADMIN_APPROVAL"].includes(row.status));
       if (state.filter === "Due today") records = dueToday;
@@ -209,7 +210,8 @@ export function createWorkspaceUI(h) {
       const mobileQueue = queueList.map(row => {
         const isInspection = row.status === 'RETURN_PENDING_INSPECTION';
         const isRequested = row.latest_return_request_status === 'PENDING_ADMIN_APPROVAL';
-        const label = isInspection ? 'Received · Inspection pending' : isRequested ? 'Customer requested return' : 'Equipment currently out';
+        const due = txDate(row.due_at), received = txDate(row.received_at || row.returned_at || row.confirmed_return_at), overdue = row.status === 'ACTIVE' && due && due < new Date(), lateAtReceipt = isInspection && due && received && received > due;
+        const label = isInspection ? lateAtReceipt ? 'Received late · timer stopped · inspection pending' : 'Received · timer stopped · inspection pending' : isRequested ? overdue ? `Return requested · overdue by ${Math.max(1, Math.ceil((new Date() - due) / 3600000))}h` : 'Customer requested return' : overdue ? `Equipment out · overdue by ${Math.max(1, Math.ceil((new Date() - due) / 3600000))}h` : due && txDay(due) === today ? 'Equipment out · due today' : 'Equipment currently out';
         const btnLabel = isInspection ? 'Complete inspection' : 'Receive return';
         return `<article class="return-queue-item ${isRequested ? 'return-queue-requested' : ''}"><span class="return-queue-icon">${icon('box')}</span><div><strong>${e(row.item_name)}</strong><small>${e(row.customer_name)} · ${e(txCode(row))}</small><small class="${isRequested ? 'return-requested-pill' : ''}">${label}</small></div><div class="transaction-row-actions"><button type="button" class="primary" data-return-action="${e(row.id)}">${btnLabel}</button><button type="button" class="transaction-icon-action" data-transaction-detail="${e(row.id)}" aria-label="View details for ${e(txCode(row))}" title="View details">${icon("eye")}</button></div></article>`;
       }).join('');
@@ -488,7 +490,7 @@ export function createWorkspaceUI(h) {
       finally { button.disabled = false; }
     });
     const updateAnalytics = () => { for (const key of Object.keys(pages)) if (key.startsWith('analytics-')) pages[key] = 0; rerender(); };
-    const selectAnalyticsTab = section => { reportView.section = section; rerender(); document.querySelector(`[data-analytics-tab="${section}"]`)?.focus(); };
+    const selectAnalyticsTab = section => { reportView.section = section; const route = reportPathForSection(section); if (location.pathname !== route) history.pushState({ page: 'Reports' }, '', route); rerender(); document.querySelector(`[data-analytics-tab="${section}"]`)?.focus(); };
     const analyticsTabs = [...document.querySelectorAll('[data-analytics-tab]')];
     analyticsTabs.forEach(button => {
       button.onclick = () => selectAnalyticsTab(button.dataset.analyticsTab);
@@ -519,5 +521,5 @@ export function createWorkspaceUI(h) {
     if (!row) throw new Error('This rental is unavailable. Refresh the rental records.');
     transactionDetails(row);
   }
-  return { load, refresh, invalidate, render, bind, openTransaction, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; settingsTab = 'business'; pages = {}; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); } };
+  return { load, refresh, invalidate, render, bind, openTransaction, reportSection: () => reportView.section, setReportSection: section => { if (['rental', 'equipment', 'service', 'forecast', 'recommendations', 'audit'].includes(section)) reportView.section = section; }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; settingsTab = 'business'; pages = {}; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); } };
 }

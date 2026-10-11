@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRentalNotifications, renderRentalNotifications } from '../src/notifications.js';
+import { createRentalNotifications, renderRentalNotifications, syncLiveRentalUpdate } from '../src/notifications.js';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const event = (id, extra = {}) => ({ id, title: 'Booking approved', message: 'Pickup is ready.', type: 'BOOKING_APPROVED', rental_id: 'r1', rental_code: 'R-001', created_at: '2026-10-07T02:00:00Z', is_read: false, ...extra });
 
@@ -12,6 +12,45 @@ test('initial unread history shows a badge silently and a new request alerts onl
   incoming = [event('two'), event('one')];
   await controller.refresh(); await controller.refresh();
   assert.deepEqual(alerts, ['two']); assert.equal(controller.state().unreadCount, 2);
+});
+
+test('live alerts arrive during an open rental dialog and the workspace catches up when it closes', async () => {
+  let incoming = [event('one')], dialogOpen = true, viewRefreshes = 0;
+  const alerts = [];
+  const notifications = createRentalNotifications({ api: async () => ({ notifications: incoming }), onAlert: row => alerts.push(row.id) });
+  notifications.setAccount('operator'); await flush();
+  incoming = [event('two'), event('one')];
+  const sync = () => syncLiveRentalUpdate({ notifications, isDialogOpen: () => dialogOpen, refreshView: async () => { viewRefreshes++; } });
+  assert.equal(await sync(), false);
+  assert.deepEqual(alerts, ['two']); assert.equal(notifications.state().unreadCount, 2);
+  assert.equal(viewRefreshes, 0);
+  dialogOpen = false;
+  assert.equal(await sync(), true); assert.equal(viewRefreshes, 1);
+  assert.deepEqual(alerts, ['two']);
+});
+
+test('opening a rental dialog during the inbox fetch still delivers alerts without replacing the draft', async () => {
+  let finish, dialogOpen = false, viewRefreshes = 0;
+  const sync = syncLiveRentalUpdate({ notifications: { refresh: () => new Promise(resolve => { finish = resolve; }) },
+    isDialogOpen: () => dialogOpen, refreshView: async () => { viewRefreshes++; } });
+  dialogOpen = true; finish();
+  assert.equal(await sync, false); assert.equal(viewRefreshes, 0);
+});
+
+test('a live event during an inbox fetch queues a fresh read and alerts only once', async () => {
+  let incoming = [event('one')], finish, calls = 0;
+  const alerts = [];
+  const notifications = createRentalNotifications({ api: async () => {
+    if (++calls === 2) return new Promise(resolve => { finish = resolve; });
+    return { notifications: incoming };
+  }, onAlert: row => alerts.push(row.id) });
+  notifications.setAccount('operator'); await flush();
+  const olderSnapshot = notifications.refresh();
+  incoming = [event('two'), event('one')];
+  await syncLiveRentalUpdate({ notifications, isDialogOpen: () => false, refreshView: async () => {} });
+  finish({ notifications: [event('one')] }); await olderSnapshot; await flush();
+  assert.equal(calls, 3); assert.deepEqual(alerts, ['two']);
+  assert.equal(notifications.state().unreadCount, 2);
 });
 test('late fetches cannot restore notifications from a previous signed-in account', async () => {
   let release;

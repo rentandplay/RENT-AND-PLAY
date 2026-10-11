@@ -85,7 +85,14 @@ const mapItem=(item,category,rates,rentals,maintenance)=>{
 };
 
 export async function inventoryList(db) {
-  const [itemSnap,categorySnap,rateSnap,rentalSnap,maintenanceSnap]=await Promise.all(['items','item_categories','item_rates','rentals','maintenance_records'].map(name=>db.collection(name).get()));
+  // Availability needs open reservations, not every completed rental or repair.
+  // Include the lowercase statuses written by the earlier mobile app.
+  const statuses=['ACTIVE','APPROVED','RETURN_PENDING_INSPECTION','PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','PENDING_ESP32_RENT'];
+  const [itemSnap,categorySnap,rateSnap,rentalSnap,maintenanceSnap]=await Promise.all([
+    ...['items','item_categories','item_rates'].map(name=>db.collection(name).get()),
+    db.collection('rentals').where('status','in',[...statuses,...statuses.map(status=>status.toLowerCase())]).get(),
+    db.collection('maintenance_records').where('status','in',['OPEN','IN_PROGRESS']).get()
+  ]);
   const items=rows(itemSnap),categories=rows(categorySnap),rates=rows(rateSnap),rentals=rows(rentalSnap),maintenance=rows(maintenanceSnap);
   const byId=new Map(categories.map(category=>[category.id,category]));
   return {items:items.map(item=>mapItem(item,byId.get(String(item.category_id)),rates.filter(r=>String(r.item_id)===item.id),rentals.filter(r=>String(r.item_id??r.itemId)===item.id),maintenance.filter(r=>String(r.item_id)===item.id))).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))),categories:categories.sort((a,b)=>a.name.localeCompare(b.name))};

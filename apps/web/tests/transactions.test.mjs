@@ -44,3 +44,19 @@ test('Rentals, Returns, and History render the same saved charges and verificati
   const history = ui.render('Transaction History', {}); assert.ok(history.includes('Rejected')); assert.ok(history.includes('Expired'));
   const verification = ui.render('ESP32 terminal', {}); assert.ok(verification.includes('Full verification history')); assert.ok(verification.includes('of 8')); assert.ok(verification.includes('No confirming terminal recorded'));
 });
+
+test('due return requests stay marked overdue until physical receipt and inspection shows the stopped clock', async () => {
+  const now = Date.now(), due = new Date(now - 2 * 3600000).toISOString();
+  const data = {
+    transactions: [
+      { id: 'late-request', rental_code: 'R-LATE', item_name: 'Basketball', item_code: 'BALL-1', customer_name: 'Customer A', status: 'ACTIVE', latest_return_request_status: 'PENDING_ADMIN_APPROVAL', due_at: due },
+      { id: 'received-late', rental_code: 'R-RECEIVED', item_name: 'Volleyball', item_code: 'BALL-2', customer_name: 'Customer B', status: 'RETURN_PENDING_INSPECTION', due_at: due, received_at: new Date(now - 3600000).toISOString() }
+    ],
+    customers: [], items: [], categories: [], rates: [], maintenance: [], users: [], settings: {}, terminals: [], verification: []
+  };
+  const ui = createWorkspaceUI({ ...h, api: async () => data }); await ui.load();
+  assert.ok(ui.render('Rentals', {}).includes('Return requested · overdue by'));
+  const returns = ui.render('Returns', {});
+  assert.ok(returns.includes('Return requested · overdue by'));
+  assert.ok(returns.includes('Received late · timer stopped · inspection pending'));
+});

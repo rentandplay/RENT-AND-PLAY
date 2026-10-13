@@ -1,13 +1,16 @@
-import { analyticsRange, calculateAnalytics, analyticsCsv } from './analytics.js';
+import { recordCode, relatedCode } from './record-codes.js';
+import { analyticsRange, analyticsCsv } from './analytics.js';
+import { calculateDetailedAnalytics, forecastScenario } from './analytics-insights.js';
 import { renderAnalyticsReport } from './analytics-report.js';
 import { renderSettings, settingsTabs } from './settings-ui.js';
-import { reportPathForSection } from './workspace-navigation.js';
+import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
 import { actualReturnTime, chargeCell, enrichVerification, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderAdminHandoff, renderRequestHistory, savedCharges } from './transaction-records.js';
 import { createTransactionWorkflow } from './transaction-workflow.js';
 import { createCustomerUI } from './customer-ui.js';
 import { bindRecordLinks, recordAttrs } from './record-links.js';
 import { createRecordDetails } from './record-details.js';
+import { createMaintenanceUI } from './maintenance.js';
 import { manilaDateTimeInput, manilaDateTimeIso } from './date-time.js';
 import { bindAccountValidation, nameError, emailError, passwordError, passwordMatchError, passwordHelp } from './account-validation.js';
 
@@ -21,7 +24,7 @@ export function createWorkspaceUI(h) {
   try { preferences = readPreferences(localStorage); } catch { }
   let settingsTab = 'business', businessDraft = null, businessDirty = false, businessSaving = false, preferencesDraft = null;
   const analyticsSelection = { period: preferences.reportPeriod, from: '', to: '', categoryId: '', itemId: '', groupBy: preferences.reportGrouping };
-  const reportView = { section: 'rental', sort: 'rentals', details: {} };
+  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', forecastScenario: 'baseline', recommendationType: 'all', details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
   const status = value => `<span class="badge ${e(String(value || 'unknown').toLowerCase().replaceAll('_', '-').replaceAll(' ', '-'))}">${e(String(value || 'Unknown').replaceAll('_', ' '))}</span>`;
   const invalidate = () => { cacheVersion++; loading = null; loadError = ''; };
@@ -46,7 +49,8 @@ export function createWorkspaceUI(h) {
   };
   const workflow = createTransactionWorkflow({ ...h, model: () => model, refresh, redraw: () => redraw(), transactionDetails });
   const customerUI = createCustomerUI({ ...h, model: () => model, refresh, transactionDetails });
-  const recordDetails = createRecordDetails({ ...h, model: () => model, transactionDetails });
+  const maintenanceUI = createMaintenanceUI({ ...h, model: () => model, refresh, redraw: () => redraw(), resetPage: () => { pages.Maintenance = 0; }, transactionDetails });
+  const recordDetails = createRecordDetails({ ...h, model: () => model, transactionDetails, maintenanceDetails: maintenanceUI.details });
   const empty = (title, text) => `<div class="workspace-empty">${icon('box')}<h3>${e(title)}</h3><p>${e(text)}</p></div>`;
   const table = (heads, rows) => `<div class="admin-table-scroll" role="region" aria-label="Scrollable records" tabindex="0"><table class="admin-table"><thead><tr>${heads.map(v => `<th>${v}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
   const includes = (row, keys) => keys.some(key => String(row[key] || '').toLowerCase().includes(search.trim().toLowerCase()));
@@ -66,8 +70,8 @@ export function createWorkspaceUI(h) {
   const txIsReturned = row => row.status === 'COMPLETED' || Boolean(row.confirmed_return_at);
   const txIsLate = row => { const returnedAt = txDate(actualReturnTime(row)), dueAt = txDate(row.due_at); return Boolean(returnedAt && dueAt && returnedAt > dueAt); };
   const txPending = type => (model.verification || []).filter(request => request.status === "PENDING" && String(request.transaction_type || request.type || "").toUpperCase() === type);
-  const txSearch = row => [row.rental_code, row.id, row.item_name, row.item_code, row.customer_name, row.status].join(" ").toLowerCase().includes(search.toLowerCase());
-  const txCode = row => row.rental_code || row.id || "Rental record";
+  const txSearch = row => [row.rental_code, row.legacy_rental_code, row.id, row.item_name, row.item_code, row.customer_name, row.status].join(" ").toLowerCase().includes(search.toLowerCase());
+  const txCode = row => recordCode(row);
   const txStatus = row => {
     if (row.status === "APPROVED") return "Awaiting delivery";
     if (row.status === "RETURN_PENDING_INSPECTION") return "Received · inspection pending";
@@ -226,7 +230,7 @@ export function createWorkspaceUI(h) {
       else if (state.filter === "This month") records = returnedThisMonth;
       records = records.filter(txSearch);
       const view = paged(records, mode), action = `<button type="button" class="primary" id="return-request-add">+ Scan returned equipment</button>`;
-      const queueMarkup = pendingReturns.length ? pendingReturns.slice(0, 4).map(request => { const row = all.find(item => String(item.id) === String(request.rental_id)); return `<article class="return-queue-item" ${recordAttrs('verification', request.id, request.rental_code || request.rental_id)}><span class="return-queue-icon">${icon("box")}</span><div><strong>${e(row?.item_name || "Return request")}</strong><small>${e(row?.customer_name || "Customer details in queue")} · ${e(txCode(row || { id: request.rental_id }))}</small><small>Requested ${e(formatDate(request.requested_at))}</small></div>${status("Pending")}</article>`; }).join("") : `<div class="return-queue-clear"><span>✓</span><div><strong>No legacy terminal requests waiting</strong><small>Record returns from the active rental or scan the inventory QR.</small></div></div>`;
+      const queueMarkup = pendingReturns.length ? pendingReturns.slice(0, 4).map(request => { const row = all.find(item => String(item.id) === String(request.rental_id)); return `<article class="return-queue-item" ${recordAttrs('verification', request.id, recordCode(request, 'verification'))}><span class="return-queue-icon">${icon("box")}</span><div><strong>${e(row?.item_name || "Return request")}</strong><small>${e(row?.customer_name || "Customer details in queue")} · ${e(txCode(row || { id: request.rental_id }))}</small><small>Requested ${e(formatDate(request.requested_at))}</small></div>${status("Pending")}</article>`; }).join("") : `<div class="return-queue-clear"><span>✓</span><div><strong>No legacy terminal requests waiting</strong><small>Record returns from the active rental or scan the inventory QR.</small></div></div>`;
       const filters = `<div class="transaction-filters" role="group" aria-label="Filter returns">${txFilter(mode, "All returns", returned.length)}${txFilter(mode, "Pending returns", mobileReturns.length)}${txFilter(mode, "Returned today", returnedToday.length)}${txFilter(mode, "Late returns", lateReturns.length)}${txFilter(mode, "This month", returnedThisMonth.length)}</div>`;
       const tableHeadings = isPendingView ? ["EQUIPMENT / RENTAL ID", "CUSTOMER", "DUE DATE", "RETURN STATUS", "CHARGES", "ACTIONS"] : ["EQUIPMENT / RENTAL ID", "CUSTOMER", "DUE DATE", "RETURNED AT", "RETURN STATUS", "CHARGES", ""];
       const tableRows = isPendingView
@@ -246,7 +250,7 @@ export function createWorkspaceUI(h) {
     const statuses = ["All statuses", "Active", "Pending admin review", "Awaiting delivery", "Inspection pending", "Pending verification", "Returned", "Rejected", "Expired", "Cancelled"], periods = ["All time", "Last 30 days", "This month", "This year"];
     const statusSelect = `<label class="transaction-select"><span>Status</span><select id="transaction-status-filter" aria-label="Filter by status">${statuses.map(option => `<option ${historyState.status === option ? "selected" : ""}>${e(option)}</option>`).join("")}</select></label>`;
     const periodSelect = `<label class="transaction-select"><span>Date range</span><select id="transaction-period-filter" aria-label="Filter by date">${periods.map(option => `<option ${historyState.period === option ? "selected" : ""}>${e(option)}</option>`).join("")}</select></label>`;
-    return `<div class="module-stats transaction-stats">${txMetric("Total transactions", all.length, "All rental records", "chart")}${txMetric("Active now", active.length, "Equipment currently out", "box")}${txMetric("Returned", completed.length, "Completed return records", "clock", "green")}${txMetric("Recorded rental fees", money(rentalFees), `From ${confirmed.length} confirmed rentals`, "money", "purple")}</div><div class="history-insights"><section class="panel history-insight-card"><div class="panel-title"><div><h3>Most rented equipment</h3><p>Based on confirmed rentals</p></div></div><div class="popular-items">${popularMarkup}</div></section><section class="panel history-insight-card history-workflow-card"><span class="eyebrow">QUICK VIEW</span><h3>Stay ahead of the next return</h3><p>${active.length ? `${active.length} active rental${active.length === 1 ? "" : "s"} currently out` : "No active rentals right now"}${pendingRentals.length ? ` · ${pendingRentals.length} waiting for confirmation` : ""}.</p><button type="button" class="text-button" data-page="Rentals">Review active rentals →</button></section></div><section class="panel admin-module transaction-table-panel history-table-panel"><div class="transaction-list-toolbar"><label class="module-search">${icon("search")}<input id="module-search" value="${e(search)}" placeholder="Search item, customer, or rental ID" aria-label="Search transaction history"/></label><div class="transaction-heading-actions">${action}</div></div><div class="transaction-filter-toolbar history-filter-toolbar"><div class="transaction-selects">${statusSelect}${periodSelect}</div></div><div class="transaction-table-caption"><span><strong>${records.length}</strong> transaction${records.length === 1 ? "" : "s"} match your filters</span><span>Saved rental charges</span></div>${records.length ? table(["RENTAL ID", "EQUIPMENT", "CUSTOMER", "RENTED", "DUE / RETURNED", "STATUS", "CHARGES", ""], view.rows.map(row => `<tr ${recordAttrs('transaction', row.id, txCode(row))}><td><strong>${e(txCode(row))}</strong><small>${e(row.id)}</small></td><td><strong>${e(row.item_name || "Unknown equipment")}</strong><small>${e(row.item_code || "No item code")}</small></td><td>${e(row.customer_name || "Unknown customer")}</td><td>${e(formatDate(row.confirmed_rental_at || row.created_at))}</td><td><strong>${e(formatDate(row.confirmed_return_at || row.due_at))}</strong><small>${row.confirmed_return_at ? "Returned" : "Due date"}</small></td><td>${status(txStatus(row))}</td><td>${chargeCell(row, h)}</td><td><button type="button" class="transaction-row-action" data-transaction-detail="${e(row.id)}">Details ${icon("arrow")}</button></td></tr>`).join("")) : empty("No matching transactions", "Adjust the status, date range, or search term to see more history.")}${records.length ? view.footer : ""}</section>`;
+    return `<div class="module-stats transaction-stats">${txMetric("Total transactions", all.length, "All rental records", "chart")}${txMetric("Active now", active.length, "Equipment currently out", "box")}${txMetric("Returned", completed.length, "Completed return records", "clock", "green")}${txMetric("Recorded rental fees", money(rentalFees), `From ${confirmed.length} confirmed rentals`, "money", "purple")}</div><div class="history-insights"><section class="panel history-insight-card"><div class="panel-title"><div><h3>Most rented equipment</h3><p>Based on confirmed rentals</p></div></div><div class="popular-items">${popularMarkup}</div></section><section class="panel history-insight-card history-workflow-card"><span class="eyebrow">QUICK VIEW</span><h3>Stay ahead of the next return</h3><p>${active.length ? `${active.length} active rental${active.length === 1 ? "" : "s"} currently out` : "No active rentals right now"}${pendingRentals.length ? ` · ${pendingRentals.length} waiting for confirmation` : ""}.</p><button type="button" class="text-button" data-page="Rentals">Review active rentals →</button></section></div><section class="panel admin-module transaction-table-panel history-table-panel"><div class="transaction-list-toolbar"><label class="module-search">${icon("search")}<input id="module-search" value="${e(search)}" placeholder="Search item, customer, or rental ID" aria-label="Search transaction history"/></label><div class="transaction-heading-actions">${action}</div></div><div class="transaction-filter-toolbar history-filter-toolbar"><div class="transaction-selects">${statusSelect}${periodSelect}</div></div><div class="transaction-table-caption"><span><strong>${records.length}</strong> transaction${records.length === 1 ? "" : "s"} match your filters</span><span>Saved rental charges</span></div>${records.length ? table(["RENTAL ID", "EQUIPMENT", "CUSTOMER", "RENTED", "DUE / RETURNED", "STATUS", "CHARGES", ""], view.rows.map(row => `<tr ${recordAttrs('transaction', row.id, txCode(row))}><td><strong>${e(txCode(row))}</strong></td><td><strong>${e(row.item_name || "Unknown equipment")}</strong><small>${e(row.item_code || "No item code")}</small></td><td>${e(row.customer_name || "Unknown customer")}</td><td>${e(formatDate(row.confirmed_rental_at || row.created_at))}</td><td><strong>${e(formatDate(row.confirmed_return_at || row.due_at))}</strong><small>${row.confirmed_return_at ? "Returned" : "Due date"}</small></td><td>${status(txStatus(row))}</td><td>${chargeCell(row, h)}</td><td><button type="button" class="transaction-row-action" data-transaction-detail="${e(row.id)}">Details ${icon("arrow")}</button></td></tr>`).join("")) : empty("No matching transactions", "Adjust the status, date range, or search term to see more history.")}${records.length ? view.footer : ""}</section>`;
   }
 
   function rates() {
@@ -312,12 +316,7 @@ export function createWorkspaceUI(h) {
     });
   }
 
-  function maintenance() {
-    const open = model.maintenance.filter(r => r.status === 'IN_PROGRESS'), done = model.maintenance.filter(r => r.status === 'COMPLETED');
-    const records = model.maintenance.filter(r => includes(r, ['item_name', 'item_code', 'reason', 'details', 'inspection_notes', 'status'])).sort((a, b) => Number(b.status === 'IN_PROGRESS') - Number(a.status === 'IN_PROGRESS') || (txDate(b.started_at)?.getTime() || 0) - (txDate(a.started_at)?.getTime() || 0));
-    const view = paged(records, 'Maintenance');
-    return `<div class="module-stats"><article><span>In progress</span><strong>${open.length}</strong></article><article><span>Completed</span><strong>${done.length}</strong></article><article><span>Total records</span><strong>${model.maintenance.length}</strong></article></div><section class="panel admin-module"><div class="panel-title"><div><h3>Service log</h3><p>Inspection and repair history.</p></div><button class="secondary" data-page="Inventory">Open equipment</button></div><div class="module-toolbar"><label class="module-search">${icon('search')}<input id="module-search" value="${e(search)}" placeholder="Search equipment or repair notes" aria-label="Search maintenance"/></label><span>${records.length} record${records.length === 1 ? '' : 's'}</span></div>${records.length ? table(['EQUIPMENT', 'REASON', 'STARTED', 'COMPLETED', 'STATUS'], view.rows.map(r => `<tr ${recordAttrs('maintenance', r.id, r.item_name || 'maintenance record')}><td><strong>${e(r.item_name)}</strong><small>${e(r.item_code)}${r.rental_id ? ` · <button class="text-button" data-transaction-detail="${e(r.rental_id)}">Rental ${e(r.rental_id)}</button>` : ""}</small></td><td>${e(r.reason || 'Equipment inspection')}<small>${e(r.inspection_notes ? 'Return inspection: ' + r.inspection_notes : r.details || 'No notes')}${r.inspection_notes && r.details ? `<br/>Repair notes: ${e(r.details)}` : ''}</small></td><td>${e(formatDate(r.started_at))}</td><td>${e(formatDate(r.completed_at))}</td><td>${status(r.status)}</td></tr>`).join('')) : empty(search.trim() ? 'No matching maintenance records' : 'No maintenance records', search.trim() ? 'Try another equipment name or repair note.' : 'Start maintenance from an equipment detail screen.')}${records.length ? view.footer : ''}</section>`;
-  }
+  function maintenance() { return maintenanceUI.render(search, { paged, table, status, empty }); }
 
   function reports() {
     return renderAnalyticsReport(model, analyticsSelection, reportView, { escape: e, paged, table });
@@ -358,21 +357,23 @@ export function createWorkspaceUI(h) {
   }
 
   function render(page, user, appearance) {
+    const displayPage = page === 'Transaction History' ? 'Rental History' : page;
     if (page !== searchPage) { if (searchPage) pageSearches[searchPage] = search; search = pageSearches[page] || ''; searchPage = page; }
     const retry = '<button type="button" class="secondary" id="module-retry">Try again</button>';
     if (!model) return loadError
       ? `<section class="panel module-load-error" role="alert">${icon('chip')}<h3>Couldn’t load this page</h3><p>${e(loadError)}</p>${retry}</section>`
-      : `<section class="panel module-loading" role="status" aria-busy="true"><span class="session-spinner" aria-hidden="true"></span><p>Loading ${e(page.toLowerCase())}…</p></section>`;
+      : `<section class="panel module-loading" role="status" aria-busy="true"><span class="session-spinner" aria-hidden="true"></span><p>Loading ${e(displayPage.toLowerCase())}…</p></section>`;
     const content = page === 'ESP32 terminal' ? workflow.verificationPage(search, { paged, table, status, empty }) : page === 'Customers' ? customers() : ['Rentals', 'Returns', 'Transaction History'].includes(page) ? transactions(page) : page === 'Rates & Fees' ? rates() : page === 'Maintenance' ? maintenance() : page === 'Reports' ? reports() : page === 'Settings' ? settings(user, appearance) : '';
     const notice = modelVersion === cacheVersion ? '' : loadError
       ? `<div class="module-sync-notice connection-banner" role="alert"><span>${e(loadError)} Showing the last successfully loaded records.</span>${retry}</div>`
-      : `<div class="module-sync-notice" role="status"><span class="session-spinner" aria-hidden="true"></span><span>Updating ${e(page.toLowerCase())}…</span></div>`;
+      : `<div class="module-sync-notice" role="status"><span class="session-spinner" aria-hidden="true"></span><span>Updating ${e(displayPage.toLowerCase())}…</span></div>`;
     return notice + content;
   }
 
   function bind(page, user, rerender) {
     if (!['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings', 'ESP32 terminal'].includes(page)) return;
     redraw = rerender;
+    if (page === 'Maintenance') maintenanceUI.bind();
     document.querySelector('#module-retry')?.addEventListener('click', event => {
       event.currentTarget.disabled = true; event.currentTarget.textContent = 'Retrying…';
       load(true).then(rerender).catch(() => rerender());
@@ -490,7 +491,7 @@ export function createWorkspaceUI(h) {
       finally { button.disabled = false; }
     });
     const updateAnalytics = () => { for (const key of Object.keys(pages)) if (key.startsWith('analytics-')) pages[key] = 0; rerender(); };
-    const selectAnalyticsTab = section => { reportView.section = section; const route = reportPathForSection(section); if (location.pathname !== route) history.pushState({ page: 'Reports' }, '', route); rerender(); document.querySelector(`[data-analytics-tab="${section}"]`)?.focus(); };
+    const selectAnalyticsTab = section => { reportView.section = normalizeReportSection(section); const route = reportPathForSection(reportView.section); if (location.pathname !== route) history.pushState({ page: 'Reports' }, '', route); rerender(); document.querySelector(`[data-analytics-tab="${reportView.section}"]`)?.focus(); };
     const analyticsTabs = [...document.querySelectorAll('[data-analytics-tab]')];
     analyticsTabs.forEach(button => {
       button.onclick = () => selectAnalyticsTab(button.dataset.analyticsTab);
@@ -508,9 +509,17 @@ export function createWorkspaceUI(h) {
     document.querySelector('#analytics-category')?.addEventListener('change', event => { analyticsSelection.categoryId = event.target.value; analyticsSelection.itemId = ''; updateAnalytics(); });
     document.querySelector('#analytics-item')?.addEventListener('change', event => { analyticsSelection.itemId = event.target.value; updateAnalytics(); });
     document.querySelector('#analytics-sort')?.addEventListener('change', event => { reportView.sort = event.target.value; pages['analytics-equipment'] = 0; rerender(); });
+    document.querySelector('#analytics-reset')?.addEventListener('click', () => { Object.assign(analyticsSelection, { period: preferences.reportPeriod, groupBy: preferences.reportGrouping, from: '', to: '', categoryId: '', itemId: '' }); updateAnalytics(); });
+    document.querySelectorAll('[data-analytics-metric]').forEach(button => { button.onclick = () => { const chart = button.dataset.analyticsChart; reportView[chart === 'forecast' ? 'forecastMetric' : 'performanceMetric'] = button.dataset.analyticsMetric; rerender(); document.querySelector(`[data-analytics-chart="${chart}"][data-analytics-metric="${button.dataset.analyticsMetric}"]`)?.focus(); }; });
+    document.querySelectorAll('[data-forecast-scenario]').forEach(button => { button.onclick = () => { reportView.forecastScenario = button.dataset.forecastScenario; rerender(); document.querySelector(`[data-forecast-scenario="${reportView.forecastScenario}"]`)?.focus(); }; });
+    document.querySelectorAll('[data-recommendation-type]').forEach(button => { button.onclick = () => { reportView.recommendationType = button.dataset.recommendationType; rerender(); document.querySelectorAll('[data-recommendation-type]').forEach(next => { if (next.dataset.recommendationType === reportView.recommendationType) next.focus(); }); }; });
+    document.querySelectorAll('[data-analytics-history]').forEach(button => { button.onclick = () => { analyticsSelection.period = '90d'; analyticsSelection.groupBy = button.dataset.analyticsHistory; updateAnalytics(); }; });
+    document.querySelectorAll('[data-analytics-go-page]').forEach(button => { button.onclick = () => h.navigate?.(button.dataset.analyticsGoPage); });
+    document.querySelectorAll('[data-analytics-go-section]').forEach(button => { button.onclick = () => { if (button.dataset.analyticsCoverage) reportView.details.coverage = true; selectAnalyticsTab(button.dataset.analyticsGoSection); if (button.dataset.analyticsCoverage) document.querySelector('#analytics-data-coverage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }; });
     document.querySelectorAll('[data-analytics-detail]').forEach(detail => detail.addEventListener('toggle', () => { if (detail.isConnected) reportView.details[detail.dataset.analyticsDetail] = detail.open; }));
     document.querySelector('#report-export')?.addEventListener('click', () => {
-      const result = calculateAnalytics(model, analyticsSelection); if (result.error) { toast(result.error); return; }
+      const result = calculateDetailedAnalytics(model, analyticsSelection); if (result.error) { toast(result.error); return; }
+      result.forecast.points = forecastScenario(result.forecast, reportView.forecastScenario); result.forecast.scenario = reportView.forecastScenario;
       const csv = analyticsCsv(result, model, analyticsSelection), url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), link = document.createElement('a');
       link.href = url; link.download = 'rent-and-play-analytics-' + result.range.from + '-to-' + result.range.to + '.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast('Complete filtered analytics exported.');
     });
@@ -521,5 +530,5 @@ export function createWorkspaceUI(h) {
     if (!row) throw new Error('This rental is unavailable. Refresh the rental records.');
     transactionDetails(row);
   }
-  return { load, refresh, invalidate, render, bind, openTransaction, reportSection: () => reportView.section, setReportSection: section => { if (['rental', 'equipment', 'service', 'forecast', 'recommendations', 'audit'].includes(section)) reportView.section = section; }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; settingsTab = 'business'; pages = {}; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); } };
+  return { load, refresh, invalidate, render, bind, openTransaction, openMaintenanceForUnit: async id => { await refresh(); const ticket = (model.maintenance || []).find(row => String(row.item_id) === String(id) && ['OPEN', 'IN_PROGRESS'].includes(String(row.status).toUpperCase())); return ticket ? maintenanceUI.details(ticket.id) : maintenanceUI.reportForm(id); }, reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; settingsTab = 'business'; pages = {}; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
 }

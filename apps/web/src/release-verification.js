@@ -28,7 +28,7 @@ export function createReleaseVerification({ api, rentalId, onChange = () => {} }
     try {
       const result = await api(`/rentals/${encodeURIComponent(rentalId)}/release-verification`, { method: 'POST', body: JSON.stringify(input) });
       if (attempt !== revision) return false;
-      if (String(result.rental?.id) !== String(rentalId) || result.booking_verified !== true || result.delivery_prepared !== true) throw new Error('This rental QR is not ready for handoff.');
+      if (String(result.rental?.id) !== String(rentalId) || (result.rental_verified ?? result.booking_verified) !== true || result.delivery_prepared !== true) throw new Error('This rental QR is not ready for handoff.');
       state = { ...state, busy: false, bookingVerified: true, inventoryVerified: true, step: 2, item: result.item };
       emit(); return true;
     } catch (error) {

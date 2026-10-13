@@ -2,19 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createApi, createFirebaseServices } from '../src/server.mjs';
 import { DEFAULT_PRICING, savePricing } from '../src/pricing.mjs';
-import { inventoryList, inventoryDetail, itemAction } from '../src/inventory.mjs';
+import { inventoryList, inventoryDetail, itemAction, createItem } from '../src/inventory.mjs';
 import { saveRate } from '../src/workspace.mjs';
 import { localDateTime } from '../src/firebase.mjs';
 import { mobileCatalog, mobileProfile, mobileRentalList, resolveMobileItem } from '../src/mobile.mjs';
 import { createMobileRentalRequest, quoteEquipmentRental, reviewMobileRental, cancelMobileRentalRequest, requestMobileReturn, reviewMobileReturn } from '../src/transactions.mjs';
-import { prepareRentalDelivery, releaseBooking, recordRentalReceipt } from '../src/rental-flow.mjs';
+import { prepareRentalDelivery, releaseBooking, recordRentalReceipt, MOBILE_RENTAL_TERMS_VERSION } from '../src/rental-flow.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
 const now = new Date('2026-10-06T02:00:00Z');
 const customer = { id: 'customer-auth-uid', full_name: 'Mobile Customer', email: 'customer@example.test', phone: '09123456789' };
 const admin = { id: 'admin', full_name: 'Equipment Inspector', role: 'ADMIN', is_active: true };
 const inspection = { condition: 'GOOD', notes: 'All parts counted and equipment inspected.', result: 'AVAILABLE', accessoriesChecked: true };
-const input = { itemId: 'bike-document', durationMinutes: 180, deliveryLocation: 'Test Resort', paymentMethod: 'Cash', requestKey: 'a'.repeat(32) };
+const input = { itemId: 'bike-document', durationMinutes: 180, deliveryLocation: 'Test Resort', paymentMethod: 'Cash', requestKey: 'a'.repeat(32), acceptedRentalTerms: true, rentalTermsVersion: MOBILE_RENTAL_TERMS_VERSION };
 function fixture() {
   const pricing = structuredClone(DEFAULT_PRICING);
   pricing.products.find(row => row.id === 'bike').deposit_amount = 100;
@@ -55,6 +55,25 @@ test('customer catalog uses admin inventory IDs and live availability, omitting 
   assert.equal(reserved.reserved_rental_id, undefined); assert.equal(reserved.customer_email, undefined);
   await cancelMobileRentalRequest(db, customer, rental.id, now);
   assert.equal((await mobileCatalog(db)).items.find(row => row.id === input.itemId).can_rent, true);
+});
+
+test('quantity groups show live stock and customer bookings reserve individual physical units', async () => {
+  const db=fixture(),created=await createItem(db,admin.id,{categoryId:'sports',name:'Rental bike fleet',description:'Three identical bikes',condition:'GOOD',rateType:'HOURLY',rentalRate:50,latePenalty:10,pricingProductId:'bike',quantity:3});
+  const groupId=created.stock_group_id;
+  let product=(await mobileCatalog(db)).items.find(item=>item.id===groupId);
+  assert.equal(product.available_quantity,3);assert.equal(product.total_quantity,3);assert.equal(product.can_rent,true);
+  const quote=await quoteEquipmentRental(db,{itemId:groupId,stockGroupId:groupId,durationMinutes:60},now);
+  assert.ok(quote.quote.rental_fee>0);
+  for(const key of ['b','c','d']){
+    await createMobileRentalRequest(db,customer,{itemId:groupId,stockGroupId:groupId,durationMinutes:60,deliveryLocation:'Test Resort',paymentMethod:'Cash',requestKey:key.repeat(32)},now);
+    product=(await mobileCatalog(db)).items.find(item=>item.id===groupId);
+    assert.equal(product.available_quantity,product.total_quantity-['b','c','d'].indexOf(key)-1);
+  }
+  product=(await mobileCatalog(db)).items.find(item=>item.id===groupId);
+  assert.equal(product.available_quantity,0);assert.equal(product.can_rent,false);
+  await assert.rejects(createMobileRentalRequest(db,customer,{itemId:groupId,stockGroupId:groupId,durationMinutes:60,deliveryLocation:'Test Resort',paymentMethod:'Cash',requestKey:'e'.repeat(32)},now),hasStatus(409));
+  const rentals=db.records('rentals').filter(rental=>rental.stock_group_id===groupId);
+  assert.equal(new Set(rentals.map(rental=>rental.item_id)).size,3);
 });
 
 test('equipment appears for customers after rates are configured and stays visible while rented', async () => {

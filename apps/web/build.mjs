@@ -13,8 +13,11 @@ const sourceFiles = [
     'workspace-navigation.js',
     'confirmation-dialog.js',
     'record-links.js',
+    'record-codes.js',
     'record-details.js',
+    'maintenance.js',
     'inventory.js',
+    'inventory-stock.js',
     'equipment-label.js',
     'label-logo.js',
     'mx10-printer.js',
@@ -29,6 +32,9 @@ const sourceFiles = [
     'preferences.js',
     'analytics.js',
     'analytics-report.js',
+    'analytics-workspace.js',
+    'analytics-insights.js',
+    'analytics-charts.js',
     'styles.css'
 ];
 

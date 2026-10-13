@@ -3,7 +3,7 @@ import { normalizeRole } from './roles.mjs';
 import { passwordError, passwordMatchError, validationFailure } from './account-validation.mjs';
 import { stageAudit } from './audit.mjs';
 
-export const publicUser = row => ({ id: String(row.id), name: row.full_name, email: row.email, role: normalizeRole(row.role) || row.role, mustChangePassword: row.must_change_password === true });
+export const publicUser = row => ({ id: String(row.id), name: row.full_name, ...(row.account_code ? { account_code: row.account_code } : {}), email: row.email, role: normalizeRole(row.role) || row.role, mustChangePassword: row.must_change_password === true });
 
 export class FirebaseSessions {
   constructor(auth=firebaseAuth,fetcher=fetch){this.auth=auth;this.fetcher=fetcher;this.revoked=new Set();}

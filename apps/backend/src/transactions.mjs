@@ -1,4 +1,7 @@
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
+import { allocateRecordCodes } from './record-codes.mjs';
+import { healthyUnit, unitHasMaintenance } from './maintenance-state.mjs';
+import { returnMaintenanceRecord } from './maintenance.mjs';
 import { asDate, docData, localDateTime } from './firebase.mjs';
 import { DEFAULT_PRICING, equipmentRateOptions, quoteRental, validatePricing } from './pricing.mjs';
 import { firebaseFailure, isQuotaError } from './firebase-errors.mjs';
@@ -135,12 +138,28 @@ const audit = (tx, db, actor, action, id, now, extra = {}) => tx.create(db.colle
 export async function quoteEquipmentRental(db, input, now = new Date()) {
   if (!input || typeof input !== 'object') fail(400, 'Rental details are required.');
   const itemId = idValue(input.itemId);
+  const stockGroupId = input.stockGroupId == null || input.stockGroupId === '' ? null : idValue(input.stockGroupId);
   const fee = await db.runTransaction(async tx => {
-    const [itemDoc, openDocs] = await Promise.all([tx.get(ref(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
-    if (!itemDoc.exists) fail(404, 'Equipment not found.');
-    const item = docData(itemDoc);
-    if (item.is_active === false || String(item.status).toUpperCase() !== 'AVAILABLE' || item.reserved_rental_id || rows(openDocs).some(isOpen)) fail(409, 'This equipment already has an open rental or is unavailable.');
-    return frozenQuote(tx, db, item, input, now);
+    let docs=[];
+    if(stockGroupId){
+      const group=await tx.get(db.collection('items').where('stock_group_id','==',stockGroupId));
+      docs=group.docs;
+      if(!docs.length){const legacy=await tx.get(ref(db,'items',itemId));if(legacy.exists)docs=[legacy];}
+      docs=docs.filter(doc=>String(doc.data().stock_group_id||doc.id)===stockGroupId);
+    }else{
+      const exact=await tx.get(ref(db,'items',itemId));if(exact.exists)docs=[exact];
+    }
+    if(!docs.length)fail(404,'Equipment not found.');
+    docs.sort((a,b)=>(a.id===itemId?-1:b.id===itemId?1:a.id.localeCompare(b.id)));
+    for(const itemDoc of docs){
+      const item=docData(itemDoc);
+      if(item.is_active===false||String(item.status).toUpperCase()!=='AVAILABLE'||item.reserved_rental_id||item.current_rental_id||!healthyUnit(item))continue;
+      if(await unitHasMaintenance(tx,db,itemDoc.id))continue;
+      const openDocs=await rentalsForItem(tx,db,itemDoc.id);
+      if(rows(openDocs).some(isOpen))continue;
+      return frozenQuote(tx,db,item,input,now);
+    }
+    fail(409,'This equipment is currently unavailable. Refresh the catalog to see the latest stock.');
   });
   return serializeTransaction({ quote: { ...fee, total_to_collect: fee.rental_fee, overtime_rate_per_hour: fee.overtime_rate, warnings: [] } });
 }
@@ -153,13 +172,15 @@ export async function createRentalRequest(db, actor, input, now = new Date(), tt
     const [itemDoc, customerDoc, terminalDoc, openDocs] = await Promise.all([tx.get(ref(db, 'items', itemId)), tx.get(ref(db, 'customers', customerId)), tx.get(ref(db, 'terminals', terminalId)), rentalsForItem(tx, db, itemId)]);
     if (!itemDoc.exists || !customerDoc.exists || !terminalDoc.exists) fail(404, 'Equipment, customer, or terminal not found.');
     const item = docData(itemDoc), terminal = docData(terminalDoc);
+    if (!healthyUnit(item) || await unitHasMaintenance(tx, db, itemId)) fail(409, 'This unit is under maintenance or needs inspection. Choose another available unit.');
     if (item.is_active === false || String(item.status).toUpperCase() !== 'AVAILABLE' || item.reserved_rental_id || rows(openDocs).some(isOpen)) fail(409, 'This equipment already has an open rental or is unavailable.');
     if (customerDoc.data().is_active === false || terminal.is_active === false) fail(409, 'Select an active customer and terminal.');
     if (!/^[a-f0-9]{64}$/.test(terminal.auth_token_hash || '')) fail(409, 'Configure the terminal device credential before requesting a handoff.');
     const fee = await frozenQuote(tx, db, item, input, now);
     const inspection = input.inspection ? validateInspection(input.inspection, actor, 'RENTAL', now) : null;
-    const request = { ...requestRecord(rentalRef.id, itemId, terminal, 'RENTAL', now, ttlSeconds), requested_by: actorId(actor), inspection, inspection_revision: inspection ? 1 : 0 };
-    const rental = { rental_code: `R-${rentalRef.id.slice(0, 10).toUpperCase()}`, item_id: itemId, customer_id: customerId, status: 'PENDING_VERIFICATION', due_at: fee.due_at, rental_fee: fee.rental_fee, fee_breakdown: fee, rental_request_id: requestRef.id, release_condition: null, return_condition: null, confirmed_rental_at: null, confirmed_return_at: null, created_at: now, updated_at: now, created_by: actorId(actor) };
+    const [rentalCode, requestCode] = await allocateRecordCodes(tx, db, ['rentals', 'verification_requests'], now);
+    const request = { ...requestRecord(rentalRef.id, itemId, terminal, 'RENTAL', now, ttlSeconds), request_code: requestCode, requested_by: actorId(actor), inspection, inspection_revision: inspection ? 1 : 0 };
+    const rental = { rental_code: rentalCode, item_id: itemId, customer_id: customerId, status: 'PENDING_VERIFICATION', due_at: fee.due_at, rental_fee: fee.rental_fee, fee_breakdown: fee, rental_request_id: requestRef.id, release_condition: null, return_condition: null, confirmed_rental_at: null, confirmed_return_at: null, created_at: now, updated_at: now, created_by: actorId(actor) };
     tx.create(rentalRef, rental); tx.create(requestRef, request);
     tx.update(itemDoc.ref, { reserved_rental_id: rentalRef.id, updated_at: now });
     audit(tx, db, actorId(actor), 'RENTAL_REQUESTED', requestRef.id, now, { rental_id: rentalRef.id });
@@ -224,7 +245,8 @@ export async function createReturnRequest(db, actor, input, now = new Date(), tt
     const started = asDate(rental.confirmed_rental_at || rental.created_at);
     if (actual > now || (started && actual < started)) fail(400, 'Actual return time must be between rental release and now.');
     const inspection = input.inspection ? validateInspection(input.inspection, actor, 'RETURN', now) : null;
-    const request = { ...requestRecord(rentalId, String(rental.item_id), terminal, 'RETURN', now, ttlSeconds), requested_by: actorId(actor), inspection, inspection_revision: inspection ? 1 : 0, actual_return_at: actual, ...validatePenalty(input) };
+    const [requestCode] = await allocateRecordCodes(tx, db, ['verification_requests'], now);
+    const request = { ...requestRecord(rentalId, String(rental.item_id), terminal, 'RETURN', now, ttlSeconds), request_code: requestCode, requested_by: actorId(actor), inspection, inspection_revision: inspection ? 1 : 0, actual_return_at: actual, ...validatePenalty(input) };
     tx.create(requestRef, request); tx.update(rentalDoc.ref, { latest_return_request_id: requestRef.id, latest_return_request_status: 'PENDING', updated_at: now });
     audit(tx, db, actorId(actor), 'RETURN_REQUESTED', requestRef.id, now, { rental_id: rentalId });
     return { request: { id: requestRef.id, ...request }, fee_preview: finalCharges(rental, request) };
@@ -329,8 +351,9 @@ export async function resolveTerminalRequest(db, terminal, input, now = new Date
       const fee = { ...finalCharges(rental, request), finalized_at: now };
       changes = { status: 'COMPLETED', confirmed_return_at: now, actual_return_at: request.actual_return_at, return_condition: condition, return_condition_record_id: conditionRef.id, confirmed_return_terminal_id: terminal.id, fee_breakdown: fee, overtime_fee: fee.overtime_fee, penalty_amount: fee.penalty_amount, final_rental_charges: fee.final_rental_charges, latest_return_request_status: 'CONFIRMED' };
       if (newStatus === 'UNDER_MAINTENANCE') {
+        const [maintenanceCode] = await allocateRecordCodes(tx, db, ['maintenance_records'], now);
         const maintenanceRef = db.collection('maintenance_records').doc();
-        tx.create(maintenanceRef, { item_id: String(itemId), rental_id: rentalDoc.id, verification_request_id: requestId, condition_record_id: conditionRef.id, status: 'IN_PROGRESS', reason: inspection.condition === 'DAMAGED' ? 'Damaged return' : 'Return inspection requires maintenance', inspection_notes: inspection.notes, inspected_by: inspection.inspected_by, details: null, started_at: now, completed_at: null, created_by: terminal.id });
+        tx.create(maintenanceRef, { ...returnMaintenanceRecord({ id: String(itemId), ...item }, rentalDoc.id, condition, { id: terminal.id, name: 'Terminal' }, maintenanceCode, now), verification_request_id: requestId, inspected_by: inspection.inspected_by });
         changes.maintenance_record_id = maintenanceRef.id;
       }
     }

@@ -1,5 +1,5 @@
 const formSignature = form => JSON.stringify([...new FormData(form)].map(([name, value]) =>
-  [name, typeof value === 'string' ? value : [value.name, value.size, value.type, value.lastModified]]));
+  [name, typeof value === 'string' ? value : value.name === '' && value.size === 0 ? ['empty-file'] : [value.name, value.size, value.type, value.lastModified]]));
 
 export function createConfirmationDialog({ dialog, parentModal, notify = () => {} }) {
   let pending = null, backdropPress = false;

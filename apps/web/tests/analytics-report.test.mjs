@@ -28,9 +28,11 @@ test('equipment labels are escaped and monthly charts do not duplicate two-bucke
   const html=renderAnalyticsReport(model,selection,view,helpers);
   assert.ok(html.includes('&lt;script&gt;unsafe&lt;/script&gt;'));
   assert.ok(!html.includes('<script>unsafe</script>'));
-  assert.ok(html.includes('1 rental<small>'));
-  assert.ok(!html.includes('1 rentals<small>'));
-  assert.equal((html.match(/<div class="analytics-chart-labels"><span>Jan 2020<\/span><span>Feb 2020<\/span><\/div>/g)||[]).length,2);
+  assert.ok(html.includes('1 rental'));
+  assert.ok(!html.includes('1 rentals'));
+  const plot=html.match(/<figure class="ana-chart" aria-labelledby="performance-trend-title">([\s\S]*?)<\/figure>/)[1];
+  assert.equal((plot.match(/class="ana-axis-label">Jan 2020<\/text>/g)||[]).length,1);
+  assert.equal((plot.match(/class="ana-axis-label">Feb 2020<\/text>/g)||[]).length,1);
 });
 
 test('invalid date ranges keep filters available and disable export',()=>{

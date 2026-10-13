@@ -51,6 +51,26 @@ test('a form waits for an explicit Yes before saving and keeps its parent modal 
   assert.equal(s.document.activeElement, s.button);
 });
 
+test('an unselected optional photo does not invalidate confirmation when its empty File timestamp changes', async t => {
+  const s = setup(t); let writes = 0, stamp = 0;
+  s.form.fields.push(['photos', { name: '', size: 0, type: 'application/octet-stream', get lastModified() { return ++stamp; } }]);
+  s.confirmSubmit(s.form, options, async () => { writes++; });
+  const waiting = s.submit(); s.yes(); await waiting;
+  assert.equal(writes, 1);
+  assert.equal(s.notices.length, 0);
+});
+
+test('replacing an actual selected photo still invalidates the pending confirmation', async t => {
+  const s = setup(t); let writes = 0;
+  s.form.fields.push(['photos', { name: 'tyre.png', size: 1024, type: 'image/png', lastModified: 10 }]);
+  s.confirmSubmit(s.form, options, async () => { writes++; });
+  const waiting = s.submit();
+  s.form.fields[1][1] = { name: 'frame.png', size: 2048, type: 'image/png', lastModified: 20 };
+  s.yes(); await waiting;
+  assert.equal(writes, 0);
+  assert.match(s.notices[0], /details changed/i);
+});
+
 for (const cancellation of ['No', 'Escape', 'close button', 'backdrop', 'programmatic close', 'parent close', 'replacement']) {
   test(`${cancellation} cancels without executing the mutation`, async t => {
     const s = setup(t); let writes = 0;

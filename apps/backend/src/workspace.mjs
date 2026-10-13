@@ -80,7 +80,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
       customer_name: customer?.full_name || rental.customer_name || 'Unknown customer'
     };
   }).sort((a, b) => (asDate(b.created_at) || 0) - (asDate(a.created_at) || 0));
-  const maintenance = source.maintenance_records.map(record => ({ ...record, item_name: itemMap.get(String(record.item_id))?.name || 'Unknown equipment', item_code: itemMap.get(String(record.item_id))?.item_code || '' })).sort((a, b) => (asDate(b.started_at) || 0) - (asDate(a.started_at) || 0));
+  const maintenance = source.maintenance_records.map(record => ({ ...record, item_name: itemMap.get(String(record.item_id))?.name || record.item_name || 'Equipment history', item_code: itemMap.get(String(record.item_id))?.item_code || record.item_code || '' })).sort((a, b) => (asDate(b.started_at) || 0) - (asDate(a.started_at) || 0));
   const rates = source.item_rates.map(rate => ({ ...rate, item_name: itemMap.get(String(rate.item_id))?.name || 'Unknown equipment', item_code: itemMap.get(String(rate.item_id))?.item_code || '' })).sort((a, b) => (asDate(b.effective_from) || 0) - (asDate(a.effective_from) || 0));
   const [settingsDoc, pricing] = await Promise.all([
     mobile ? Promise.resolve({ exists: false }) : db.collection('settings').doc('business').get(),
@@ -107,6 +107,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   const userNames = new Map([...userProfiles].map(([id, user]) => [String(id), user.full_name || user.name || '']));
   const terminalNames = new Map(source.terminals.map(terminal => [String(terminal.id), terminal.name || terminal.terminal_code]));
   const auditLabel = log => {
+    if (log.entity_type === 'MAINTENANCE') { const record = source.maintenance_records.find(row => row.id === log.entity_id); return record?.maintenance_code || record?.item_code || ''; }
     const before = log.old_values || {}, after = log.new_values || {}, id = String(log.entity_id);
     const recorded = after.name || before.name || after.full_name || before.full_name || after.item_name || before.item_name || after.business_name || before.business_name;
     if (recorded) return String(recorded);

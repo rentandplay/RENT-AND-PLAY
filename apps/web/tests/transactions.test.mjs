@@ -24,9 +24,11 @@ test('verification search covers rental IDs, terminal codes, request type, reaso
 });
 
 test('the transaction modal shows every attempt and reports missing confirmation records', () => {
-  const requests = Array.from({ length: 8 }, (_, i) => ({ id: `attempt-${i}`, rental_id: row.id, transaction_type: 'RETURN', status: i === 7 ? 'CONFIRMED' : 'EXPIRED', expired_at: i < 7 ? '2026-10-03 12:00:00' : null, confirmed_at: i === 7 ? '2026-10-03 12:01:00' : null, confirmed_terminal_id: i === 7 ? 'terminal-1' : null, confirmed_terminal_code: i === 7 ? 'TERM-01' : null }));
+  const requests = Array.from({ length: 8 }, (_, i) => ({ id: `attempt-${i}`, request_code: `V-${String(i + 1).padStart(4, '0')}`, rental_id: row.id, transaction_type: 'RETURN', status: i === 7 ? 'CONFIRMED' : 'EXPIRED', expired_at: i < 7 ? '2026-10-03 12:00:00' : null, confirmed_at: i === 7 ? '2026-10-03 12:01:00' : null, confirmed_terminal_id: i === 7 ? 'terminal-1' : null, confirmed_terminal_code: i === 7 ? 'TERM-01' : null }));
   const html = renderRequestHistory(requests, h);
-  assert.equal((html.match(/class="request-history-entry"/g) || []).length, 8); assert.ok(html.includes('TERM-01 (terminal-1)')); assert.ok(html.includes('attempt-0')); assert.ok(html.includes('attempt-7'));
+  assert.equal((html.match(/class="request-history-entry"/g) || []).length, 8); assert.ok(html.includes('TERM-01')); assert.ok(html.includes('V-0001')); assert.ok(html.includes('V-0008'));
+  const visible = html.replace(/<[^>]*>/g, '');
+  assert.ok(!visible.includes('terminal-1')); assert.ok(!visible.includes('attempt-0'));
   assert.ok(renderRequestHistory([], h).includes('No verification or terminal confirmation record'));
   assert.ok(renderRequestHistory(requests.slice(0, 2), h).includes('No terminal confirmation record'));
 });

@@ -32,10 +32,19 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
       if (input.phone !== undefined) { validationFailure(phoneError(input.phone, false)); changes.phone = clean(input.phone, 40, 'phone'); }
       if (input.validIdUrl !== undefined) changes.validIdUrl = clean(input.validIdUrl, 2048, 'ID reference');
       if (input.profileImageUrl !== undefined) changes.profileImageUrl = clean(input.profileImageUrl, 2048, 'profile image');
+    }
+    if (method === 'PATCH' || (!existing && method === 'POST')) {
       if (input.hasAcceptedTerms !== undefined) {
         if (typeof input.hasAcceptedTerms !== 'boolean') fail(400, 'Choose whether to accept the rental terms.');
         changes.hasAcceptedTerms = input.hasAcceptedTerms;
+        if (input.hasAcceptedTerms) changes.terms_accepted_at = now;
       }
+      if (input.termsVersion !== undefined) {
+        if (typeof input.termsVersion !== 'string' || !input.termsVersion.trim() || input.termsVersion.length > 40) fail(400, 'Choose a valid Terms & Conditions version.');
+        changes.terms_version = input.termsVersion.trim();
+      }
+    }
+    if (method === 'PATCH' || (!existing && method === 'POST' && Object.keys(changes).length)) {
       changes.updated_at = now;
     }
     if (method === 'PATCH' && existingRole === 'CUSTOMER') {
@@ -63,7 +72,13 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
 export async function mobileCatalog(db) {
   const [inventory, pricing] = await Promise.all([inventoryList(db), loadPricing(db)]);
   const products = new Map(pricing.products.map(product => [product.id, product]));
-  const items = inventory.items.filter(item => item.is_active !== false && typeof item.name === 'string' && item.name.trim()).flatMap(item => {
+  const groups=new Map();
+  for(const item of inventory.items.filter(item=>item.is_active!==false&&typeof item.name==='string'&&item.name.trim())){
+    const key=String(item.stock_group_id||item.id);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);
+  }
+  const items=[...groups.entries()].flatMap(([stockGroupId,units])=>{
+    units.sort((a,b)=>{const aa=a.effective_status==='AVAILABLE',bb=b.effective_status==='AVAILABLE';return aa!==bb?(aa?-1:1):String(a.item_code||'').localeCompare(String(b.item_code||''));});
+    const item=units.find(unit=>unit.effective_status==='AVAILABLE')||units[0];
     const linkedProduct = products.get(item.pricing_product_id);
     const customOptions = Array.isArray(item.custom_rate_options) ? item.custom_rate_options : [];
     const validRate = ['HOURLY', 'DAILY', 'FLAT'].includes(item.rate_type) && [item.rental_rate, item.late_penalty_rate].every(validAmount);
@@ -77,10 +92,16 @@ export async function mobileCatalog(db) {
     const options = product?.rate_options.filter(rate => rate.kind !== 'WHOLE_STAY') || [];
     const configured = product ? options.length > 0 : validRate;
     if (!configured) return [];
-    const status = item.reserved_rental_id ? 'RESERVED_PENDING' : String(item.effective_status || item.status || 'UNAVAILABLE').toUpperCase();
+    const availableQuantity=Number(item.available_quantity??units.filter(unit=>unit.effective_status==='AVAILABLE').length);
+    const totalQuantity=Number(item.total_quantity??units.length);
+    const reservedQuantity=Number(item.reserved_quantity??units.filter(unit=>unit.effective_status==='RESERVED_PENDING').length);
+    const rentedQuantity=Number(item.rented_quantity??units.filter(unit=>['RENTED','UNDER_INSPECTION'].includes(unit.effective_status)).length);
+    const maintenanceQuantity=Number(item.maintenance_quantity??units.filter(unit=>unit.effective_status==='UNDER_MAINTENANCE').length);
+    const status=availableQuantity>0?'AVAILABLE':reservedQuantity>0?'RESERVED_PENDING':rentedQuantity>0?'RENTED':maintenanceQuantity>0?'UNDER_MAINTENANCE':'UNAVAILABLE';
     const salePrice = product?.sale_price ?? item.sale_price ?? null;
     return [{
-      id: item.id, name: item.name, category: item.category, description: item.description || '',
+      id: stockGroupId, stock_group_id:stockGroupId, name: item.name, category: item.category, description: item.description || '',
+      available_quantity:availableQuantity,total_quantity:totalQuantity,reserved_quantity:reservedQuantity,rented_quantity:rentedQuantity,maintenance_quantity:maintenanceQuantity,
       item_code: item.item_code || item.qrCode || '', qr_token: item.qr_token || '', status,
       image_data: item.image_data || null, image_url: item.image_url || item.imageUrl || null,
       image_name: item.image_name || null,
@@ -90,8 +111,8 @@ export async function mobileCatalog(db) {
       rental_rate: product?.overtime_rate_per_hour ?? item.rental_rate,
       late_penalty_rate: product?.overtime_rate_per_hour ?? item.late_penalty_rate,
       pricing_product_id: hasItemSpecificRates ? null : item.pricing_product_id, rate_options: product?.rate_options || [],
-      can_rent: status === 'AVAILABLE',
-      unavailable_reason: status === 'AVAILABLE' ? null : 'This equipment is currently unavailable.'
+      can_rent: availableQuantity > 0,
+      unavailable_reason: availableQuantity > 0 ? null : 'This equipment is currently unavailable.'
     }];
   });
   return { items, categories: [...new Set(items.map(item => item.category))].sort() };
@@ -111,8 +132,10 @@ export async function mobilePaymentInstructions(db) {
 export async function resolveMobileItem(db, input) {
   const code = typeof input?.code === 'string' ? input.code.trim() : '';
   if (!code || code.length > 512) fail(400, 'Scan a valid equipment QR label.');
-  const catalog = await mobileCatalog(db);
-  const matches = catalog.items.filter(item => [item.id, item.item_code, item.qr_token].some(value => value && value.toLowerCase() === code.toLowerCase()));
+  const [inventory,catalog]=await Promise.all([inventoryList(db),mobileCatalog(db)]);
+  const normalized=code.toLowerCase(),matchedUnits=inventory.items.filter(unit=>unit.is_active!==false&&[unit.id,unit.item_code,unit.qrCode,unit.qr_token,unit.legacy_item_code].some(value=>value&&String(value).toLowerCase()===normalized));
+  const groups=new Set(matchedUnits.map(unit=>String(unit.stock_group_id||unit.id)));
+  const matches=catalog.items.filter(item=>groups.has(item.stock_group_id)||[item.id,item.item_code,item.qr_token].some(value=>value&&String(value).toLowerCase()===normalized));
   if (matches.length !== 1) fail(404, 'This QR label does not identify an active equipment record.');
   return { item: matches[0] };
 }
@@ -143,6 +166,7 @@ export async function mobileRentalList(db, actor, rentalId = '') {
     const item = items.get(String(rental.item_id ?? rental.itemId));
     return {
       ...rental, id: rental.id, item_id: rental.item_id ?? rental.itemId,
+      stock_group_id:rental.stock_group_id||item?.stock_group_id||item?.id||rental.item_id||rental.itemId,
       item_name: rental.item_name || rental.itemName || item?.name || 'Equipment',
       item_image_url: item?.image_url || item?.imageUrl || null,
       item_code: item?.item_code || item?.qrCode || '', qr_token: item?.qr_token || '',

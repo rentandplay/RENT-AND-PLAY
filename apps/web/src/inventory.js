@@ -1,18 +1,21 @@
 import { createMx10Printer, renderLabelPng, normalizeMx10PrintSettings, normalizeMx10LabelCalibration } from './mx10-printer.js';
 import { createEquipmentQrLabel as qrLabelSvg, QR_LABEL_GEOMETRY as qrLabelGeometry } from './equipment-label.js';
+import { groupInventory, stockMatchesStatus, stockMatchesSearch, inventoryStockCounts } from './inventory-stock.js';
 
 const printer = createMx10Printer();
 
 const archiveUnavailableReason = item => {
   if (item.is_active === false) return 'Equipment is already archived.';
-  if (Number(item.open_rentals) > 0 || item.reserved_rental_id || [item.status, item.effective_status].some(status => ['RENTED', 'RESERVED_PENDING'].includes(status))) return 'Finish the active or pending rental before archiving.';
+  if (Number(item.open_rentals) > 0 || item.reserved_rental_id || [item.status, item.effective_status].some(status => ['RENTED', 'RESERVED_PENDING', 'UNDER_INSPECTION'].includes(status))) return 'Finish the active or pending rental before archiving.';
   if (Number(item.open_maintenance) > 0 || [item.status, item.effective_status].includes('UNDER_MAINTENANCE')) return 'Complete maintenance before archiving.';
+  if (item.is_stock_group && (item.rented_quantity || item.reserved_quantity || item.maintenance_quantity)) return 'Finish rentals, reservations, and maintenance for every unit before archiving this equipment.';
   return '';
 };
 
 export function createInventory(h) {
   const { api, escape: e, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, confirmAction, confirmSubmit } = h;
   const cash = n => n == null ? 'Not configured' : new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2 }).format(Number(n));
+  const statusLabel = value => ({ MIXED: 'Mixed availability', UNDER_INSPECTION: 'Under inspection', RESERVED_PENDING: 'Reserved', INACTIVE: 'Archived' }[value] || stateLabel(value));
   const unit = t => ({ DAILY: 'per day', HOURLY: 'per hour', FLAT: 'flat fee' })[t] || '';
   const productFor = item => pricingProducts.find(product => product.id === item.pricing_product_id);
   const usesAdditionalRates = item => Number(item?.custom_rate_options_version) >= 2;
@@ -39,8 +42,10 @@ export function createInventory(h) {
   const primaryItemRate = item => { const rates = itemRateOptions(item); return rates.find(rate => rate.kind === 'HOURLY') || rates.find(rate => rate.kind !== 'PACKAGE' && rate.kind !== 'WHOLE_STAY') || rates.find(rate => rate.kind !== 'WHOLE_STAY') || null; };
   const displayRateAmount = item => primaryItemRate(item)?.amount ?? item.rental_rate;
   const displayRateUnit = item => primaryItemRate(item)?.label || unit(item.rate_type);
-  const priceOptions = item => {
+  const displayLatePenalty = item => productFor(item)?.overtime_rate_per_hour ?? item.late_penalty_rate;
+  const priceOptions = (item, { includePrimary = false } = {}) => {
     const product = productFor(item), rates = itemRateOptions(item).map(rate => `${e(rate.label)}: ${cash(rate.amount)}`);
+    if (!includePrimary) { const primary = primaryItemRate(item); const index = itemRateOptions(item).findIndex(rate => rate.id === primary?.id); if (index >= 0) rates.splice(index, 1); }
     const salePrice = product?.sale_price ?? item.sale_price;
     if (salePrice != null) rates.push(`Sale: ${cash(salePrice)}`);
     return rates.length ? `<small class="inv-price-options">${rates.join(' · ')}</small>` : '';
@@ -111,7 +116,7 @@ export function createInventory(h) {
   const isActive = item => item.is_active !== false;
   const filtered = () => {
     const nameOrder = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
-    const rentalRate = item => { const value = Number(item.rental_rate); return Number.isFinite(value) ? value : 0; };
+    const rentalRate = item => { const value = Number(displayRateAmount(item)); return Number.isFinite(value) ? value : 0; };
     const compare = {
       'name-asc': nameOrder,
       'name-desc': (a, b) => nameOrder(b, a),
@@ -119,7 +124,7 @@ export function createInventory(h) {
       'rate-desc': (a, b) => rentalRate(b) - rentalRate(a),
       newest: (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))
     }[sort] || nameOrder;
-    return records.filter(item => (scope === 'archived' ? !isActive(item) : isActive(item)) && (status === 'all' || (item.effective_status || item.status) === status) && (!cat || String(item.category_id) === cat) && (!search || [item.name, item.item_code, item.category, item.description].some(value => String(value || '').toLowerCase().includes(search.trim().toLowerCase())))).sort((a, b) => compare(a, b) || nameOrder(a, b));
+    return groupInventory(records, scope).filter(item => stockMatchesStatus(item, status) && (!cat || String(item.category_id) === cat) && stockMatchesSearch(item, search)).sort((a, b) => compare(a, b) || nameOrder(a, b));
   };
   function applyLinkedCategory(linkedCategory) {
     if (linkedCategory === categoryLink) return;
@@ -188,14 +193,14 @@ export function createInventory(h) {
   }
   function exportInventory() {
     const cell = value => '"' + (/^[=+@\-\t\r]/.test(String(value || '')) ? "'" : '') + String(value ?? '').replaceAll('"', '""') + '"';
-    const rows = [['Code', 'Equipment', 'Category', 'Status', 'Condition', 'Rate type', 'Rental rate', 'Late penalty'], ...filtered().map(item => [item.item_code, item.name, item.category, item.effective_status, item.condition_status, item.rate_type, item.rental_rate, item.late_penalty_rate])];
+    const rows = [['Unit codes', 'Equipment', 'Category', 'Available stock', 'Total stock', 'Archived units', 'Status', 'Condition', 'Rate basis', 'Rental rate', 'Late penalty'], ...filtered().map(item => [item.visible_units.map(unit => unit.item_code).join(' / '), item.name, item.category, item.available_quantity, item.total_quantity, item.archived_quantity, label(item.effective_status), label(item.condition_status), displayRateUnit(item), displayRateAmount(item), displayLatePenalty(item)])];
     download('\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n'), 'text/csv;charset=utf-8', 'rent-play-inventory.csv');
     toast('Filtered inventory exported.');
   }
   function draw() {
     if (!root?.isConnected) return;
     if (inventoryView?.root !== root) inventoryView = createInventoryView(root, {
-      escape: e, icon, symbol, badge, stateLabel, cash, unit, label, isActive, renderEquipmentImage, productFor, displayRateAmount, displayRateUnit, priceOptions,
+      escape: e, icon, symbol, badge, stateLabel: statusLabel, cash, unit, label, isActive, renderEquipmentImage, productFor, displayRateAmount, displayRateUnit, priceOptions,
       onSearch: value => { search = value; offset = 0; draw(); },
       onCategory: value => { cat = value; offset = 0; draw(); },
       onStatus: value => { scope = value === 'archived' ? 'archived' : 'active'; status = scope === 'archived' ? 'all' : value; offset = 0; draw(); },
@@ -204,7 +209,7 @@ export function createInventory(h) {
       onPrevious: () => { offset = Math.max(0, offset - pageSize()); draw(); },
       onNext: () => { offset += pageSize(); draw(); },
       onAdd: () => form(), onReset: reset, onEmptyAction: () => scope === 'archived' ? switchScope('active') : records.some(isActive) ? reset() : form(),
-      onExport: exportInventory, onQrExport: () => saveQrSheet(records), onDetails: details, onItemAction: quickAction
+      onExport: exportInventory, onQrExport: () => saveQrSheet(records.filter(isActive)), onDetails: details, onItemAction: quickAction
     });
     const rows = filtered(), currentPageSize = pageSize();
     offset = Math.min(offset, Math.max(0, Math.ceil(rows.length / currentPageSize) - 1) * currentPageSize);
@@ -218,20 +223,21 @@ export function createInventory(h) {
     search = ''; cat = ''; status = 'all'; scope = 'active'; sort = 'name-asc'; offset = 0; view = 'table';
   }
   const errorBody = err => `<p role="alert">${e(err.message)}</p><p>Close this dialog and refresh to try again.</p>`;
-  async function edit(id) { try { const { item } = await inventoryApi('/inventory/' + id); await form(item); } catch (err) { showModal('Unable to open equipment', errorBody(err)); } }
+  async function edit(id) { try { const { item, units = [item] } = await inventoryApi('/inventory/' + id), group = groupInventory(units, units.some(isActive) ? 'active' : 'archived')[0]; await form(units.find(unit => String(unit.id) === String(group.id)) || item, units); } catch (err) { showModal('Unable to open equipment', errorBody(err)); } }
   async function quickAction(id, action) {
     if (action === 'view') return details(id);
     if (action === 'edit') return edit(id);
     if (!['qr', 'archive'].includes(action)) return;
     try {
-      const { item } = await inventoryApi('/inventory/' + id);
-      if (action === 'qr') return qr(item);
-      const reason = archiveUnavailableReason(item);
+      const { item, units = [item] } = await inventoryApi('/inventory/' + id);
+      const group = groupInventory(units, action === 'qr' && scope === 'archived' ? 'archived' : units.some(isActive) ? 'active' : 'archived')[0];
+      if (action === 'qr') return units.filter(isActive).length <= 1 && units.length === 1 ? qr(item) : stockLabels(group);
+      const reason = archiveUnavailableReason(group);
       if (reason) { toast(reason); return; }
-      actionForm(item, 'archive');
+      await archiveStock(group);
     } catch (err) { showModal('Unable to open equipment', errorBody(err)); }
   }
-  async function form(item) {
+  async function form(item, units = item ? records.filter(unit => String(unit.stock_group_id || unit.id) === String(item.stock_group_id || item.id)) : []) {
     if (!pricingLoaded) {
       showModal('Opening equipment editor', '<p id="inv-editor-loading" role="status">Loading pricing options…</p>');
       const loading = modal.querySelector('#inv-editor-loading'), version = sessionVersion;
@@ -242,7 +248,8 @@ export function createInventory(h) {
     const options = (values, selected) => values.map(v => `<option value="${v}" ${v === selected ? 'selected' : ''}>${label(v)}</option>`).join('');
     const field = (name, title, type, value, extra = '') => `<label>${title}<input name="${name}" type="${type}" value="${e(value)}" ${extra} required/></label>`;
     const defaultImage = imageFilename(item?.name), initialImage = item?.image_data || (defaultImage ? `/public/images/${defaultImage}` : ''), placeholderCategory = item?.category || categories.find(c => String(c.id) === String(item?.category_id || cat))?.name || '';
-    const savedCondition = item?.condition_status || 'GOOD', conditionLocked = Boolean(item && (Number(item.open_rentals) > 0 || item.reserved_rental_id || ['RENTED', 'RESERVED_PENDING'].includes(item.status)));
+    const multipleUnits = units.filter(isActive).length > 1, groupedCondition = groupInventory(units)[0]?.condition_status;
+    const savedCondition = item?.condition_status || 'GOOD', conditionLocked = multipleUnits || Boolean(item && (Number(item.open_rentals) > 0 || item.reserved_rental_id || ['RENTED', 'RESERVED_PENDING', 'UNDER_INSPECTION'].includes(item.status)));
     const oldRateOptions = Array.isArray(item?.custom_rate_options) ? item.custom_rate_options : [];
     const legacyBaseIndex = item && !usesAdditionalRates(item) ? oldRateOptions.findIndex(rate => rate.kind === 'HOURLY' || rate.kind === 'BLOCK' && Number(rate.duration_minutes) === 1440) : -1;
     const legacyBaseOption = legacyBaseIndex >= 0 ? oldRateOptions[legacyBaseIndex] : null;
@@ -252,12 +259,13 @@ export function createInventory(h) {
     const initialRateMode = item?.pricing_product_id ? 'product' : 'traditional';
     const imageEditor = `<section class="inv-image-editor"><div class="inv-image-preview" id="inv-form-image-preview">${initialImage ? `<img src="${e(initialImage)}" alt="${e(item?.name || 'Equipment image')}"/>` : `<span>${symbol(placeholderCategory)}</span>`}</div><div class="inv-image-editor-copy"><strong>Equipment image</strong><p>Upload a photo to use on this equipment card.</p><div class="inv-image-actions"><label class="secondary inv-image-picker">Choose image<input id="inv-image-file" type="file" accept="image/jpeg,image/png,image/webp"/></label><button type="button" class="secondary" id="inv-image-remove" ${item?.image_data ? '' : 'hidden'}>Remove image</button></div><small>JPG, PNG, or WebP · resized automatically</small><p class="inv-error" id="inv-image-error" role="alert"></p></div><input type="hidden" name="imageData" value="${e(item?.image_data || '')}"/></section>`;
     showModal(item ? 'Edit equipment' : 'Add equipment', `<form id="inv-form" class="inv-form inv-equipment-form">
-      <p class="inv-form-intro">${item ? 'Update equipment details and pricing.' : 'Add a photo, equipment details, and rental pricing.'}</p>
+      <p class="inv-form-intro">${item ? 'Update shared equipment details, stock, and pricing in one save.' : 'Add a photo, equipment details, stock, and rental pricing.'}</p>
       ${imageEditor}
       <section class="inv-form-section">
         <header class="inv-form-section-heading"><span>01</span><div><h3>Equipment details</h3><p>Name, category, condition, and useful notes.</p></div></header>
         <div class="inv-form-grid">
           ${field('name', 'Equipment name', 'text', item?.name || '', 'maxlength="150" placeholder="e.g. Basketball — size 7"')}
+          <label>Stock (total units)<input name="quantity" type="number" min="${item ? 0 : 1}" max="50" step="1" value="${item ? Number(item.total_quantity ?? 1) : 1}" required/><small>${item ? `${Number(item.available_quantity || 0)} currently available. Include rented, reserved, and maintained units in the total.` : 'All units appear under one equipment entry, each with its own QR and history.'}</small></label>
           <div class="inv-category-input">
             <label for="inv-form-category">Category<select id="inv-form-category" name="categoryId" required>${categories.map(c => `<option value="${e(c.id)}" ${String(c.id) === (item?.category_id || cat) ? 'selected' : ''}>${e(c.name)}</option>`).join('')}</select></label>
             <div class="inv-category-actions">
@@ -272,7 +280,7 @@ export function createInventory(h) {
               </div>
             </div>
           </div>
-          <label>Condition<select name="condition" ${conditionLocked ? 'disabled aria-describedby="inv-condition-help"' : 'required'}>${options(item?.status === 'UNDER_MAINTENANCE' ? ['GOOD', 'FAIR', 'DAMAGED', 'NEEDS_INSPECTION'] : ['GOOD', 'FAIR'], savedCondition)}</select>${conditionLocked ? '<small id="inv-condition-help">Locked while a rental is open. Record the condition during return inspection.</small>' : ''}</label>
+          <label>Condition<select name="condition" ${conditionLocked ? 'disabled aria-describedby="inv-condition-help"' : 'required'}>${options(multipleUnits ? ['GOOD', 'FAIR', 'DAMAGED', 'NEEDS_INSPECTION', 'MIXED'] : item?.status === 'UNDER_MAINTENANCE' ? ['GOOD', 'FAIR', 'DAMAGED', 'NEEDS_INSPECTION'] : ['GOOD', 'FAIR'], multipleUnits ? groupedCondition : savedCondition)}</select>${conditionLocked ? `<small id="inv-condition-help">${multipleUnits ? 'Kept separately for each unit. Open unit details to record inspections and maintenance.' : 'Locked while a rental is open. Record the condition during return inspection.'}</small>` : ''}</label>
           <label class="inv-equipment-notes">Description / equipment notes<textarea name="description" maxlength="2000" rows="3" placeholder="Size, color, included accessories, or identifying marks">${e(item?.description || '')}</textarea></label>
         </div>
       </section>
@@ -406,7 +414,7 @@ export function createInventory(h) {
     pricingSelect.onchange = syncLinkedProduct;
     if (rateModeSelect.value === 'product') syncLinkedProduct();
     syncRateMode();
-    if (item) { if (!Array.from(conditionSelect.options).some(o => o.value === savedCondition)) conditionSelect.add(new Option(label(savedCondition), savedCondition)); conditionSelect.value = savedCondition; conditionSelect.disabled = conditionLocked; }
+    if (item) { const shownCondition = multipleUnits ? groupedCondition : savedCondition; if (!Array.from(conditionSelect.options).some(o => o.value === shownCondition)) conditionSelect.add(new Option(label(shownCondition), shownCondition)); conditionSelect.value = shownCondition; conditionSelect.disabled = conditionLocked; }
     const categoryPopover = modal.querySelector('#inv-category-popover'), categoryButton = modal.querySelector('#inv-add-category'), categoryRemoveButton = modal.querySelector('#inv-remove-category'), categoryInput = modal.querySelector('#inv-new-category-name'), categoryError = modal.querySelector('#inv-category-error'), categorySave = modal.querySelector('#inv-category-save'), categoryDiscard = modal.querySelector('#inv-category-discard'), categorySelect = formEl.elements.categoryId;
     const equipmentSave = formEl.querySelector('[type="submit"]');
     const syncCategoryRemoveButton = () => { categoryRemoveButton.disabled = categories.length <= 1; categoryRemoveButton.title = categories.length <= 1 ? 'Keep at least one equipment category.' : 'Remove the selected category'; };
@@ -450,7 +458,7 @@ export function createInventory(h) {
       finally { if (version === sessionVersion) { syncCategoryRemoveButton(); equipmentSave.disabled = !categoryPopover.hidden; } }
     };
     syncCategoryRemoveButton();
-    confirmSubmit(formEl, { title: item ? 'Save equipment changes?' : 'Add this equipment?', description: item ? 'The updated name, category, condition, notes, and rates will be saved.' : 'The equipment will be added to your active collection.', confirmLabel: item ? 'Yes, save changes' : 'Yes, add equipment' }, async () => {
+    confirmSubmit(formEl, { title: item ? 'Save equipment changes?' : 'Add this equipment?', description: item ? 'Shared details, rates, and total stock will be saved together. Rented, reserved, and maintained units cannot be removed.' : 'The equipment and its stock will be added as one entry in your collection.', confirmLabel: item ? 'Yes, save changes' : 'Yes, add equipment' }, async () => {
       const values = Object.fromEntries(new FormData(formEl));
       if (rateModeSelect.value === 'traditional') {
         values.pricingProductId = '';
@@ -470,9 +478,9 @@ export function createInventory(h) {
       }
       if (item && conditionSelect.disabled) values.condition = savedCondition;
       for (const key of ['rentalRate', 'latePenalty']) values[key] = Number(values[key]);
-      if (item) values.version = item.updated_at;
-      const saved = await submit(formEl, () => api('/inventory' + (item ? '/' + item.id : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(values) }), item ? 'Equipment updated.' : 'Equipment added.', item ? null : () => { scope = 'active'; status = 'all'; offset = 0; draw(); });
-      if (saved && scope === 'archived') { scope = 'active'; status = 'all'; offset = 0; draw(); }
+      values.quantity = Number(values.quantity);
+      if (item) { values.scope = 'stock'; values.version = item.updated_at; values.stockVersion = item.stock_version; }
+      await submit(formEl, () => api('/inventory' + (item ? '/' + item.id : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(values) }), item ? 'Equipment and stock updated.' : 'Equipment added.', () => { scope = values.quantity === 0 ? 'archived' : 'active'; status = 'all'; offset = 0; draw(); });
     });
   }
   async function submit(formEl, operation, message, afterSave = null) {
@@ -487,24 +495,64 @@ export function createInventory(h) {
     finally { button.disabled = false; }
     return true;
   }
-  async function details(id) {
+  const stockBreakdown = group => Object.entries(group.status_counts).map(([state, count]) => `${count} ${statusLabel(state).toLowerCase()}`).join(' · ');
+  const unitRows = units => `<div class="table-scroll"><table class="inv-unit-table"><thead><tr><th>Unit code</th><th>Status</th><th>Condition</th><th>Actions</th></tr></thead><tbody>${units.map(item => `<tr><td><strong>${e(item.item_code)}</strong></td><td>${badge(statusLabel(item.effective_status || item.status))}</td><td>${e(label(item.condition_status))}</td><td><div class="inv-unit-actions"><button type="button" class="secondary" data-unit-details="${e(item.id)}" aria-label="Details for ${e(item.item_code)}">Details &amp; history</button><button type="button" class="secondary" data-unit-qr="${e(item.id)}" aria-label="QR for ${e(item.item_code)}">QR label</button></div></td></tr>`).join('')}</tbody></table></div>`;
+  function bindUnitActions(units) {
+    modal.querySelectorAll('[data-unit-details]').forEach(button => { button.onclick = () => details(button.dataset.unitDetails, true); });
+    modal.querySelectorAll('[data-unit-qr]').forEach(button => { button.onclick = () => qr(units.find(item => String(item.id) === button.dataset.unitQr)); });
+  }
+  function stockDetails(group) {
+    const active = group.units.filter(isActive), archived = group.units.filter(item => !isActive(item)), reason = archiveUnavailableReason(group);
+    showModal(group.name, `<div class="inv-details-modal-content">
+      <section class="inv-detail-overview"><div class="inv-detail-heading"><span class="inv-detail-art">${symbol(group.category)}</span><div class="inv-detail-identity"><p>${e(group.category)} · ${active.length} unit${active.length === 1 ? '' : 's'} in stock</p>${badge(statusLabel(group.effective_status))}</div></div><p class="inv-description">${e(group.description || 'No equipment notes recorded.')}</p></section>
+      <section class="inv-detail-facts" aria-label="Equipment stock"><div><small>Stock available</small><strong>${group.available_quantity} / ${group.total_quantity}</strong><small>${e(stockBreakdown(group))}</small></div><div><small>Condition</small><strong>${e(label(group.condition_status))}</strong><small>Recorded for each physical unit</small></div><div><small>Rental rate</small><strong>${cash(displayRateAmount(group))}</strong><small>${e(displayRateUnit(group))}</small></div><div><small>Late penalty</small><strong>${cash(displayLatePenalty(group))}</strong><small>Per started hour</small></div></section>
+      ${priceOptions(group, { includePrimary: true }) ? `<section class="inv-detail-rate-options" aria-label="Customer rental rate options"><strong>Customer rate options</strong>${priceOptions(group, { includePrimary: true })}</section>` : ''}
+      <div class="inv-detail-actions"><button type="button" class="primary" id="inv-detail-edit">Edit equipment &amp; stock</button><button type="button" class="secondary" id="inv-group-qr-save" ${active.length ? '' : 'disabled'}>Save unit QR labels (${active.length})</button>${active.length ? `<button type="button" class="inv-danger" id="inv-group-archive" title="${e(reason || 'Archive all units of this equipment')}" ${reason ? 'disabled' : ''}>Archive equipment</button>` : ''}</div><p class="inv-error" role="alert"></p>
+      <section class="inv-unit-section" aria-label="Physical units"><h3>Units &amp; history</h3><p>Open a unit for its status, maintenance, and pricing history. Each unit keeps its own QR label.</p>${active.length ? unitRows(active) : '<p>No active units. Edit stock to add units, or restore an archived unit below.</p>'}${archived.length ? `<details class="inv-history"><summary>Archived / retired units <span>${archived.length}</span></summary>${unitRows(archived)}</details>` : ''}</section>
+    </div>`);
+    renderEquipmentImage(modal.querySelector('.inv-detail-art'), group);
+    modal.querySelector('#inv-detail-edit').onclick = () => form(group.units.find(item => String(item.id) === String(group.id)), group.units);
+    modal.querySelector('#inv-group-qr-save').onclick = () => saveQrSheet(active);
+    modal.querySelector('#inv-group-archive')?.addEventListener('click', () => archiveStock(group));
+    bindUnitActions(group.units);
+  }
+  function stockLabels(group) {
+    const shown = group.visible_units;
+    showModal(`${group.name} · QR labels`, `<section class="inv-unit-section"><p>Select the physical unit whose label you want to view or print.</p>${unitRows(shown)}<div class="inv-form-actions"><button type="button" class="secondary" id="inv-labels-back">Back to equipment</button><button type="button" class="primary" id="inv-labels-save">Save all ${shown.length} unit labels</button></div></section>`);
+    modal.querySelector('#inv-labels-back').onclick = () => details(group.id);
+    modal.querySelector('#inv-labels-save').onclick = () => saveQrSheet(shown);
+    bindUnitActions(group.units);
+  }
+  async function archiveStock(group) {
+    const reason = archiveUnavailableReason(group);
+    if (reason) { toast(reason); return; }
+    if (!await confirmAction({ title: 'Archive equipment?', description: `Archive ${group.total_quantity} unit${group.total_quantity === 1 ? '' : 's'} of ${group.name}? Unit QR labels and history will stay available in the archive.`, confirmLabel: 'Yes, archive equipment', danger: true })) return;
     try {
-      const { item: i, history, maintenance, rates } = await api('/inventory/' + id), locked = Number(i.open_rentals) > 0 || ['RENTED', 'RESERVED_PENDING'].includes(i.status);
-      showModal(i.name, `<div class="inv-details-modal-content">
+      await api('/inventory/' + group.id + '/quantity', { method: 'POST', body: JSON.stringify({ quantity: 0, version: group.updated_at, stockVersion: group.stock_version }) });
+      modal.close(); toast('Equipment archived.'); scope = 'archived'; status = 'all'; offset = 0;
+      await refreshInventory({ force: true });
+    } catch (error) { showModal('Unable to archive equipment', errorBody(error)); }
+  }
+  async function details(id, unitView = false) {
+    try {
+      const { item: i, units = [i], history, maintenance, rates } = await api('/inventory/' + id), locked = Number(i.open_rentals) > 0 || i.reserved_rental_id || ['RENTED', 'RESERVED_PENDING', 'UNDER_INSPECTION'].includes(i.effective_status || i.status);
+      if (!unitView) return stockDetails(groupInventory(units, units.some(isActive) ? 'active' : 'archived')[0]);
+      showModal(`${i.name} · ${i.item_code}`, `<div class="inv-details-modal-content">
         <section class="inv-detail-overview">
-          <div class="inv-detail-heading"><span class="inv-detail-art">${symbol(i.category)}</span><div class="inv-detail-identity"><p>${e(i.item_code)} <span>· ${e(i.category)}</span></p>${badge(stateLabel(i.effective_status || i.status))}</div></div>
+          <div class="inv-detail-heading"><span class="inv-detail-art">${symbol(i.category)}</span><div class="inv-detail-identity"><p>${e(i.item_code)} <span>· ${e(i.category)}</span></p>${badge(statusLabel(i.effective_status || i.status))}</div></div>
           <p class="inv-description">${e(i.description || 'No equipment notes recorded.')}</p>
         </section>
         <section class="inv-detail-facts" aria-label="Equipment details">
+          <div><small>This unit</small><strong>${e(statusLabel(i.effective_status || i.status))}</strong><small>${e(i.item_code)}</small></div>
           <div><small>Condition</small><strong>${label(i.condition_status)}</strong></div>
-          <div><small>Rental rate</small><strong>${cash(displayRateAmount(i))}</strong><small>${displayRateUnit(i)}</small></div>
-          <div><small>Late penalty rate</small><strong>${cash(i.late_penalty_rate)}</strong></div>
+          <div><small>Rental rate</small><strong>${cash(displayRateAmount(i))}</strong><small>${e(displayRateUnit(i))}</small></div>
+          <div><small>Late penalty per hour</small><strong>${cash(displayLatePenalty(i))}</strong></div>
         </section>
-        ${priceOptions(i) ? `<section class="inv-detail-rate-options" aria-label="Customer rental rate options"><strong>Customer rate options</strong>${priceOptions(i)}</section>` : ''}
+        ${priceOptions(i, { includePrimary: true }) ? `<section class="inv-detail-rate-options" aria-label="Customer rental rate options"><strong>Customer rate options</strong>${priceOptions(i, { includePrimary: true })}</section>` : ''}
         <div class="inv-detail-actions" aria-label="Equipment actions">
-          ${isActive(i) ? `<button class="primary" id="inv-detail-edit">Edit details &amp; rates</button>` : ''}
+          <button class="secondary" id="inv-unit-back">Back to equipment</button>
           <button class="secondary" id="inv-qr">QR label</button>
-          ${!isActive(i) ? '<button class="secondary" id="inv-restore">Restore equipment</button><button class="inv-danger" id="inv-delete">Delete permanently</button>' : i.status === 'UNDER_MAINTENANCE' ? `<button class="secondary" id="inv-maintenance" ${locked ? 'disabled' : ''}>Complete maintenance</button>` : `<button class="secondary" id="inv-maintenance" ${locked || i.status !== 'AVAILABLE' ? 'disabled' : ''}>Start maintenance</button><button class="inv-danger" id="inv-archive" ${locked || Number(i.open_maintenance) > 0 ? 'disabled' : ''}>Archive</button>`}
+          ${i.status === 'RETIRED' ? '<span class=maintenance-retired-label>Retired unit · history preserved</span>' : !isActive(i) ? '<button class="secondary" id="inv-restore">Restore unit</button><button class="inv-danger" id="inv-delete">Delete unit permanently</button>' : i.status === 'UNDER_MAINTENANCE' || i.effective_status === 'UNDER_MAINTENANCE' ? `<button class="secondary" id="inv-maintenance" ${locked ? 'disabled' : ''}>Open maintenance ticket</button>` : `<button class="secondary" id="inv-maintenance" ${locked || i.status !== 'AVAILABLE' ? 'disabled' : ''}>Start maintenance</button><button class="inv-danger" id="inv-archive" ${locked || Number(i.open_maintenance) > 0 ? 'disabled' : ''}>Archive unit</button>`}
         </div>
         <p class="inv-error" role="alert"></p>
         ${locked ? '<div class="info-box">Active or pending rental: availability, condition, and archiving are locked until the rental/return workflow finishes.</div>' : ''}
@@ -514,14 +562,14 @@ export function createInventory(h) {
           <details class="inv-history"><summary>Pricing history <span>${rates.length}</span></summary>${rates.map(v => `<div><strong>${cash(v.rental_rate)} ${unit(v.rate_type)}</strong><small>Late penalty ${cash(v.late_penalty_rate)} · Since ${e(formatDate(v.effective_from))}${v.effective_to ? ' · Ended ' + e(formatDate(v.effective_to)) : ''}</small>${v.custom_rate_options?.length ? `<small>${v.custom_rate_options.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`).join(' · ')}</small>` : ''}</div>`).join('') || '<p>No rate configured.</p>'}</details>
         </section>
       </div>`);
-      renderEquipmentImage(modal.querySelector('.inv-detail-art'), i); modal.querySelector('#inv-detail-edit')?.addEventListener('click', () => void form(i)); modal.querySelector('#inv-qr').onclick = () => qr(i);
+      renderEquipmentImage(modal.querySelector('.inv-detail-art'), i); modal.querySelector('#inv-unit-back').onclick = () => details(i.id); modal.querySelector('#inv-qr').onclick = () => qr(i);
       for (const action of ['archive', 'restore']) { const b = modal.querySelector('#inv-' + action); if (b) b.onclick = () => actionForm(i, action); }
-      const mb = modal.querySelector('#inv-maintenance'); if (mb) mb.onclick = () => actionForm(i, i.status === 'UNDER_MAINTENANCE' ? 'complete-maintenance' : 'maintenance');
+      const mb = modal.querySelector('#inv-maintenance'); if (mb) mb.onclick = () => h.openMaintenance ? h.openMaintenance(i.id) : actionForm(i, i.status === 'UNDER_MAINTENANCE' || i.effective_status === 'UNDER_MAINTENANCE' ? 'complete-maintenance' : 'maintenance');
       modal.querySelector('#inv-delete')?.addEventListener('click', () => permanentDelete(i));
     } catch (err) { showModal('Equipment unavailable', errorBody(err)); }
   }
   function actionForm(i, action) {
-    const maintenance = action.includes('maintenance'), complete = action === 'complete-maintenance', title = ({ archive: 'Archive equipment', restore: 'Restore equipment', maintenance: 'Start maintenance', 'complete-maintenance': 'Complete maintenance' })[action];
+    const maintenance = action.includes('maintenance'), complete = action === 'complete-maintenance', title = ({ archive: 'Archive unit', restore: 'Restore unit', maintenance: 'Start maintenance', 'complete-maintenance': 'Complete maintenance' })[action];
     showModal(title, `<form id="inv-action-form" class="inv-form"><p><strong>${e(i.name)}</strong> · ${e(i.item_code)}</p><p>${action === 'archive' ? 'This equipment will move to the Archive tab. Its rental, pricing, QR, and maintenance history stay available.' : action === 'restore' ? 'Return this equipment to the active collection as available.' : complete ? 'Record the inspection before making this equipment available again.' : 'Take this equipment out of circulation while it is serviced.'}</p>${maintenance ? `<label>${complete ? 'Inspection notes' : 'Maintenance reason'}<textarea name="reason" required maxlength="${complete ? 2000 : 255}" rows="3" placeholder="${complete ? 'Describe the repair and final inspection' : 'Describe what needs attention'}"></textarea></label><label>Condition<select name="condition">${(complete ? ['GOOD', 'FAIR'] : ['NEEDS_INSPECTION', 'DAMAGED', 'FAIR', 'GOOD']).map(c => `<option value="${c}">${label(c)}</option>`).join('')}</select></label>` : ''}<p class="inv-error" role="alert"></p><div class="inv-form-actions"><button type="button" class="secondary" id="inv-action-back">Back</button><button type="submit" class="${action === 'archive' ? 'inv-danger' : 'primary'}">${title}</button></div></form>`);
     modal.querySelector('#inv-action-back').onclick = () => details(i.id);
     const f = modal.querySelector('#inv-action-form');
@@ -535,7 +583,7 @@ export function createInventory(h) {
     if (!button || button.disabled) return;
     button.disabled = true; error.textContent = '';
     try {
-      if (!await confirmAction({ title: 'Delete equipment permanently?', description: `“${i.name}” (${i.item_code}) will be permanently removed from inventory. Past rentals, rates, and the audit trail remain saved. This cannot be undone.`, confirmLabel: 'Yes, delete permanently', cancelLabel: 'No, keep equipment', danger: true }) || !button.isConnected || !modal.open) return;
+      if (!await confirmAction({ title: 'Delete unit permanently?', description: `“${i.name}” (${i.item_code}) will be permanently removed from inventory. Past rentals, rates, and the audit trail remain saved. This cannot be undone.`, confirmLabel: 'Yes, delete permanently', cancelLabel: 'No, keep unit', danger: true }) || !button.isConnected || !modal.open) return;
         await api('/inventory/' + i.id, { method: 'DELETE', body: JSON.stringify({ version: i.updated_at }) });
         modal.close(); toast('Equipment deleted.'); scope = 'archived'; status = 'all'; offset = 0;
         try { await refreshInventory({ force: true }); } catch { toast('Equipment deleted. Use Refresh to update the archive list.'); }
@@ -692,26 +740,26 @@ export function createInventory(h) {
       };
     } catch (err) { showModal('Equipment label unavailable', errorBody(err)); }
   }
-  async function saveQrSheet(items) { if (!items.length) return; try { const result = await api('/inventory/qr-labels'), labels = new Map(result.items.map(item => [String(item.id), item])); download(qrSheet(items, labels, { ...qrCalibration, ...qrPrintSettings }), 'text/html;charset=utf-8', `rent-play-qr-labels-${new Date().toISOString().slice(0, 10)}.html`); toast(`Printable QR sheet saved for ${items.length} equipment item${items.length === 1 ? '' : 's'}. Open it and choose Print labels.`); } catch (err) { showModal('QR sheet unavailable', errorBody(err)); } }
+  async function saveQrSheet(items) { if (!items.length) return; try { const result = await api('/inventory/qr-labels'), labels = new Map(result.items.map(item => [String(item.id), item])); download(qrSheet(items, labels, { ...qrCalibration, ...qrPrintSettings }), 'text/html;charset=utf-8', `rent-play-qr-labels-${new Date().toISOString().slice(0, 10)}.html`); toast(`Printable QR sheet saved for ${items.length} physical unit${items.length === 1 ? '' : 's'}. Open it and choose Print labels.`); } catch (err) { showModal('QR sheet unavailable', errorBody(err)); } }
   return { mount, refresh: refreshInventory, reset: resetCache, details };
 }
 
 // Keep the inventory controls mounted while records change in the background.
 function createInventoryView(root, h) {
   const { escape: e, icon, symbol, badge, stateLabel, cash, unit, label, isActive, renderEquipmentImage, productFor, displayRateAmount, displayRateUnit, priceOptions } = h;
-  const statuses = [['all', 'All statuses'], ['AVAILABLE', 'Available'], ['RENTED', 'Rented'], ['RESERVED_PENDING', 'Reserved for booking'], ['UNDER_INSPECTION', 'Under inspection'], ['UNDER_MAINTENANCE', 'Under maintenance'], ['archived', 'Archived']];
+  const statuses = [['all', 'All statuses'], ['AVAILABLE', 'Available'], ['RENTED', 'Rented'], ['RESERVED_PENDING', 'Reserved for rental'], ['UNDER_INSPECTION', 'Under inspection'], ['UNDER_MAINTENANCE', 'Under maintenance'], ['archived', 'Archived']];
   const sortOptions = [['name-asc', 'Name A–Z'], ['name-desc', 'Name Z–A'], ['newest', 'Newest first'], ['rate-asc', 'Rental rate: low to high'], ['rate-desc', 'Rental rate: high to low']];
   root.removeAttribute('aria-live'); root.removeAttribute('aria-busy');
-  root.innerHTML = `<div class="inv-stats">${[['In collection', 'box'], ['Available', 'grid'], ['Out / reserved', 'clock'], ['In maintenance', 'settings']].map(([name, glyph], index) => `<div class="panel inv-stat"><span>${icon(glyph)}</span><div><small>${name}</small><strong data-inv-stat="${index}">0</strong></div></div>`).join('')}</div>
+  root.innerHTML = `<div class="inv-stats">${[['Total stock', 'box'], ['Available units', 'grid'], ['Out / reserved', 'clock'], ['In maintenance', 'settings']].map(([name, glyph], index) => `<div class="panel inv-stat"><span>${icon(glyph)}</span><div><small>${name}</small><strong data-inv-stat="${index}">0</strong></div></div>`).join('')}</div>
     <section class="panel inv-collection">
       <div class="inv-toolbar"><label class="inv-search">${icon('search')}<input id="inv-search" aria-label="Search equipment" placeholder="Search name, code, or description"/></label>
-        <div class="inv-tools"><button type="button" class="secondary" id="inv-qr-export" title="Download a printable sheet containing a QR label for every equipment item.">Save all QR labels</button><button type="button" class="secondary" id="inv-export">${icon('chart')} Export CSV</button><div class="inv-view" aria-label="Inventory view"><button type="button" id="inv-table" aria-label="Table view">☰</button><button type="button" id="inv-grid" aria-label="Card view">${icon('grid')}</button></div><button type="button" class="primary" id="inv-add">＋ Add equipment</button></div>
+        <div class="inv-tools"><button type="button" class="secondary" id="inv-qr-export" title="Download one QR label for every active physical unit.">Save all QR labels</button><button type="button" class="secondary" id="inv-export">${icon('chart')} Export CSV</button><div class="inv-view" aria-label="Inventory view"><button type="button" id="inv-table" aria-label="Table view">☰</button><button type="button" id="inv-grid" aria-label="Card view">${icon('grid')}</button></div><button type="button" class="primary" id="inv-add">＋ Add equipment</button></div>
       </div>
-      <div class="inv-filters"><label>Category<select id="inv-category"><option value="">All categories</option></select></label><label>Status<select id="inv-status">${statuses.map(([value, name]) => `<option value="${value}">${name}</option>`).join('')}</select></label><label>Sort by<select id="inv-sort">${sortOptions.map(([value, name]) => `<option value="${value}">${name}</option>`).join('')}</select></label><button type="button" class="text-button" id="inv-clear">Reset filters</button><span id="inv-result-count" role="status" aria-live="polite"></span></div>
+      <div class="inv-filters"><label>Category<select id="inv-category" aria-label="Category"><option value="">All categories</option></select></label><label>Status<select id="inv-status" aria-label="Status">${statuses.map(([value, name]) => `<option value="${value}">${name}</option>`).join('')}</select></label><label>Sort by<select id="inv-sort" aria-label="Sort by">${sortOptions.map(([value, name]) => `<option value="${value}">${name}</option>`).join('')}</select></label><button type="button" class="text-button" id="inv-clear">Reset filters</button><span id="inv-result-count" role="status" aria-live="polite"></span></div>
       <p class="inv-error" id="inv-sync-error" role="status" hidden></p>
       <div data-inv-results></div>
       <div class="table-footer"><span id="inv-page-summary"></span><div class="inv-pagination"><button type="button" class="secondary" id="inv-prev">← Previous</button><button type="button" class="secondary" id="inv-next">Next →</button></div></div>
-    </section><p class="inv-footnote">Open equipment details to view or print its QR label, or save a printable sheet for all equipment.</p>`;
+    </section><p class="inv-footnote">Each equipment has one entry. Open its details to manage stock and view each unit's QR label and history.</p>`;
 
   const searchInput = root.querySelector('#inv-search'), categoryInput = root.querySelector('#inv-category'), statusInput = root.querySelector('#inv-status'), sortInput = root.querySelector('#inv-sort');
   const results = root.querySelector('[data-inv-results]'), signatures = new WeakMap();
@@ -748,19 +796,22 @@ function createInventoryView(root, h) {
   const statusText = item => stateLabel(item.effective_status || item.status || 'Unknown');
   const quickActions = item => {
     const archiveReason = archiveUnavailableReason(item);
-    const actions = [['view', 'View', 'eye', ''], ['edit', 'Edit', 'edit', isActive(item) ? '' : 'Restore archived equipment before editing.'], ['qr', 'QR label', 'qr', ''], ['archive', 'Archive', 'archive', archiveReason]];
+    const actions = [['view', 'View equipment', 'eye', ''], ['edit', 'Edit equipment & stock', 'edit', ''], ['qr', 'Unit QR labels', 'qr', ''], ['archive', 'Archive equipment', 'archive', archiveReason]];
     return `<div class="inv-item-actions" role="group" aria-label="Actions for ${e(item.name)}">${actions.map(([action, name, glyph, reason]) => `<button type="button" class="inv-quick-action${action === 'archive' ? ' inv-quick-archive' : ''}" data-inv-action="${action}" data-inv-id="${e(item.id)}" aria-label="${e(name)} for ${e(item.name)}" title="${e(reason || name)}" aria-haspopup="dialog" ${reason ? 'disabled' : ''}>${icon(glyph)}</button>`).join('')}</div>`;
   };
-  const signature = item => JSON.stringify([item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.pricing_product_id, item.custom_rate_options || [], item.custom_rate_options_version, item.sale_price, item.image_data || '', productFor(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id]);
+  const signature = item => JSON.stringify([item.id, item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.pricing_product_id, item.custom_rate_options || [], item.custom_rate_options_version, item.sale_price, item.image_data || '', productFor(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id, item.available_quantity, item.total_quantity, item.reserved_quantity, item.rented_quantity, item.maintenance_quantity, item.archived_quantity, item.status_counts, item.visible_units.map(unit => [unit.id, unit.condition_status])]);
+  const identity = item => item.units.length === 1 ? `${e(item.item_code)} · ${e(item.category)}` : `${e(item.category)} · ${item.visible_units.length} ${isActive(item) ? 'unit' : 'archived unit'}${item.visible_units.length === 1 ? '' : 's'}`;
+  const availability = item => isActive(item) ? `${item.available_quantity} / ${item.total_quantity}` : `${item.visible_units.length} archived`;
+  const stockSummary = item => isActive(item) ? Object.entries(item.status_counts).map(([state, count]) => `${count} ${stateLabel(state).toLowerCase()}`).join(' · ') : `${item.available_quantity} / ${item.total_quantity} currently available`;
   function itemNode(item, mode) {
     const node = document.createElement(mode === 'grid' ? 'article' : 'tr');
     node.dataset.invItem = String(item.id);
     if (mode === 'grid') {
       node.className = 'inv-card';
-      node.innerHTML = `<div class="inv-art">${symbol(item.category)}${badge(statusText(item))}</div><small>${e(item.category)} · ${e(item.item_code)}</small><h3><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button></h3><p>${label(item.condition_status)} condition</p><div class="inv-price"><strong>${cash(displayRateAmount(item))}</strong><small>${e(displayRateUnit(item))}</small>${priceOptions(item)}</div>`;
+      node.innerHTML = `<div class="inv-art">${symbol(item.category)}${badge(statusText(item))}</div><small>${identity(item)}</small><h3><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button></h3><p>${e(label(item.condition_status))} condition · ${availability(item)} ${isActive(item) ? 'available' : ''}${Object.keys(item.status_counts).length > 1 ? `<small class="inv-stock-summary">${e(stockSummary(item))}</small>` : ''}</p><div class="inv-price"><strong>${cash(displayRateAmount(item))}</strong><small>${e(displayRateUnit(item))}</small>${priceOptions(item)}</div>`;
       renderEquipmentImage(node.querySelector('.inv-art'), item, { keepBadge: true });
     } else {
-      node.innerHTML = `<td><div class="item-cell"><span class="item-symbol">${symbol(item.category)}</span><div><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button><small>${e(item.item_code)} · ${e(item.category)}</small></div></div></td><td>${badge(statusText(item))}<small>${label(item.condition_status)} condition</small></td><td><strong>${cash(displayRateAmount(item))}</strong><small>${e(displayRateUnit(item))}</small>${priceOptions(item)}</td><td class="inv-actions-cell">${quickActions(item)}</td>`;
+      node.innerHTML = `<td><div class="item-cell"><span class="item-symbol">${symbol(item.category)}</span><div><button type="button" class="inv-item-name" data-inv-detail="${e(item.id)}" aria-haspopup="dialog">${e(item.name)}</button><small>${identity(item)}</small></div></div></td><td class="inv-stock-cell"><strong>${availability(item)}</strong><small>${e(stockSummary(item))}</small></td><td>${badge(statusText(item))}</td><td><span class="inv-condition-value">${e(label(item.condition_status))}</span><small>${item.visible_units.length > 1 ? 'per unit' : '1 unit'}</small></td><td><strong>${cash(displayRateAmount(item))}</strong><small>${e(displayRateUnit(item))}</small>${priceOptions(item)}</td><td class="inv-actions-cell">${quickActions(item)}</td>`;
       renderEquipmentImage(node.querySelector('.item-symbol'), item);
     }
     signatures.set(node, signature(item));
@@ -795,17 +846,17 @@ function createInventoryView(root, h) {
     if (sortInput.value !== sort) sortInput.value = sort;
     syncCategories(state);
     const scopedRecords = records.filter(item => scope === 'archived' ? !isActive(item) : isActive(item));
-    const effectiveStatus = item => item.effective_status || item.status;
-    const active = records.filter(isActive), counts = [active.length, active.filter(item => effectiveStatus(item) === 'AVAILABLE').length, active.filter(item => ['RENTED', 'RESERVED_PENDING'].includes(effectiveStatus(item))).length, active.filter(item => effectiveStatus(item) === 'UNDER_MAINTENANCE').length];
+    const active = records.filter(isActive), counts = inventoryStockCounts(records);
     root.querySelectorAll('[data-inv-stat]').forEach((node, index) => { if (node.textContent !== String(counts[index])) node.textContent = counts[index]; });
-    text('#inv-result-count', `${rows.length} equipment item${rows.length === 1 ? '' : 's'}`);
+    const matchedUnits = rows.reduce((total, item) => total + item.visible_units.length, 0);
+    text('#inv-result-count', `${rows.length} equipment type${rows.length === 1 ? '' : 's'} · ${matchedUnits} ${scope === 'archived' ? 'archived ' : ''}unit${matchedUnits === 1 ? '' : 's'}`);
     text('#inv-page-summary', `${rows.length ? `${offset + 1}–${Math.min(offset + pageSize, rows.length)} of ${rows.length}` : '0 items'} · Page ${rows.length ? Math.floor(offset / pageSize) + 1 : 0} of ${Math.ceil(rows.length / pageSize)}`);
     root.querySelector('#inv-prev').disabled = offset === 0;
     root.querySelector('#inv-next').disabled = offset + pageSize >= rows.length;
     root.querySelector('#inv-export').disabled = !rows.length;
     root.querySelector('#inv-clear').disabled = !search && !cat && status === 'all' && scope === 'active';
-    root.querySelector('#inv-qr-export').disabled = !records.length;
-    text('#inv-qr-export', `Save all QR labels (${records.length})`);
+    root.querySelector('#inv-qr-export').disabled = !active.length;
+    text('#inv-qr-export', `Save all QR labels (${active.length})`);
     root.querySelector('#inv-table').setAttribute('aria-pressed', String(view === 'table'));
     root.querySelector('#inv-grid').setAttribute('aria-pressed', String(view === 'grid'));
     const error = root.querySelector('#inv-sync-error');
@@ -814,7 +865,7 @@ function createInventoryView(root, h) {
 
     const mode = shown.length ? view : scopedRecords.length ? 'filtered-empty' : 'empty';
     if (mode !== resultMode) {
-      if (mode === 'table') results.innerHTML = '<div class="table-scroll"><table class="inv-table"><thead><tr><th scope="col">EQUIPMENT</th><th scope="col">STATUS / CONDITION</th><th scope="col">RENTAL RATE</th><th scope="col" class="inv-actions-cell">ACTIONS</th></tr></thead><tbody></tbody></table></div>';
+      if (mode === 'table') results.innerHTML = '<div class="table-scroll"><table class="inv-table"><thead><tr><th scope="col">EQUIPMENT</th><th scope="col">STOCK</th><th scope="col">STATUS</th><th scope="col">CONDITION</th><th scope="col">RENTAL RATE</th><th scope="col" class="inv-actions-cell">ACTIONS</th></tr></thead><tbody></tbody></table></div>';
       else if (mode === 'grid') results.innerHTML = '<div class="inv-card-grid"></div>';
       else results.innerHTML = `<div class="inv-empty"><span>${icon('box')}</span><h3>${scopedRecords.length ? 'No equipment matches this view' : scope === 'archived' ? 'Your archive is empty' : 'Your collection starts here'}</h3><p>${scopedRecords.length ? 'Try another category, status, or search.' : scope === 'archived' ? 'Archived equipment will appear here. You can restore it or permanently delete it.' : 'Add your first equipment with its rate and details.'}</p><button type="button" class="secondary" id="inv-empty-action">${scopedRecords.length ? 'Reset filters' : scope === 'archived' ? 'View equipment' : '＋ Add equipment'}</button></div>`;
       resultMode = mode;

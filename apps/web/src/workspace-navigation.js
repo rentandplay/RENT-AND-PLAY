@@ -1,15 +1,19 @@
 export const pageRoutes = Object.freeze({ Dashboard: '/', Inventory: '/equipment', Customers: '/customers', 'Rates & Fees': '/rates', Rentals: '/rentals', Returns: '/returns', 'Transaction History': '/transactions', Maintenance: '/maintenance', 'ESP32 terminal': '/verification', Reports: '/reports', Settings: '/settings', Profile: '/profile' });
 export const routePages = Object.fromEntries(Object.entries(pageRoutes).map(([page, route]) => [route, page]));
-const reportSectionRoutes = Object.freeze({ '/reports': 'rental', '/reports/equipment': 'equipment', '/reports/operations': 'service', '/reports/forecast': 'forecast', '/reports/recommendations': 'recommendations', '/reports/audit': 'audit' });
-const reportSectionPaths = Object.fromEntries(Object.entries(reportSectionRoutes).map(([route, section]) => [section, route]));
+const reportSectionRoutes = Object.freeze({ '/reports': 'performance', '/reports/equipment': 'performance', '/reports/operations': 'performance', '/reports/forecast': 'forecast', '/reports/recommendations': 'recommendations', '/reports/audit': 'performance' });
+const reportSectionPaths = Object.freeze({ performance: '/reports', forecast: '/reports/forecast', recommendations: '/reports/recommendations' });
+
+export function normalizeReportSection(section) {
+  return ['forecast', 'recommendations'].includes(section) ? section : 'performance';
+}
 
 export function reportSectionForPath(pathname) {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
-  return reportSectionRoutes[normalized] || 'rental';
+  return reportSectionRoutes[normalized] || 'performance';
 }
 
 export function reportPathForSection(section) {
-  return reportSectionPaths[section] || pageRoutes.Reports;
+  return reportSectionPaths[normalizeReportSection(section)];
 }
 
 export function pageForPath(pathname) {

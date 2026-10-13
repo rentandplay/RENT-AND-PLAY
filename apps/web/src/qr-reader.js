@@ -47,6 +47,7 @@ export function bindQrReaders(form, modal, { onCapture } = {}) {
       const label = document.createElement('span'); label.className = 'qr-scanner-label'; label.textContent = 'Center the QR code in the frame';
       frame.append(video, target, label); output.after(frame); await video.play();
       output.textContent = 'Scanning for QR. Keep the code steady inside the frame.'; output.classList.add('is-scanning');
+      requestAnimationFrame(() => frame.scrollIntoView({ block: 'nearest' }));
       const track = stream.getVideoTracks()[0], capabilities = track?.getCapabilities?.();
       if (capabilities?.focusMode?.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
       if (attempt !== generation) return;

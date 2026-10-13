@@ -5,6 +5,9 @@ import { asDate, docData } from './firebase.mjs';
 import { frozenQuote, rentalsForItem, validateInspection, validatePenalty, finalCharges } from './transactions.mjs';
 import { queueRentalNotification } from './notifications.mjs';
 import { validatePaymentProof } from './payment-proof.mjs';
+import { allocateRecordCodes } from './record-codes.mjs';
+import { healthyUnit, unitHasMaintenance } from './maintenance-state.mjs';
+import { returnMaintenanceRecord } from './maintenance.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const details = input => { if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Rental details are required.'); return input; };
@@ -23,9 +26,11 @@ const optionalText = (value, label, max = 1000) => { if (value == null) return '
 const money = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 9999999999.99 && Math.abs(value * 100 - Math.round(value * 100)) < .0001;
 const round = value => Math.round(value * 100) / 100;
 const state = rental => String(rental.status || '').toUpperCase();
+export const MOBILE_RENTAL_TERMS_VERSION = '2026-10-13-rental-v1';
 export const openRentalStatuses = ['PENDING_ADMIN_APPROVAL', 'PENDING_ESP32_RENT', 'PENDING_VERIFICATION', 'APPROVED', 'ACTIVE', 'RETURN_PENDING_INSPECTION'];
 const pendingStatuses = ['PENDING_ADMIN_APPROVAL', 'PENDING_ESP32_RENT', 'APPROVED'];
 const open = rental => openRentalStatuses.includes(state(rental));
+const rentableUnit = item => item?.is_active !== false && String(item?.status || '').toUpperCase() === 'AVAILABLE' && !item?.reserved_rental_id && !item?.current_rental_id && healthyUnit(item);
 const holdElapsed = (rental, now) => pendingStatuses.includes(state(rental)) && asDate(rental.hold_expires_at) && asDate(rental.hold_expires_at) <= now;
 const actorId = actor => String(actor.id || actor);
 const audit = (tx, db, actor, action, id, now, extra = {}) => tx.create(db.collection('audit_logs').doc(), { actor_type: 'USER', user_id: actorId(actor), action, entity_type: 'RENTAL', entity_id: id, rental_id: id, created_at: now, ...extra });
@@ -62,7 +67,7 @@ function collectPayment(rental, input, requirePayment = false) {
 function transactionScanCheck(input, rental) {
   const { manual } = manualLookup(input);
   const code = requiredText(input.transactionCode, 'Customer transaction QR', 256);
-  if (!(code === rental.booking_qr_token || manual && [rental.id, rental.rental_code].includes(code))) fail(409, 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.');
+  if (!(code === rental.booking_qr_token || manual && [rental.id, rental.rental_code, rental.legacy_rental_code].filter(Boolean).includes(code))) fail(409, 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.');
 }
 
 function manualLookup(input) {
@@ -75,7 +80,7 @@ function scanCheck(input, item, rental = null) {
   if (rental) transactionScanCheck(input, rental);
   const { manual, reason } = manualLookup(input);
   const inventory = requiredText(input.inventoryCode, 'Inventory QR or item code', 256);
-  if (!(inventory === item.qr_token || manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(inventory))) fail(409, `Equipment mismatch. This rental request requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan the QR sticker on that exact unit.`);
+  if (!(inventory === item.qr_token || manual && [item.id, item.item_code, item.qrCode, item.legacy_item_code].filter(Boolean).includes(inventory))) fail(409, `Equipment mismatch. This rental request requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan the QR sticker on that exact unit.`);
   return { verification_method: manual ? 'MANUAL' : 'QR', manual_reason: reason || null };
 }
 
@@ -112,9 +117,31 @@ function closeHold(tx, db, rentalDoc, itemDoc, status, reason, now, actor) {
   return { id: rental.id, ...rental, ...changes };
 }
 
+async function selectRentableUnit(tx,db,itemId,stockGroupId=null) {
+  let docs=[];
+  if(stockGroupId){
+    const group=await tx.get(db.collection('items').where('stock_group_id','==',stockGroupId));
+    docs=group.docs;
+    if(!docs.length){const legacy=await tx.get(record(db,'items',itemId));if(legacy.exists)docs=[legacy];}
+    docs=docs.filter(doc=>String(doc.data().stock_group_id||doc.id)===stockGroupId);
+  }else{
+    const exact=await tx.get(record(db,'items',itemId));
+    if(exact.exists)docs=[exact];
+  }
+  docs.sort((a,b)=>(a.id===itemId?-1:b.id===itemId?1:a.id.localeCompare(b.id)));
+  for(const doc of docs){
+    const item=docData(doc);
+    if(!rentableUnit(item))continue;
+    if(await unitHasMaintenance(tx,db,doc.id))continue;
+    const related=await rentalsForItem(tx,db,doc.id);
+    if(!rows(related).some(open))return {doc,item,related};
+  }
+  return null;
+}
+
 export async function createBooking(db, actor, input, now = new Date(), { staff = false } = {}) {
   details(input);
-  const itemId = idValue(input.itemId), customerId = staff ? idValue(input.customerId) : actorId(actor);
+  const requestedItemId = idValue(input.itemId), stockGroupId = input.stockGroupId == null || input.stockGroupId === '' ? null : idValue(input.stockGroupId), customerId = staff ? idValue(input.customerId) : actorId(actor);
   const key = operationKey(input.requestKey), requestSource = staff ? 'COUNTER_ADMIN' : 'MOBILE_APP';
   const rentalRef = record(db, 'rentals', `booking_${createHash('sha256').update(`${customerId}:${actorId(actor)}:${key}`).digest('hex').slice(0, 40)}`);
   const customerRef = record(db, 'customers', customerId);
@@ -130,23 +157,42 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
   }
   const proofRef = paymentProof ? record(db, 'rental_payment_proofs', rentalRef.id) : null;
   const result = await db.runTransaction(async tx => {
-    const [existing, itemDoc, customerDoc, related] = await Promise.all([tx.get(rentalRef), tx.get(record(db, 'items', itemId)), tx.get(record(db, 'customers', customerId)), rentalsForItem(tx, db, itemId)]);
+    const [existing, customerDoc, selected] = await Promise.all([
+      tx.get(rentalRef),tx.get(record(db,'customers',customerId)),selectRentableUnit(tx,db,requestedItemId,stockGroupId)
+    ]);
     if (existing.exists) {
       const saved = docData(existing);
-      if (saved.item_id !== itemId || saved.customer_id !== customerId || saved.delivery_location !== location || saved.payment_method !== paymentMethod || saved.booking_mode !== (input.mode || 'TIMED') || saved.fee_breakdown?.requested_minutes !== Number(input.durationMinutes) && saved.booking_mode === 'TIMED' || saved.resort_checkout_input !== (input.resortCheckoutAt || null)) fail(409, 'This operation key belongs to different rental details.');
+      if ((stockGroupId ? saved.stock_group_id !== stockGroupId : saved.item_id !== requestedItemId) || saved.customer_id !== customerId || saved.delivery_location !== location || saved.payment_method !== paymentMethod || saved.booking_mode !== (input.mode || 'TIMED') || saved.fee_breakdown?.requested_minutes !== Number(input.durationMinutes) && saved.booking_mode === 'TIMED' || saved.resort_checkout_input !== (input.resortCheckoutAt || null)) fail(409, 'This operation key belongs to different rental details.');
       return { rental: saved, duplicate: true };
     }
-    if (!itemDoc.exists) fail(404, 'Equipment not found.');
-    const item = docData(itemDoc);
-    if (item.is_active === false || item.status !== 'AVAILABLE' || item.reserved_rental_id || rows(related).some(open)) fail(409, 'This equipment already has an open rental or is unavailable.');
+    if (!selected) fail(409, 'This equipment is currently unavailable. Refresh the catalog to see the latest stock.');
+    const {doc:itemDoc,item}=selected,itemId=itemDoc.id;
     if (staff && !customerDoc.exists) fail(404, 'Choose an existing active customer.');
     if (customerDoc.exists && customerDoc.data().is_active === false) fail(403, 'The customer account is inactive.');
     const customer = customerDoc.exists ? customerDoc.data() : actor;
     const fee = await frozenQuote(tx, db, item, { ...input, mode: input.mode || 'TIMED' }, now);
-    if (input.expectedQuote && (input.expectedQuote.rentalFee !== fee.rental_fee || input.expectedQuote.billedMinutes !== fee.billed_minutes)) fail(409, 'The rates changed. Refresh the quote and review the new total.');
-    const rental = { rental_code: `R-${rentalRef.id.slice(-10).toUpperCase()}`, item_id: itemId, item_name: item.name, item_code: item.item_code || item.qrCode || '', customer_id: customerId, customer_name: customer.full_name || customer.name || customer.email || 'Customer', customer_email: customer.email || null, customer_phone: customer.phone || null,
+    if (input.expectedQuote && (input.expectedQuote.rentalFee !== fee.rental_fee || input.expectedQuote.billedMinutes !== fee.billed_minutes || input.expectedQuote.overtimeRate !== undefined && input.expectedQuote.overtimeRate !== fee.overtime_rate)) fail(409, 'The rates changed. Refresh the quote and review the new total and late fee.');
+    const acceptedTerms = !staff && input.acceptedRentalTerms === true && input.rentalTermsVersion === MOBILE_RENTAL_TERMS_VERSION
+      ? {
+          version: MOBILE_RENTAL_TERMS_VERSION,
+          accepted_at: now,
+          accepted_by: customerId,
+          item_id: itemId,
+          item_name: item.name,
+          requested_minutes: fee.requested_minutes,
+          billed_minutes: fee.billed_minutes,
+          rental_fee: fee.rental_fee,
+          late_fee_rate: fee.overtime_rate,
+          late_fee_unit_minutes: fee.overtime_unit_minutes,
+          estimated_due_at: fee.due_at,
+          delivery_location: location,
+          payment_method: paymentMethod
+        }
+      : null;
+    const [rentalCode] = await allocateRecordCodes(tx, db, ['rentals'], now);
+    const rental = { rental_code: rentalCode, item_id: itemId, ...(stockGroupId?{stock_group_id:stockGroupId}:{}), item_name: item.name, item_code: item.item_code || item.qrCode || '', customer_id: customerId, customer_name: customer.full_name || customer.name || customer.email || 'Customer', customer_email: customer.email || null, customer_phone: customer.phone || null,
       status: staff ? 'APPROVED' : 'PENDING_ADMIN_APPROVAL', booking_mode: input.mode || 'TIMED', resort_checkout_input: input.resortCheckoutAt || null, booking_qr_token: `rp-rental-${randomBytes(24).toString('hex')}`, hold_expires_at: new Date(now.getTime() + ttl(staff ? 'RENTAL_PICKUP_HOLD_SECONDS' : 'RENTAL_REQUEST_HOLD_SECONDS', staff ? 1800 : 900)),
-      rental_fee: fee.rental_fee, fee_breakdown: fee, estimated_due_at: fee.due_at, start_at: null, due_at: null, confirmed_rental_at: null, confirmed_return_at: null, received_at: null, delivery_location: location, payment_method: paymentMethod, payment_confirmed_by_admin: false, payment_proof_status: paymentProof ? 'PENDING_REVIEW' : 'NOT_REQUIRED', payment_proof_reference: paymentProof?.reference || null, payment_proof_note: null, payment_proof_revision: 0, rental_paid_amount: 0, rental_refunded_amount: 0, delivery_status: 'NOT_PREPARED', delivery_preparation: null, request_source: requestSource, release_condition: null, return_condition: null, created_at: now, updated_at: now, created_by: actorId(actor), ...(staff ? { admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_at: now } } : {}) };
+      rental_fee: fee.rental_fee, fee_breakdown: fee, estimated_due_at: fee.due_at, start_at: null, due_at: null, confirmed_rental_at: null, confirmed_return_at: null, received_at: null, delivery_location: location, payment_method: paymentMethod, payment_confirmed_by_admin: false, payment_proof_status: paymentProof ? 'PENDING_REVIEW' : 'NOT_REQUIRED', payment_proof_reference: paymentProof?.reference || null, payment_proof_note: null, payment_proof_revision: 0, rental_paid_amount: 0, rental_refunded_amount: 0, delivery_status: 'NOT_PREPARED', delivery_preparation: null, request_source: requestSource, release_condition: null, return_condition: null, created_at: now, updated_at: now, created_by: actorId(actor), ...(acceptedTerms ? { rental_terms_acceptance: acceptedTerms } : {}), ...(staff ? { admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_at: now } } : {}) };
     Object.assign(rental, paymentSummary(rental));
     if (!customerDoc.exists) tx.create(record(db, 'customers', customerId), { full_name: rental.customer_name, customer_code: generatedCustomerCode, email: rental.customer_email, phone: rental.customer_phone, auth_uid: customerId, is_active: true, created_at: now, updated_at: now });
     tx.create(rentalRef, rental);
@@ -280,7 +326,7 @@ export async function prepareRentalDelivery(db, actor, id, input, now = new Date
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
     const item = docData(itemDoc);
     if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== rentalId || rows(related).some(row => row.id !== rentalId && open(row))) fail(409, 'The assigned equipment is no longer reserved for this rental request.');
-    if (!(code === item.qr_token || lookup.manual && [item.id, item.item_code, item.qrCode].filter(Boolean).includes(code))) fail(409, `Equipment mismatch. This rental requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan that unit’s printed QR at the shop.`);
+    if (!(code === item.qr_token || lookup.manual && [item.id, item.item_code, item.qrCode, item.legacy_item_code].filter(Boolean).includes(code))) fail(409, `Equipment mismatch. This rental requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan that unit’s printed QR at the shop.`);
     if (rental.delivery_status === 'PREPARED' && rental.delivery_preparation?.item_id === itemId) {
       return { rental, item: { id: itemId, name: item.name, item_code: item.item_code || item.qrCode || '' }, duplicate: true };
     }
@@ -312,7 +358,7 @@ export async function verifyReleaseCodes(db, actor, id, input, now = new Date())
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
     const item = docData(itemDoc);
     if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== id || rows(related).some(row => row.id !== id && open(row))) fail(409, 'The assigned equipment is no longer reserved for handoff. Refresh this rental request.');
-    return { booking_verified: true, inventory_verified: true, delivery_prepared: true, rental: { id: rental.id, status: rental.status, rental_code: rental.rental_code, item_id: itemId, customer_id: rental.customer_id || rental.customerId }, item: { id: item.id, name: item.name, item_code: item.item_code || item.qrCode || '' } };
+    return { rental_verified: true, booking_verified: true, inventory_verified: true, delivery_prepared: true, rental: { id: rental.id, status: rental.status, rental_code: rental.rental_code, item_id: itemId, customer_id: rental.customer_id || rental.customerId }, item: { id: item.id, name: item.name, item_code: item.item_code || item.qrCode || '' } };
   }));
 }
 
@@ -387,9 +433,11 @@ export async function completeRentalReturn(db, actor, id, input, now = new Date(
     if (penalty.penalty_amount === null) fail(400, 'Enter a penalty amount, including 0 when none applies.');
     const fee = { ...finalCharges({ ...rental, rental_fee: rental.rental_fee ?? rental.rateFee, deposit_amount: rental.deposit_amount ?? rental.deposit, due_at: rental.due_at ?? rental.dueDate }, { actual_return_at: asDate(rental.received_at), ...penalty }), finalized_at: now };
     if (fee.final_rental_charges === null && Object.hasOwn(rental, 'rental_paid_amount')) fail(409, 'The original rental rate is incomplete. Review its pricing snapshot.');
+    const preview = validateInspection(input.inspection, actor, 'RETURN', now);
+    const [maintenanceCode] = preview.result === 'UNDER_MAINTENANCE' ? await allocateRecordCodes(tx, db, ['maintenance_records'], now) : [];
     const condition = inspectionRecord(tx, db, actor, id, itemId, input.inspection, 'RETURN', now);
     const maintenanceRef = condition.result === 'UNDER_MAINTENANCE' ? db.collection('maintenance_records').doc() : null;
-    if (maintenanceRef) tx.create(maintenanceRef, { item_id: itemId, rental_id: id, condition_record_id: condition.id, status: 'IN_PROGRESS', reason: condition.condition, inspection_notes: condition.notes, started_at: now, completed_at: null, created_by: actorId(actor) });
+    if (maintenanceRef) tx.create(maintenanceRef, returnMaintenanceRecord(docData(itemDoc), id, condition, actor, maintenanceCode, now));
     const changes = { status: 'COMPLETED', return_operation_key: key, confirmed_return_at: now, confirmed_return_by: actorId(actor), returned_at: rental.received_at, returnedDate: rental.received_at, return_condition: condition, return_condition_record_id: condition.id, maintenance_record_id: maintenanceRef?.id || null, fee_breakdown: fee, latest_return_request_status: 'CONFIRMED', mobile_return_request: { ...rental.mobile_return_request, status: 'APPROVED', reviewed_at: now, reviewed_by: actorId(actor) }, updated_at: now };
     Object.assign(changes, paymentSummary(rental, changes));
     tx.update(rentalDoc.ref, changes); tx.update(itemDoc.ref, { status: condition.result, condition_status: condition.condition, reserved_rental_id: null, current_rental_id: null, updated_at: now });
@@ -463,10 +511,10 @@ export async function rentalTicket(db, actor, id, now = new Date()) {
 
 export async function lookupRental(db, input) {
   details(input);
-  const code = requiredText(input.code, 'QR or lookup code', 256), kind = input.kind || 'BOOKING';
+  const code = requiredText(input.code, 'QR or lookup code', 256), kind = input.kind || 'RENTAL';
   let rental;
-  if (kind === 'BOOKING') {
-    const fields = ['booking_qr_token', 'rental_code'];
+  if (kind === 'RENTAL' || kind === 'BOOKING') {
+    const fields = ['booking_qr_token', 'rental_code', 'legacy_rental_code'];
     const matches = (await Promise.all(fields.map(field => db.collection('rentals').where(field, '==', code).get()))).flatMap(snap => rows(snap));
     if (/^[A-Za-z0-9_-]{1,128}$/.test(code)) { const doc = await record(db, 'rentals', code).get(); if (doc.exists) matches.push(docData(doc)); }
     const unique = [...new Map(matches.map(row => [row.id, row])).values()];
@@ -484,7 +532,7 @@ export async function lookupRental(db, input) {
 }
 
 async function lookupInventory(db, code) {
-  const matches = (await Promise.all(['qr_token', 'item_code', 'qrCode'].map(field => db.collection('items').where(field, '==', code).get()))).flatMap(snap => rows(snap));
+  const matches = (await Promise.all(['qr_token', 'item_code', 'qrCode', 'legacy_item_code'].map(field => db.collection('items').where(field, '==', code).get()))).flatMap(snap => rows(snap));
   if (/^[A-Za-z0-9_-]{1,128}$/.test(code)) { const doc = await record(db, 'items', code).get(); if (doc.exists) matches.push(docData(doc)); }
   const unique = [...new Map(matches.map(row => [row.id, row])).values()];
   if (unique.length !== 1) fail(404, 'No unique inventory unit matches that QR or item code.');
@@ -503,8 +551,9 @@ export async function changeAssignedUnit(db, actor, id, input, now = new Date())
     if (oldId === target.id) return { rental, duplicate: true };
     if (!oldDoc.exists || oldDoc.data().reserved_rental_id !== id || !newDoc.exists) fail(409, 'Refresh the assigned equipment before changing units.');
     const before = oldDoc.data(), after = newDoc.data();
+    const underMaintenance = await unitHasMaintenance(tx, db, target.id);
     const sameProduct = before.pricing_product_id ? after.pricing_product_id === before.pricing_product_id : after.name === before.name && after.category_id === before.category_id;
-    if (!sameProduct || after.is_active === false || after.status !== 'AVAILABLE' || after.reserved_rental_id || rows(related).some(open)) fail(409, 'Choose an available unit of the same equipment product.');
+    if (!sameProduct || after.is_active === false || after.status !== 'AVAILABLE' || after.reserved_rental_id || !healthyUnit(after) || underMaintenance || rows(related).some(open)) fail(409, 'Choose an available unit of the same equipment product.');
     const quote = await frozenQuote(tx, db, docData(newDoc), { durationMinutes: rental.fee_breakdown?.requested_minutes, mode: rental.booking_mode || 'TIMED', ...(rental.resort_checkout_input ? { resortCheckoutAt: rental.resort_checkout_input } : {}) }, now);
     if (quote.rental_fee !== rental.rental_fee || quote.overtime_rate !== rental.fee_breakdown?.overtime_rate) fail(409, 'This unit has different pricing. Cancel and prepare a new rental request so the customer can review the price.');
     const changes = { item_id: target.id, item_name: after.name, item_code: after.item_code || after.qrCode || '', delivery_status: 'NOT_PREPARED', delivery_preparation: null, updated_at: now };

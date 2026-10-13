@@ -22,7 +22,7 @@ function countedDatabase(initial = {}) {
 }
 
 test('display models share collection reads, and saved equipment invalidates all affected models', async () => {
-  const fixture = countedDatabase({ item_categories: { sports: { name: 'Sports equipment' } }, users: { admin: { full_name: 'Admin', role: 'ADMIN', is_active: true } } });
+  const fixture = countedDatabase({ item_categories: { sports: { name: 'Sports equipment', category_code: 'CAT-001' } }, users: { admin: { full_name: 'Admin', account_code: 'USER-001', role: 'ADMIN', is_active: true } } });
   const services = createFirebaseServices({ db: fixture.db });
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
   assert.equal(fixture.reads.length, 17); // Shared displays, bounded inventory queries and two next-deadline reads.

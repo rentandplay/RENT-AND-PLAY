@@ -63,7 +63,7 @@ export async function listNotifications(db, actor, { before, since } = {}) {
   const key = inboxKey(actor), collection = messages(db, key);
   const header = await db.collection('notification_inboxes').doc(key).get();
   const headerData = header.exists ? header.data() : {};
-  const revision = hash(`${key}:${headerData.revision || 'empty'}:${headerData[readRevisionField(actor)] || 'unread'}`).slice(0, 32);
+  const revision = hash(`record-references-v1:${key}:${headerData.revision || 'empty'}:${headerData[readRevisionField(actor)] || 'unread'}`).slice(0, 32);
   if (!before && since === revision) return { unchanged: true, revision };
   let query = collection.orderBy('created_at', 'desc');
   if (before) {

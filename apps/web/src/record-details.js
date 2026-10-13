@@ -1,3 +1,4 @@
+import { recordCode, relatedCode } from './record-codes.js';
 import { bindRecordLinks, recordAttrs } from './record-links.js';
 
 export function createRecordDetails(h) {
@@ -21,7 +22,7 @@ export function createRecordDetails(h) {
     const row = find('rates', id);
     if (!row) return missing();
     show('Equipment rate details', row.item_name || 'Unknown equipment', row.item_code || '', [
-      ['Rate ID', row.id], ['Rate basis', String(row.rate_type || '').replaceAll('_', ' ')],
+      ['Rate code', recordCode(row, 'rate')], ['Rate basis', String(row.rate_type || '').replaceAll('_', ' ')],
       ['Rental rate', cash(row.rental_rate)],
       ['Late penalty rate', cash(row.late_penalty_rate)], ['Status', row.is_active === false ? 'Inactive' : 'Active'],
       ['Effective from', formatDate(row.effective_from)], ['Effective until', row.effective_to ? formatDate(row.effective_to) : row.is_active === false ? 'Not recorded' : 'Current rate']
@@ -29,12 +30,13 @@ export function createRecordDetails(h) {
   }
 
   function maintenance(id) {
+    if (h.maintenanceDetails) return h.maintenanceDetails(id);
     const row = find('maintenance', id);
     if (!row) return missing();
     show('Maintenance details', row.item_name || 'Unknown equipment', row.item_code || '', [
-      ['Maintenance ID', row.id], ['Status', String(row.status || '').replaceAll('_', ' ')],
+      ['Maintenance code', recordCode(row, 'maintenance')], ['Status', String(row.status || '').replaceAll('_', ' ')],
       ['Reason', row.reason], ['Return inspection notes', row.inspection_notes], ['Repair / service notes', row.details],
-      ['Started', formatDate(row.started_at)], ['Completed', formatDate(row.completed_at)], ['Linked rental ID', row.rental_id]
+      ['Started', formatDate(row.started_at)], ['Completed', formatDate(row.completed_at)], ['Linked rental', relatedCode(getModel(), 'transactions', row.rental_id)]
     ], equipmentAction(row.item_id) + rentalAction(row.rental_id));
   }
 
@@ -42,7 +44,7 @@ export function createRecordDetails(h) {
     const row = find('users', id);
     if (!row) return missing();
     show('Account details', row.full_name || 'Unnamed account', row.email || '', [
-      ['Account ID', row.id], ['Full name', row.full_name], ['Email', row.email], ['Role', row.role],
+      ['Account code', recordCode(row, 'account')], ['Full name', row.full_name], ['Email', row.email], ['Role', row.role],
       ['Status', row.is_active === false ? 'Inactive' : 'Active'], ['Created', formatDate(row.created_at)],
       ['Last login', formatDate(row.last_login_at)]
     ]);
@@ -51,10 +53,10 @@ export function createRecordDetails(h) {
   function audit(id) {
     const row = find('auditLogs', id);
     if (!row) return missing();
-    const action = String(row.action || 'Unknown action').replaceAll('_', ' ');
+    const action = String(row.action || 'Unknown action').replaceAll('BOOKED', 'REQUESTED').replaceAll('BOOKING', 'RENTAL').replaceAll('_', ' ');
     show('Audit record details', action, row.entity_type || '', [
-      ['Audit ID', row.id], ['When', formatDate(row.created_at)], ['Actor', row.actor_name],
-      ['Actor type', row.actor_type], ['Action', action], ['Record', row.entity_label], ['Record type', row.entity_type], ['Record ID', row.entity_id]
+      ['Audit code', recordCode(row, 'audit')], ['When', formatDate(row.created_at)], ['Actor', row.actor_name],
+      ['Actor type', row.actor_type], ['Action', action], ['Record', row.entity_label], ['Record type', row.entity_type]
     ]);
   }
 

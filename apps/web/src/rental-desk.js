@@ -277,8 +277,8 @@ export function createRentalDesk(h) {
     submit(form,'Complete this return?','The unit becomes available only if the inspection clears it. Payment balances remain separate.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/complete-return`,{method:'POST',body:JSON.stringify({requestKey:key,penaltyAmount:Number(fields.penaltyAmount),penaltyReason:fields.penaltyReason,inspection:{condition:fields.condition,result:fields.result,notes:fields.inspectionNotes,accessoriesChecked:fields.accessoriesChecked==='on',photos:photos()}})}),'Return confirmed. Review any outstanding rental balance.',updated=>h.transactionDetails?.({...row,...updated})));
   }
   function chooseReturn() { lookupForm('INVENTORY'); }
-  function lookupForm(kind = 'BOOKING') {
-    showModal(kind === 'BOOKING' ? 'Find rental' : 'Find returned equipment',`<form class="admin-form rental-desk-form">${scanField('code',kind === 'BOOKING' ? 'Customer rental QR or rental code' : 'Inventory QR or item code')}<p data-camera-status role="status"></p>${actions('Find record')}</form>`);
+  function lookupForm(kind = 'RENTAL') {
+    showModal(kind === 'RENTAL' ? 'Find rental' : 'Find returned equipment',`<form class="admin-form rental-desk-form">${scanField('code',kind === 'RENTAL' ? 'Customer rental QR or rental code' : 'Inventory QR or item code')}<p data-camera-status role="status"></p>${actions('Find record')}</form>`);
     const form = modal.querySelector('form'); bindQrReaders(form, modal);
     form.querySelector('[data-close]').onclick = () => modal.close();
     form.onsubmit = async event => {
@@ -291,7 +291,7 @@ export function createRentalDesk(h) {
         const code = form.elements.code.value.trim();
         const response = await api('/rentals/lookup', { method: 'POST', body: JSON.stringify({ kind, code }) });
         if (!form.isConnected || !modal.open) return;
-        (kind === 'BOOKING' ? scannedBookings : scannedInventory).set(response.rental.id, code);
+        (kind === 'RENTAL' ? scannedBookings : scannedInventory).set(response.rental.id, code);
         modal.close(); try { await refresh(); } catch {} redraw(); h.transactionDetails?.(response.rental);
       } catch (error) { if (form.isConnected) form.querySelector('.form-error').textContent = error.message; }
       finally { button.disabled = false; button.textContent = 'Find record'; }
@@ -313,7 +313,7 @@ export function createRentalDesk(h) {
     root.querySelectorAll('[data-rental-assignment]').forEach(button=>button.onclick=()=>assignmentForm(getModel().transactions.find(row=>row.id===button.dataset.rentalAssignment)));
     root.querySelectorAll('[data-rental-settlement]').forEach(button=>button.onclick=()=>settlementForm(getModel().transactions.find(row=>row.id===button.dataset.rentalSettlement)));
     root.querySelectorAll('[data-inspection-photo]').forEach(button=>button.onclick=()=>viewPhoto(button.dataset.inspectionPhoto));
-    root.querySelector('[data-find-booking]')?.addEventListener('click',()=>lookupForm('BOOKING'));
+    root.querySelector('[data-find-booking]')?.addEventListener('click',()=>lookupForm('RENTAL'));
   }
   return { bookingForm, reviewForm, prepareForm, releaseForm, receiveForm, completeReturnForm, chooseReturn, lookupForm, assignmentForm, settlementForm, bind };
 }

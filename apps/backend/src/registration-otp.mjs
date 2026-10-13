@@ -8,6 +8,7 @@ const SEND_COOLDOWN_MS = 30 * 1000;
 const SEND_WINDOW_MS = 15 * 60 * 1000;
 const SENDS_PER_WINDOW = 5;
 const MAX_CODE_ATTEMPTS = 5;
+export const RENTAL_TERMS_VERSION = '2026-10-13-v1';
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -182,6 +183,9 @@ export function createRegistrationOtpService({ db, auth, now = () => new Date() 
     const proof = typeof input?.verificationToken === 'string' ? input.verificationToken : '';
     const name = typeof input?.name === 'string' ? input.name.trim().replace(/\s+/g, ' ') : '';
     const phone = typeof input?.phone === 'string' ? input.phone.trim() : '';
+    if (input?.hasAcceptedTerms !== true || input?.termsVersion !== RENTAL_TERMS_VERSION) {
+      fail(400, 'Accept the current Terms & Conditions before creating your account.');
+    }
     if (!uid || email !== claimEmail) fail(403, 'The verified email must match your account.');
     if (!proof || proof.length > 128) fail(400, 'Verify your email before creating the account.');
     validationFailure(nameError(name, { max: 120 }));
@@ -221,7 +225,7 @@ export function createRegistrationOtpService({ db, auth, now = () => new Date() 
       const result = await completeProfile({
         ...claims,
         email_verified: true
-      }, { name, phone });
+      }, { name, phone, hasAcceptedTerms: true, termsVersion: RENTAL_TERMS_VERSION });
       await db.runTransaction(async tx => {
         const snapshot = await tx.get(ref);
         if (snapshot.exists && snapshot.data().proof_digest === digest && snapshot.data().completing_uid === uid) {
@@ -235,7 +239,12 @@ export function createRegistrationOtpService({ db, auth, now = () => new Date() 
       });
       return result;
     }
-    return completeProfile({ ...claims, email_verified: true }, { name, phone });
+    return completeProfile({ ...claims, email_verified: true }, {
+      name,
+      phone,
+      hasAcceptedTerms: true,
+      termsVersion: RENTAL_TERMS_VERSION
+    });
   }
 
   return { sendCode, verifyCode, completeRegistration };

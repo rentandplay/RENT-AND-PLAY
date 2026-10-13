@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { updateMaintenance } from '../src/maintenance.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { authenticateTerminal, createRentalRequest, createReturnRequest, createExpirySweep, expireVerificationRequests, finalCharges, publicTerminal, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending, validatePenalty } from '../src/transactions.mjs';
@@ -67,7 +68,9 @@ test('a damaged return links one maintenance record and keeps both snapshots aft
   assert.equal(record.rental_id, response.rental.id); assert.equal(record.condition_record_id, rental.return_condition_record_id); assert.equal(record.inspection_notes, 'Rear brake cable snapped.');
   const duplicate = await confirm(db, returned.request, actual);
   assert.equal(duplicate.duplicate, true); assert.equal(db.records('maintenance_records').length, 1); assert.equal(db.records('item_condition_records').length, 2);
-  await itemAction(db, actor.id, 'item-1', { action: 'complete-maintenance', version: localDateTime(db.data('items', 'item-1').updated_at), condition: 'GOOD', reason: 'Replaced brake cable and tested brakes.' });
+  await assert.rejects(itemAction(db, actor.id, 'item-1', { action: 'complete-maintenance', version: localDateTime(db.data('items', 'item-1').updated_at), condition: 'GOOD', reason: 'Replaced brake cable and tested brakes.' }), error => error.status === 409);
+  let ticket = { id: rental.maintenance_record_id, ...record };
+  for (const action of ['start-repair', 'send-inspection', 'complete']) ticket = (await updateMaintenance(db, actor, ticket.id, { action, revision: ticket.revision, note: 'Replaced brake cable and tested brakes.', condition: 'GOOD', checks: { functional: true, safe: true, complete: true } }, actual)).maintenance;
   assert.equal(db.data('items', 'item-1').status, 'AVAILABLE');
   assert.deepEqual(db.data('rentals', response.rental.id).return_condition, rental.return_condition); assert.equal(rental.release_condition.condition, 'GOOD'); assert.equal(rental.return_condition.condition, 'DAMAGED');
   assert.equal(db.data('maintenance_records', rental.maintenance_record_id).status, 'COMPLETED');

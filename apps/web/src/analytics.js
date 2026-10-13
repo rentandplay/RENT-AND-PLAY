@@ -70,12 +70,12 @@ function completeTrendBuckets(trend,groupBy,today) {
   });
 }
 
-function forecastAnalytics(trend,groupBy,range,today) {
-  const completed=completeTrendBuckets(trend,groupBy,today);
+function forecastAnalytics(trend,groupBy,range,today,coverageStart=null) {
+  const completed=completeTrendBuckets(trend,groupBy,today).filter(row=>!coverageStart||row.from>=coverageStart);
   const requirements={daily:28,weekly:8,monthly:8},horizons={daily:7,weekly:4,monthly:3};
   const requiredPeriods=requirements[groupBy]||28,horizon=horizons[groupBy]||7;
   const historyWindow=groupBy==='monthly'?completed.slice(-6):completed.slice(-requiredPeriods);
-  const base={available:false,groupBy,requiredPeriods,completedPeriods:completed.length,horizon,points:[],method:groupBy==='daily'?'Same-weekday average from up to 4 recent weeks':groupBy==='weekly'?'Average of the last 8 complete weeks':'Average of the last 6 complete months'};
+  const base={available:false,groupBy,requiredPeriods,completedPeriods:completed.length,trainingPeriods:historyWindow.length,history:historyWindow,coverageStart,horizon,points:[],method:groupBy==='daily'?'Same-weekday average from up to 4 recent weeks':groupBy==='weekly'?'Average of the last 8 complete weeks':'Average of the last 6 complete months'};
   if(completed.length<requiredPeriods)return {...base,reason:`Need ${requiredPeriods} complete ${groupBy} periods; found ${completed.length}.`};
   if(historyWindow.reduce((sum,row)=>sum+row.rentals,0)<4)return {...base,reason:'Need at least 4 confirmed rentals in the completed history window.'};
 
@@ -97,10 +97,11 @@ function forecastAnalytics(trend,groupBy,range,today) {
       const next=new Date(`${from.slice(0,7)}-01T00:00:00Z`);next.setUTCMonth(next.getUTCMonth()+1);next.setUTCDate(next.getUTCDate()-1);
       to=next.toISOString().slice(0,10);label=monthFormatter.format(new Date(`${from}T00:00:00Z`));
     }
-    points.push({from,to,label,rentals:average(samples.map(row=>row.rentals))??0,fees:average(samples.map(row=>row.fees))??0,samplePeriods:samples.length});
+    const spread=metric=>{const values=samples.map(row=>row[metric]),mean=average(values)??0,deviation=values.length>1?Math.sqrt(values.reduce((sum,value)=>sum+(value-mean)**2,0)/(values.length-1)):0;return {low:Math.max(0,mean-deviation),high:mean+deviation,deviation};};
+    points.push({from,to,label,rentals:average(samples.map(row=>row.rentals))??0,fees:average(samples.map(row=>row.fees))??0,rentalSpread:spread('rentals'),feeSpread:spread('fees'),samplePeriods:samples.length});
     from=shiftDate(to,1);
   }
-  return {...base,available:true,completedPeriods:historyWindow.length,points};
+  return {...base,available:true,points};
 }
 
 function buildRecommendations(performance,totals,range) {
@@ -118,7 +119,7 @@ function buildRecommendations(performance,totals,range) {
   const active=performance.filter(row=>row.known&&row.active&&row.status!=='UNDER_MAINTENANCE'&&row.observedHours>0);
   const topCount=Math.max(1,Math.ceil(active.length*.25));
   const highDemand=[...active].sort((a,b)=>b.rentals-a.rentals||b.fees-a.fees||a.name.localeCompare(b.name)).slice(0,topCount).filter(row=>row.rentals>=3);
-  for(const row of highDemand)add('Equipment',`Review capacity for ${row.name}`,'Check availability and booking pressure before deciding whether another unit is worthwhile.',`${row.rentals} confirmed rentals in the period; this item is in the top quarter of active equipment by rental count.`);
+  for(const row of highDemand)add('Equipment',`Review capacity for ${row.name}`,'Check availability and rental demand before deciding whether another unit is worthwhile.',`${row.rentals} confirmed rentals in the period; this item is in the top quarter of active equipment by rental count.`);
   if(range.days>=30&&totals.rentals>=5){
     const noDemand=active.filter(row=>row.rentals===0).slice(0,3);
     for(const row of noDemand)add('Equipment',`Review listing for ${row.name}`,'Check visibility, relevance, and rate fit; keep the item available while you review the context.',`No confirmed rentals in ${range.days} days while the item was active for ${row.observedHours.toFixed(0)} observed hours.`);
@@ -144,10 +145,10 @@ function collectionWindows(item,history,start,end) {
   const events=history.filter(row=>ms(row.changed_at)!==null).sort((a,b)=>ms(a.changed_at)-ms(b.changed_at));
   const previous=events.filter(row=>ms(row.changed_at)<=left).at(-1),next=events.find(row=>ms(row.changed_at)>left);
   if(item.is_active===false&&!previous&&!next?.old_status)return {windows:null,assumed:created===null};
-  let active=previous?previous.new_status!=='INACTIVE':next?.old_status?next.old_status!=='INACTIVE':item.is_active!==false;
+  let active=previous?!['INACTIVE','RETIRED'].includes(previous.new_status):next?.old_status?!['INACTIVE','RETIRED'].includes(next.old_status):item.is_active!==false;
   let cursor=left;const windows=[];
   for(const event of events.filter(row=>ms(row.changed_at)>left&&ms(row.changed_at)<end)){
-    const at=ms(event.changed_at);if(active)windows.push([cursor,at]);cursor=at;active=event.new_status!=='INACTIVE';
+    const at=ms(event.changed_at);if(active)windows.push([cursor,at]);cursor=at;active=!['INACTIVE','RETIRED'].includes(event.new_status);
   }
   if(active)windows.push([cursor,end]);
   return {windows,assumed:created===null};
@@ -160,7 +161,11 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const items=data.items||[],transactions=data.transactions||[],categories=data.categories||[],maintenance=data.maintenance||[];
   const itemMap=new Map(items.map(item=>[String(item.id),item])),rentalMap=new Map(transactions.map(row=>[String(row.id),row]));
   const categoryMap=new Map(categories.map(category=>[String(category.id),category.name]));
-  const allowed=id=>{const item=itemMap.get(String(id));return (!selection.itemId||String(id)===String(selection.itemId))&&(!selection.categoryId||String(item?.category_id)===String(selection.categoryId));};
+  const stockCatalog=new Map();
+  for(const item of items){const key=String(item.stock_group_id||item.id),current=stockCatalog.get(key);if(!current||current.is_active===false&&item.is_active!==false||(current.is_active!==false)===(item.is_active!==false)&&String(item.id)===key)stockCatalog.set(key,item);}
+  const categoryFor=id=>{const item=itemMap.get(String(id));return stockCatalog.get(String(item?.stock_group_id||id))?.category_id??item?.category_id;};
+  const selectedGroup=selection.itemId?String(itemMap.get(String(selection.itemId))?.stock_group_id||selection.itemId):'';
+  const allowed=id=>{const item=itemMap.get(String(id));return (!selection.itemId||String(id)===String(selection.itemId)||String(item?.stock_group_id||id)===selectedGroup)&&(!selection.categoryId||String(categoryFor(id))===String(selection.categoryId));};
   const selectedItems=items.filter(item=>allowed(item.id));
   const selectedTransactions=transactions.filter(row=>allowed(row.item_id));
   const settled=selectedTransactions.filter(row=>['ACTIVE','RETURN_PENDING_INSPECTION','COMPLETED'].includes(row.status));
@@ -178,7 +183,7 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const customerCounts=new Map();for(const row of confirmed)if(row.customer_id)customerCounts.set(String(row.customer_id),(customerCounts.get(String(row.customer_id))||0)+1);
   const repeatCustomers=[...customerCounts.values()].filter(count=>count>=2).length;
   const performanceMap=new Map(selectedItems.filter(item=>ms(item.created_at)===null||ms(item.created_at)<asOf).map(item=>[String(item.id),{
-    id:String(item.id),name:item.name,code:item.item_code||'',category:categoryMap.get(String(item.category_id))||'Uncategorized',
+    id:String(item.id),name:item.name,code:item.item_code||'',category:categoryMap.get(String(categoryFor(item.id)))||'Uncategorized',
     active:item.is_active!==false,status:item.status||'',known:true,rentals:0,fees:0,maintenanceCount:0,rentedHours:0,downtimeHours:0,observedHours:0,utilization:null
   }]));
   function itemRow(id,source={}){
@@ -189,7 +194,7 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const categoryTotals=new Map();
   for(const row of confirmed){
     const item=itemRow(row.item_id,row);item.rentals++;item.fees+=cents(row.rental_fee);
-    const key=String(itemMap.get(String(row.item_id))?.category_id||'unknown');
+    const key=String(categoryFor(row.item_id)||'unknown');
     const category=categoryTotals.get(key)||{id:key,name:categoryMap.get(key)||'Uncategorized',rentals:0,fees:0};
     category.rentals++;category.fees+=cents(row.rental_fee);categoryTotals.set(key,category);
   }
@@ -201,10 +206,10 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
     const key=String(row.item_id);itemRow(key,row);if(!rentalIntervals.has(key))rentalIntervals.set(key,[]);
     rentalIntervals.get(key).push([Math.max(start,left),Math.min(asOf,right)]);
   }
-  const maintenanceSelected=maintenance.filter(row=>allowed(row.item_id)&&['IN_PROGRESS','COMPLETED'].includes(row.status));
+  const maintenanceSelected=maintenance.filter(row=>allowed(row.item_id)&&['OPEN','IN_PROGRESS','COMPLETED','RETIRED'].includes(row.status));
   let maintenanceStarted=0;
   for(const row of maintenanceSelected){
-    const left=ms(row.started_at),right=row.status==='IN_PROGRESS'?asOf:ms(row.completed_at);
+    const left=ms(row.started_at),right=['OPEN','IN_PROGRESS'].includes(row.status)?asOf:ms(row.completed_at);
     if(within(row.started_at)){itemRow(row.item_id,row).maintenanceCount++;maintenanceStarted++;}
     if(left===null||right===null||right<left){invalidMaintenanceIntervals++;continue;}
     if(left>=asOf||right<=start)continue;
@@ -235,7 +240,8 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   for(const bucket of trend)bucket.fees/=100;
   const reserved=new Set(selectedTransactions.filter(row=>['PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','APPROVED'].includes(row.status)).map(row=>String(row.item_id)));
   const equipmentStatus={Available:0,Rented:0,Pending:0,Maintenance:0,Archived:0};
-  for(const item of selectedItems){if(item.is_active===false)equipmentStatus.Archived++;else if(item.status==='UNDER_MAINTENANCE')equipmentStatus.Maintenance++;else if(item.status==='RENTED')equipmentStatus.Rented++;else if(['RESERVED_PENDING','UNDER_INSPECTION'].includes(item.status)||reserved.has(String(item.id)))equipmentStatus.Pending++;else equipmentStatus.Available++;}
+  const repairs=new Set(maintenance.filter(row=>['OPEN','IN_PROGRESS'].includes(row.status)).map(row=>String(row.item_id)));
+  for(const item of selectedItems){const status=String(item.effective_status||item.status||'AVAILABLE').toUpperCase();if(item.is_active===false)equipmentStatus.Archived++;else if(status==='RENTED'||status==='UNDER_INSPECTION')equipmentStatus.Rented++;else if(status==='RESERVED_PENDING'||item.reserved_rental_id||reserved.has(String(item.id)))equipmentStatus.Pending++;else if(status==='UNDER_MAINTENANCE'||repairs.has(String(item.id)))equipmentStatus.Maintenance++;else equipmentStatus.Available++;}
   const terminalMap=new Map((data.terminals||[]).map(row=>[String(row.id),row])),terminalGroups=new Map(),verificationSamples=[];
   let invalidVerification=0,linkedConfirmationTimes=0;
   for(const request of data.verification||[]){
@@ -264,6 +270,7 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
     verificationSeconds:average(verificationSamples),verificationMedianSeconds:percentile(verificationSamples,.5),verificationP95Seconds:percentile(verificationSamples,.95),verificationCount:verificationSamples.length
   };
   const quality=[
+    {count:confirmed.filter(row=>row.rental_fee==null||!Number.isFinite(Number(row.rental_fee))||Number(row.rental_fee)<0).length,text:'confirmed rentals have no valid recorded fee; fee totals include only valid recorded amounts.'},
     {count:invalidRentalIntervals,text:'rental records have missing or invalid start/return times and cannot contribute rental hours.'},
     {count:returns.length-onTimeSamples.length,text:'returns have incomplete or inconsistent dates and are excluded from the on-time rate.'},
     {count:invalidMaintenanceIntervals,text:'maintenance records have incomplete or inconsistent dates and cannot contribute downtime.'},
@@ -271,7 +278,8 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
     {count:assumedCollectionStart,text:'items have no added date; their observed calendar time starts at the selected period start.'},
     {count:unknownCollectionTime,text:'items have insufficient collection history and are excluded from utilization.'}
   ].filter(row=>row.count>0);
-  const forecast=forecastAnalytics(trend,groupBy,range,manilaDateKey(now));
+  const evidenceDates=[...selectedItems.map(item=>manilaDateKey(item.created_at)),...settled.map(row=>manilaDateKey(row.confirmed_rental_at))].filter(Boolean).sort();
+  const forecast=forecastAnalytics(trend,groupBy,range,manilaDateKey(now),evidenceDates[0]||null);
   const recommendations=buildRecommendations(performance,totals,range);
   return {range,groupBy,asOf:new Date(asOf).toISOString(),confirmed,returns,trend,equipment,leastRented,revenueEquipment,performance,categoryRevenue,equipmentStatus,maintenanceFrequency,maintenanceDowntime,terminalPerformance,linkedConfirmationTimes,quality,totals,forecast,recommendations};
 }
@@ -279,12 +287,12 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
 export function analyticsCsv(result,data,selection={}) {
   if(result.error)throw new Error(result.error);
   const t=result.totals,number=value=>value===null?'Not enough data':Math.round(value*10000)/10000;
-  const category=(data.categories||[]).find(row=>String(row.id)===String(selection.categoryId)),item=(data.items||[]).find(row=>String(row.id)===String(selection.itemId));
+  const category=(data.categories||[]).find(row=>String(row.id)===String(selection.categoryId)),item=result.groups?.find(row=>row.stockGroupId===String(selection.itemId)||row.id===String(selection.itemId))||(data.items||[]).find(row=>String(row.id)===String(selection.itemId));
   const forecastRows=result.forecast.available
-    ?[['Method',result.forecast.method],['Completed periods used',result.forecast.completedPeriods],['From','To','Label','Estimated rental fees (PHP)','Estimated rentals'],...result.forecast.points.map(row=>[row.from,row.to,row.label,row.fees,row.rentals])]
+    ?[['Method',result.forecast.method],['Scenario',result.forecast.scenario||'baseline'],['Training periods used',result.forecast.trainingPeriods],['Spread basis','One historical sample standard deviation; not a calibrated confidence interval'],['From','To','Label','Estimated rental fees (PHP)','Estimated rentals','Rental spread low','Rental spread high','Fee spread low','Fee spread high'],...result.forecast.points.map(row=>[row.from,row.to,row.label,row.fees,row.rentals,row.rentalSpread?.low,row.rentalSpread?.high,row.feeSpread?.low,row.feeSpread?.high])]
     :[['Status','Unavailable'],['Reason',result.forecast.reason],['Complete periods found',result.forecast.completedPeriods],['Complete periods required',result.forecast.requiredPeriods]];
   const recommendationRows=result.recommendations.length
-    ?result.recommendations.map(row=>[row.type,row.title,row.action,row.basis])
+    ?result.recommendations.map(row=>[row.type,row.priority||'monitor',row.title,row.action,row.basis,row.threshold||'',row.review||''])
     :[['No recommendation thresholds were met for the selected period.']];
   const rows=[
     ['Rent & Play analytics'],['Period',result.range.from,result.range.to],['Grouping',result.groupBy],['Measured through (UTC)',result.asOf],
@@ -303,11 +311,12 @@ export function analyticsCsv(result,data,selection={}) {
     ['Maintenance downtime (item-hours)',number(t.downtimeHours),'Merged time per item within period'],
     ['Average terminal verification (seconds)',number(t.verificationSeconds),`${t.verificationCount} valid confirmations in period`],
     ['Median terminal verification (seconds)',number(t.verificationMedianSeconds)],['P95 terminal verification (seconds)',number(t.verificationP95Seconds)],[],
+    ...(result.comparison?[['PREVIOUS MATCHED PERIOD'],['From',result.comparison.from],['To',result.comparison.to],['Cutoff (UTC)',result.comparison.cutoff],['Metric','Current','Previous','Percent change'],...['fees','rentals','averageFee','utilization','repeatCustomerRate'].map(key=>[key,result.comparison[key].current,result.comparison[key].previous,number(result.comparison[key].percent===null?null:result.comparison[key].percent*100)]),[]]:[]),
     ['FORECAST'],...forecastRows,[],
-    ['PRESCRIPTIVE RECOMMENDATIONS'],['Type','Recommendation','Suggested action','Evidence'],...recommendationRows,[],
+    ['PRESCRIPTIVE RECOMMENDATIONS'],['Focus area','Priority','Recommendation','Suggested action','Evidence','Trigger rule','Review timing'],...recommendationRows,[],
     ['TREND'],['From','To','Label','Rental fees (PHP)','Rentals'],...result.trend.map(row=>[row.from,row.to,row.label,row.fees,row.rentals]),[],
-    ['EQUIPMENT PERFORMANCE'],['Equipment','Item code','Category','Active now','Rentals','Rental fees (PHP)','Rented hours','Observed hours','Utilization (%)','Maintenance started','Downtime hours'],
-    ...result.performance.map(row=>[row.name,row.code,row.category,row.active?'Yes':'No',row.rentals,row.fees,number(row.rentedHours),number(row.observedHours),number(row.utilization===null?null:row.utilization*100),row.maintenanceCount,number(row.downtimeHours)]),[],
+    ['EQUIPMENT PERFORMANCE'],['Equipment','Unit codes','Category','Active now','Active units','Rentals','Rental fees (PHP)','Rented hours','Observed hours','Utilization (%)','Maintenance started','Downtime hours'],
+    ...(result.groups||result.performance).map(row=>[row.name,row.unitCodes?.join(' / ')||row.code,row.category,row.active?'Yes':'No',row.unitCount??(row.active?1:0),row.rentals,row.fees,number(row.rentedHours),number(row.observedHours),number(row.utilization===null?null:row.utilization*100),row.maintenanceCount,number(row.downtimeHours)]),[],
     ['CATEGORY FEES'],['Category','Rental fees (PHP)','Rentals'],...result.categoryRevenue.map(row=>[row.name,row.fees,row.rentals]),[],
     ['TERMINAL VERIFICATION'],['Terminal','Code','Confirmations','Average seconds','Median seconds','P95 seconds'],...result.terminalPerformance.map(row=>[row.name,row.code,row.count,number(row.averageSeconds),number(row.medianSeconds),number(row.p95Seconds)]),[],
     ['DATA COVERAGE'],...result.quality.map(row=>[row.count,row.text]),['Linked confirmation timestamps',result.linkedConfirmationTimes],[],

@@ -1,0 +1,35 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { firestore } from '../src/firebase.mjs';
+import { createBooking,reviewBooking,prepareRentalDelivery,releaseBooking } from '../src/rental-flow.mjs';
+import { requestRentalExtension,reviewRentalExtension } from '../src/rental-extras.mjs';
+const skip=!process.env.FIRESTORE_EMULATOR_HOST;
+test('Firestore calendar races allow one overlapping reservation while nonoverlapping rentals remain possible',{skip},async()=>{
+ const prefix='calendar_'+randomBytes(8).toString('hex'),now=new Date(),start=new Date(now.getTime()+180*60000),customer={id:prefix+'_customer'},staff={id:prefix+'_staff'},item=prefix+'_unit';
+ await firestore.collection('customers').doc(customer.id).set({full_name:'Isolated Customer',is_active:true});
+ await firestore.collection('items').doc(item).set({name:'Isolated Bike',item_code:prefix.toUpperCase(),qr_token:prefix+'_qr',status:'AVAILABLE',is_active:true,condition_status:'GOOD'});
+ await firestore.collection('item_rates').doc(prefix+'_rate').set({item_id:item,rate_type:'HOURLY',rental_rate:100,late_penalty_rate:20,is_active:true,effective_from:new Date(now.getTime()-60000)});
+ const base={itemId:item,durationMinutes:60,deliveryLocation:'Lakewood isolated resort',scheduledStartAt:start.toISOString()};
+ const results=await Promise.allSettled(['a','b'].map(letter=>createBooking(firestore,customer,{...base,requestKey:letter.repeat(32)},now)));
+ assert.equal(results.filter(result=>result.status==='fulfilled').length,1);assert.equal(results.find(result=>result.status==='rejected').reason.status,409);
+ const rental=results.find(result=>result.status==='fulfilled').value.rental;await reviewBooking(firestore,staff,rental.id,{action:'APPROVE'},now);
+ assert.equal((await firestore.collection('items').doc(item).get()).data().reserved_rental_id,undefined);
+ const immediate=await createBooking(firestore,customer,{...base,scheduledStartAt:null,requestKey:'c'.repeat(32)},now);assert.ok(immediate.rental.id);
+});
+test('Firestore concurrent handoff retries record one cash receipt; extension adds balance without fabricating collection',{skip},async()=>{
+ const prefix='receipt_'+randomBytes(8).toString('hex'),now=new Date(),customer={id:prefix+'_customer'},staff={id:prefix+'_staff'},item=prefix+'_unit';
+ await firestore.collection('customers').doc(customer.id).set({full_name:'Isolated Customer',is_active:true});
+ await firestore.collection('items').doc(item).set({name:'Isolated Bike',item_code:prefix.toUpperCase(),qr_token:prefix+'_qr',status:'AVAILABLE',is_active:true,condition_status:'GOOD'});
+ await firestore.collection('item_rates').doc(prefix+'_rate').set({item_id:item,rate_type:'HOURLY',rental_rate:100,late_penalty_rate:20,is_active:true,effective_from:new Date(now.getTime()-60000)});
+ const {rental}=await createBooking(firestore,customer,{itemId:item,durationMinutes:60,deliveryLocation:'Lakewood isolated resort',requestKey:'a'.repeat(32)},now);
+ await reviewBooking(firestore,staff,rental.id,{action:'APPROVE'},now);await prepareRentalDelivery(firestore,staff,rental.id,{inventoryCode:prefix+'_qr'},now);
+ const input={requestKey:'b'.repeat(32),transactionCode:rental.booking_qr_token,customerVerified:true,paymentVerified:true,inspection:{condition:'GOOD',result:'AVAILABLE',accessoriesChecked:true}};
+ const results=await Promise.all([releaseBooking(firestore,staff,rental.id,input,now),releaseBooking(firestore,staff,rental.id,input,now)]);
+ assert.equal(results.filter(result=>result.duplicate).length,1);
+ let ledger=await firestore.collection('payment_ledger').where('rental_id','==',rental.id).get();assert.equal(ledger.size,1);assert.equal(ledger.docs[0].data().amount,100);
+ await requestRentalExtension(firestore,customer,rental.id,{requestKey:'c'.repeat(32),additionalMinutes:60,expectedAdditionalFee:100},now);
+ await reviewRentalExtension(firestore,staff,rental.id,{action:'APPROVE',requestKey:'c'.repeat(32)},now);
+ assert.equal((await firestore.collection('rentals').doc(rental.id).get()).data().balance_due,100);
+ ledger=await firestore.collection('payment_ledger').where('rental_id','==',rental.id).get();assert.equal(ledger.size,1);
+});

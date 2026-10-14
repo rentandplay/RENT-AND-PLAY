@@ -10,7 +10,7 @@ import { DEFAULT_PRICING } from '../src/pricing.mjs';
 const now = new Date('2026-10-07T02:00:00Z'), later = minutes => new Date(now.getTime() + minutes * 60000);
 const admin = { id: 'admin', role: 'ADMIN', full_name: 'Admin', is_active: true };
 const customer = { id: 'customer', role: 'USER', full_name: 'Customer', is_active: true };
-const key = letter => letter.repeat(32), input = { itemId: 'cards', durationMinutes: 60, requestKey: key('a') };
+const key = letter => letter.repeat(32), input = { itemId: 'cards', durationMinutes: 60, deliveryLocation: 'Customer resort', requestKey: key('a') };
 const inspection = { condition: 'GOOD', result: 'AVAILABLE', notes: 'All pieces checked.', accessoriesChecked: true };
 const hasStatus = status => error => error.status === status;
 function fixture() { return memoryFirestore({ users: { admin, customer, admin2: { ...admin, id: 'admin2' }, other: { ...customer, id: 'other' } }, customers: { customer },

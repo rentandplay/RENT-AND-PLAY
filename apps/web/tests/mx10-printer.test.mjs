@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildMx10PrintJob, normalizeMx10PrintSettings, normalizeMx10LabelCalibration, paintQrMatrix, createMx10Printer } from '../src/mx10-printer.js';
+import { buildMx10PrintJob, normalizeMx10PrintSettings, normalizeMx10LabelCalibration, paintQrMatrix, createMx10Printer, getMx10Printer } from '../src/mx10-printer.js';
 import { QR_LABEL_GEOMETRY } from '../src/equipment-label.js';
 
 // Independently decode every frame: a missing payload must not consume the next command.
@@ -280,5 +280,39 @@ test('firmware without notifications retains conservative packet pacing', async 
   await assert.rejects(printer.printLabel(svg), /Bluetooth disconnected/);
   assert.equal(browser.maximumWrites, 1);
   assert.equal(browser.requestedDelays.filter(ms => ms === 7).length, 5);
+  await printer.disconnect();
+});
+
+
+test('receipt shares the QR connection and busy lock, sends every long raster row and uses continuous feed', async t => {
+  const browser = mockBrowser(t);
+  const printer = getMx10Printer();
+  assert.equal(getMx10Printer(), printer);
+  await printer.connect();
+  const receiptSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 1200"><rect width="384" height="1200" fill="white"/></svg>';
+  const job = printer.printReceipt(receiptSvg, 1200);
+  assert.equal(printer.status().printing, true);
+  await assert.rejects(printer.printLabel(svg), /current printer operation/);
+  await assert.rejects(printer.printReceipt(receiptSvg, 1200), /current printer operation/);
+  const result = await job;
+  const decoded = frames(Buffer.concat(browser.packets.map(packet => Buffer.from(packet))));
+  assert.equal(decoded.filter(frame => frame.opcode === 0xa2).length, 1200);
+  assert.equal(decoded.some(frame => frame.opcode === 0xf0), false);
+  assert.equal(result.lengthMm, 150); assert.equal(result.totalLengthMm, 155);
+  assert.equal(printer.status().printing, false);
+  await assert.rejects(printer.printReceipt(receiptSvg, 1200, { paperMode: 'gapped' }), /continuous paper roll/);
+  await assert.rejects(printer.printReceipt(receiptSvg, 9000), /8192 rows/);
+  assert.equal(printer.status().printing, false);
+  await printer.printLabel(svg);
+  await printer.disconnect();
+});
+
+test('receipt transfer failure clears its busy lock and a disconnected printer cannot accept another receipt', async t => {
+  const browser = mockBrowser(t, ({ packets, disconnect }) => { if (packets.length === 12) disconnect(); });
+  const printer = createMx10Printer();
+  await printer.connect();
+  await assert.rejects(printer.printReceipt(svg, 800), /Bluetooth disconnected/);
+  assert.equal(printer.status().printing, false);
+  await assert.rejects(printer.printReceipt(svg, 800), /Connect your printer/);
   await printer.disconnect();
 });

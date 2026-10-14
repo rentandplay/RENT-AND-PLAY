@@ -5,13 +5,15 @@ import { firestore } from '../src/firebase.mjs';
 import { createApi, createFirebaseServices } from '../src/server.mjs';
 import { createItem } from '../src/inventory.mjs';
 import { MOBILE_RENTAL_TERMS_VERSION } from '../src/rental-flow.mjs';
+import { createCustomer } from '../src/workspace.mjs';
 
-test('Firestore customer request, mobile/web staff approval, handoff and return preserve shared IDs and stock', { skip: !process.env.FIRESTORE_EMULATOR_HOST }, async () => {
+for (const staffRole of ['OWNER', 'OPERATOR']) {
+test(`Firestore ${staffRole} customer request, equipment/rental scans, handoff and return preserve shared IDs and stock`, { skip: !process.env.FIRESTORE_EMULATOR_HOST }, async () => {
   const prefix = `customer_staff_${randomBytes(8).toString('hex')}`;
   const customerId = `${prefix}_customer`, staffId = `${prefix}_staff`, categoryId = `${prefix}_sports`;
   await Promise.all([
     firestore.collection('users').doc(customerId).set({ role: 'CUSTOMER', full_name: 'Emulator Customer', is_active: true, email: 'customer@example.test' }),
-    firestore.collection('users').doc(staffId).set({ role: 'OPERATOR', full_name: 'Emulator Operator', is_active: true }),
+    firestore.collection('users').doc(staffId).set({ role: staffRole, full_name: `Emulator ${staffRole}`, is_active: true }),
     firestore.collection('item_categories').doc(categoryId).set({ name: 'Emulator sports', is_active: true })
   ]);
   const unit = await createItem(firestore, staffId, { name: 'Emulator Bicycle', condition: 'GOOD', categoryId, rentalRate: 100, rateType: 'HOURLY', latePenalty: 10, quantity: 2 });
@@ -28,27 +30,88 @@ test('Firestore customer request, mobile/web staff approval, handoff and return 
     return result;
   }
   try {
+    assert.equal((await request('/auth/me', mobileStaff)).user.role, staffRole);
+    assert.equal((await request('/mobile/profile', mobileStaff)).user.role, staffRole);
     const { rental } = await request('/mobile/rentals', customer, { itemId: unit.stock_group_id, stockGroupId: unit.stock_group_id, durationMinutes: 60, deliveryLocation: 'Shop pickup', paymentMethod: 'CASH', requestKey: key(), acceptedRentalTerms: true, rentalTermsVersion: MOBILE_RENTAL_TERMS_VERSION }, 201);
     assert.match(rental.rental_code, /^R-\d{4,}$/);
     await request(`/mobile/rentals/${rental.id}/review`, mobileStaff, { action: 'APPROVE' });
     const approved = (await request('/workspace', webStaff)).transactions.find(row => row.id === rental.id);
     assert.equal(approved.rental_code, rental.rental_code); assert.equal(approved.status, 'APPROVED'); assert.equal(approved.start_at, null);
     const item = (await request(`/inventory/${rental.item_id}`, webStaff)).item;
+    await request('/rentals/lookup', customer, { kind: 'INVENTORY', code: item.qr_token }, 401);
+    const scannedUnit = (await request('/rentals/lookup', mobileStaff, { kind: 'INVENTORY', code: item.qr_token })).rental;
+    assert.equal(scannedUnit.id, rental.id); assert.equal(scannedUnit.status, 'APPROVED'); assert.equal(scannedUnit.start_at, null);
+    await request('/rentals/lookup', mobileStaff, { kind: 'INVENTORY', code: 'wrong-unit-qr' }, 404);
     await request(`/rentals/${rental.id}/prepare-delivery`, webStaff, { inventoryCode: item.qr_token });
+    const { ticket } = await request(`/mobile/rentals/${rental.id}/ticket`, customer);
+    assert.equal(ticket.rental_code, rental.rental_code);
+    const scannedRental = (await request('/rentals/lookup', mobileStaff, { kind: 'RENTAL', code: ticket.value })).rental;
+    assert.equal(scannedRental.id, rental.id); assert.equal(scannedRental.delivery_status, 'PREPARED');
+    await request(`/rentals/${rental.id}/release-verification`, mobileStaff, { transactionCode: ticket.value });
+    await request(`/rentals/${rental.id}/release-verification`, mobileStaff, { transactionCode: 'wrong-rental-qr' }, 409);
     const inspection = { condition: 'GOOD', result: 'AVAILABLE', notes: 'Function, safety and accessories checked.', accessoriesChecked: true };
     await request(`/rentals/${rental.id}/release`, mobileStaff, { requestKey: key(), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, inspection });
     const active = (await request('/mobile/rentals', customer)).rentals.find(row => row.id === rental.id);
     assert.equal(active.status, 'ACTIVE'); assert.equal(active.rental_code, rental.rental_code); assert.ok(active.start_at);
+    assert.equal((await request('/rentals/lookup', mobileStaff, { kind: 'INVENTORY', code: item.qr_token })).rental.status, 'ACTIVE');
     await request(`/mobile/rentals/${rental.id}/return`, customer, { condition: 'GOOD' });
     await request(`/rentals/${rental.id}/receipt`, webStaff, { requestKey: key(), inventoryCode: item.qr_token, physicalReceiptConfirmed: true });
+    assert.equal((await request('/rentals/lookup', mobileStaff, { kind: 'INVENTORY', code: item.qr_token })).rental.status, 'RETURN_PENDING_INSPECTION');
     await request(`/rentals/${rental.id}/complete-return`, mobileStaff, { requestKey: key(), penaltyAmount: 0, inspection });
     const completed = (await request('/mobile/rentals', customer)).rentals.find(row => row.id === rental.id);
     assert.equal(completed.status, 'COMPLETED'); assert.equal(completed.rental_code, rental.rental_code); assert.ok(completed.received_at);
     assert.equal((await request(`/inventory/${rental.item_id}`, webStaff)).item.status, 'AVAILABLE');
+    await firestore.collection('users').doc(staffId).update({ is_active: false });
+    await request('/rentals/lookup', mobileStaff, { kind: 'RENTAL', code: ticket.value }, 401);
     const terminal = await fetch(origin + '/terminals/emulator-standby/pending');
     assert.equal(terminal.status, 409);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await Promise.all([firestore.collection('users').doc(customerId).delete(), firestore.collection('users').doc(staffId).delete(), firestore.collection('item_categories').doc(categoryId).delete()]);
   }
+});
+}
+
+test('Firestore walk-in profile, web creation, mobile handover, account linking and damaged return share one customer and rental reference', { skip: !process.env.FIRESTORE_EMULATOR_HOST }, async () => {
+  const prefix = `walkin_${randomBytes(8).toString('hex')}`, staffId = `${prefix}_operator`, categoryId = `${prefix}_sports`;
+  await firestore.collection('users').doc(staffId).set({ role: 'OPERATOR', full_name: 'Walkin Operator', is_active: true });
+  await firestore.collection('item_categories').doc(categoryId).set({ name: prefix, is_active: true });
+  const unit = await createItem(firestore, staffId, { name: 'Walkin Bicycle', condition: 'GOOD', categoryId, rentalRate: 100, rateType: 'HOURLY', latePenalty: 10, quantity: 1 });
+  const services = createFirebaseServices({ db: firestore, auth: { verifyIdToken: async token => ({ uid: token === 'staff' ? staffId : token }), createUser: async input => ({ uid: input.uid }), deleteUser: async () => {} } });
+  const server = createApi({ services, hardwareEnabled: false, expiryWorker: false, notificationWorker: false, sessions: { verify: async () => ({ uid: staffId }) } });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}/api`, key = () => randomBytes(16).toString('hex');
+  const web = { Cookie: 'rent_play_session=walkin-test' }, mobile = { Authorization: 'Bearer staff' };
+  async function request(path, headers, body, expected = 200) {
+    const response = await fetch(origin + path, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...headers }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const result = await response.json(); assert.equal(response.status, expected, `${path}: ${result.error || response.status}`); return result;
+  }
+  try {
+    const phone = `0917${String(Math.floor(Math.random() * 10000000)).padStart(7, '0')}`;
+    const profile = { fullName: 'Walkin Customer', phone, requestKey: key() };
+    const racing = await Promise.allSettled([createCustomer(firestore, staffId, profile), createCustomer(firestore, staffId, { ...profile, requestKey: key() })]);
+    assert.equal(racing.filter(row => row.status === 'fulfilled').length, 1);
+    assert.equal(racing.find(row => row.status === 'rejected').reason.status, 409);
+    const customer = racing.find(row => row.status === 'fulfilled').value;
+    assert.equal(customer.auth_uid, null);
+    const { rental } = await request('/rental-bookings', web, { itemId: unit.id, customerId: customer.id, rentalChannel: 'WALK_IN', fulfillmentMode: 'SHOP_HANDOVER', durationMinutes: 60, paymentMethod: 'CASH', requestKey: key() }, 201);
+    const staffRow = (await request('/mobile/admin-workspace', mobile)).transactions.find(row => row.id === rental.id);
+    assert.equal(staffRow.rental_code, rental.rental_code); assert.equal(staffRow.start_at, null);
+    const item = (await request(`/inventory/${rental.item_id}`, web)).item;
+    await request(`/rentals/${rental.id}/prepare-delivery`, mobile, { inventoryCode: item.qr_token });
+    const handover = { transactionCode: rental.rental_code, manualLookup: true, manualReason: 'Walkin customer physically verified at the shop.', requestKey: key(), customerVerified: true, paymentVerified: true, customerTermsAcknowledged: true, inspection: { condition: 'GOOD', result: 'AVAILABLE', notes: 'Checked and complete.', accessoriesChecked: true } };
+    await request(`/rentals/${rental.id}/release-verification`, web, handover);
+    await request(`/rentals/${rental.id}/release`, mobile, { ...handover, customerTermsAcknowledged: false }, 400);
+    await request(`/rentals/${rental.id}/release`, mobile, handover);
+    const { customer: linked } = await request('/customer-accounts', web, { customerId: customer.id, fullName: profile.fullName, phone, email: `${prefix}@example.com`, password: 'Welcome123', confirmPassword: 'Welcome123' }, 201);
+    assert.equal(linked.id, customer.id); assert.equal(linked.customer_code, customer.customer_code);
+    const visible = (await request('/mobile/rentals', { Authorization: `Bearer ${linked.id}` })).rentals.find(row => row.id === rental.id);
+    assert.equal(visible.rental_code, rental.rental_code); assert.equal(visible.status, 'ACTIVE');
+    await request(`/rentals/${rental.id}/receipt`, web, { inventoryCode: item.qr_token, physicalReceiptConfirmed: true, requestKey: key() });
+    await request(`/rentals/${rental.id}/complete-return`, mobile, { requestKey: key(), penaltyAmount: 0, inspection: { condition: 'DAMAGED', result: 'UNDER_MAINTENANCE', notes: 'Brake needs repair.', accessoriesChecked: true } });
+    assert.equal((await request(`/inventory/${rental.item_id}`, web)).item.status, 'UNDER_MAINTENANCE');
+    const completed = (await request('/workspace', web)).transactions.find(row => row.id === rental.id);
+    assert.equal(completed.rental_code, rental.rental_code); assert.equal(completed.status, 'COMPLETED');
+    assert.equal(completed.rental_terms_acceptance.acceptance_method, 'STAFF_WITNESSED');
+  } finally { await new Promise(resolve => server.close(resolve)); }
 });

@@ -1,11 +1,14 @@
 import {asDate,docData} from './firebase.mjs';
 import {publicTerminal,serializeTransaction} from './transactions.mjs';
+import { blocksCurrentStock, OPEN_RENTALS } from './rental-calendar.mjs';
+import { rentalDailySummary } from './report-summaries.mjs';
 
 export function databaseDate(value) {return asDate(value);}
 export const dateKey = date => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 export function rentalStatus(row,now=new Date()) {
-  if(row.status!=='ACTIVE')return row.status==='APPROVED'?'Awaiting pickup':row.status==='RETURN_PENDING_INSPECTION'?'Inspection pending':row.status==='PENDING_ADMIN_APPROVAL'?'Pending admin review':row.status==='PENDING_VERIFICATION'?'Pending':row.status;
+  if(row.status!=='ACTIVE')return row.status==='APPROVED'?(row.delivery_status==='OUT_FOR_DELIVERY'?'On the way':row.delivery_status==='DELIVERY_FAILED'?'Delivery unsuccessful':row.scheduled_start_at && !row.delivery_preparation?'Scheduled':row.fulfillment_mode==='SHOP_HANDOVER'?'Awaiting shop handover':'Awaiting resort handoff'):row.status==='RETURN_PENDING_INSPECTION'?'Inspection pending':row.status==='PENDING_ADMIN_APPROVAL'?'Pending admin review':row.status==='PENDING_VERIFICATION'?'Pending':row.status;
   const due=databaseDate(row.due_at);
+  if(!due || !Number.isFinite(due.getTime()))return 'Due time needs review';
   if(due<now)return 'Overdue';
   return dateKey(due)===dateKey(now)?'Due today':'Active';
 }
@@ -25,25 +28,25 @@ export function revenueWeeks(rows,now=new Date()) {
 
 const rows=snapshot=>snapshot.docs.map(docData);
 export async function loadAnalyticsSummary(db, now = new Date()) {
-  const [rentalSnapshot, itemSnapshot] = await Promise.all([
-    db.collection('rentals').get(), db.collection('items').get()
+  const [dailySnapshot, rentalSnapshot, itemSnapshot] = await Promise.all([
+    db.collection('rental_daily').get(),db.collection('rentals').where('status','in',OPEN_RENTALS).get(), db.collection('items').get()
   ]);
   let confirmedFees = 0, confirmedRentals = 0, activeCount = 0;
   for (const rental of rows(rentalSnapshot)) {
     const status = String(rental.status || '').toUpperCase();
-    if (status === 'COMPLETED' || status === 'ACTIVE') {
-      confirmedFees += Number(rental.rental_fee ?? rental.rateFee ?? 0) + Number(rental.late_penalty ?? rental.latePenalty ?? 0);
-      confirmedRentals++;
-    }
     if (status === 'ACTIVE') activeCount++;
   }
+  for(const day of rows(dailySnapshot)){confirmedFees+=Number(day.final_charges||0);confirmedRentals+=Number(day.rentals||0);}
   return { confirmed_fees: confirmedFees, confirmed_rentals: confirmedRentals, active_count: activeCount, total_catalog: itemSnapshot.size, refreshedAt: now.toISOString() };
 }
 
 export async function loadDashboard(db,now=new Date()) {
   const names=['items','item_categories','item_rates','customers','rentals','verification_requests','terminals'];
-  const snapshots=await Promise.all(names.map(name=>db.collection(name).get()));
+  const snapshots=await Promise.all(names.map(name=>name==='customers'?Promise.resolve({docs:[]}):name==='rentals'?db.collection(name).where('status','in',OPEN_RENTALS).get():db.collection(name).get()));
   const source=Object.fromEntries(names.map((name,index)=>[name,rows(snapshots[index])]));
+  source.customers=(await Promise.all([...new Set(source.rentals.map(rental=>rental.customer_id).filter(Boolean))].map(id=>db.collection('customers').doc(String(id)).get()))).filter(doc=>doc.exists).map(docData);
+  const daily=await rentalDailySummary(db,dateKey(new Date(now.getTime()-14*86400000)),dateKey(now));
+  const revenue=revenueWeeks(daily.daily.map(row=>({status:'COMPLETED',confirmed_rental_at:new Date(row.business_day+'T00:00:00+08:00'),rental_fee:row.fees})),now);
   const categoriesById=new Map(source.item_categories.map(category=>[category.id,category]));
   const itemsById=new Map(source.items.map(item=>[item.id,item]));
   const customersById=new Map(source.customers.map(customer=>[customer.id,customer]));
@@ -51,7 +54,7 @@ export async function loadDashboard(db,now=new Date()) {
   const rentalsById=new Map(source.rentals.map(rental=>[rental.id,rental]));
   const currentRate=itemId=>source.item_rates.filter(rate=>String(rate.item_id)===itemId&&rate.is_active!==false&&asDate(rate.effective_from)<=now&&(!rate.effective_to||asDate(rate.effective_to)>now)).sort((a,b)=>asDate(b.effective_from)-asDate(a.effective_from))[0];
   const open=source.rentals.filter(rental=>['PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','APPROVED','ACTIVE','RETURN_PENDING_INSPECTION'].includes(rental.status)).sort((a,b)=>asDate(a.due_at)-asDate(b.due_at));
-  const reserved=new Set(open.filter(rental=>['PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','APPROVED'].includes(rental.status)).map(rental=>String(rental.item_id)));
+  const reserved=new Set(open.filter(rental=>blocksCurrentStock(rental)&&['PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','APPROVED'].includes(rental.status)).map(rental=>String(rental.item_id)));
   const items=source.items.filter(item=>item.is_active!==false).map(item=>{
     const {image_data,...itemFields}=item;
     const rate=currentRate(item.id)||{};
@@ -75,7 +78,7 @@ export async function loadDashboard(db,now=new Date()) {
   const serialize=serializeTransaction;
   return {
     items:items.map(serialize),customers:source.customers.filter(c=>c.is_active!==false).sort((a,b)=>a.full_name.localeCompare(b.full_name)).map(serialize),categories,
-    rentals:rentals.map(serialize),pending:pending.map(serialize),terminals:terminals.map(serialize),revenue:revenueWeeks(source.rentals,now),
+    rentals:rentals.map(serialize),pending:pending.map(serialize),terminals:terminals.map(serialize),revenue,
     stats:{active:active.length,available:items.filter(item=>item.status==='AVAILABLE'&&!reserved.has(item.id)).length,dueToday:active.filter(r=>rentalStatus(r,now)==='Due today').length,overdue:rentals.filter(r=>r.displayStatus==='Overdue').length,fees:active.reduce((total,r)=>total+Number(r.rental_fee||0),0)},
     refreshedAt:now.toISOString()
   };

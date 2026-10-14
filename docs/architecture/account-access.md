@@ -46,4 +46,4 @@ Restart the backend and rebuild the web assets and Android app after applying so
 
 The account-focused backend checks passed (26 checks), and the Flutter account validation/widget checks passed (4 checks). A local browser preview using in-memory identities covered inline errors, lowercase emails, the reset recipient and instructions, login progress, and staff creation options. No real test staff accounts were created and no test credential emails were sent. A real inbox and physical-phone check remain deployment acceptance steps.
 
-The broader existing web/backend suites still contain failures in deposit-related expectations from earlier rental changes; those are separate from this account update.
+The earlier deposit-related suite failures were resolved in the later rental audit. See [the current system verification](../testing/system-audit-2026-10-14.md), including Owner/Operator access checks for web cookies and mobile bearer tokens.

@@ -25,10 +25,10 @@ test('display models share collection reads, and saved equipment invalidates all
   const fixture = countedDatabase({ item_categories: { sports: { name: 'Sports equipment', category_code: 'CAT-001' } }, users: { admin: { full_name: 'Admin', account_code: 'USER-001', role: 'ADMIN', is_active: true } } });
   const services = createFirebaseServices({ db: fixture.db });
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 17); // Shared displays, bounded inventory queries and two next-deadline reads.
+  assert.equal(fixture.reads.length, 19); // Cached displays, bounded availability queries, daily summary and deadline reads.
   for (const name of ['items', 'item_categories', 'item_rates', 'rentals', 'customers', 'verification_requests', 'terminals']) assert.equal(fixture.reads.filter(read => read.label === name).length, 1);
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 17);
+  assert.equal(fixture.reads.length, 19);
   const created = await services.createItem('admin', { categoryId: 'sports', name: 'Basketball', condition: 'GOOD', rateType: 'HOURLY', rentalRate: 50, deposit: 100, latePenalty: 10 });
   const [dashboard, workspace, inventory] = await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
   assert.equal(dashboard.items[0].id, created.id); assert.equal(workspace.items[0].id, created.id); assert.equal(inventory.items[0].id, created.id);
@@ -170,22 +170,23 @@ test('inventory reads only open rentals and repairs, including legacy lowercase 
   assert.equal(fixture.reads.find(read => read.label.startsWith('maintenance_records')).documents, 1);
 });
 
-test('mobile staff retains completed rental history while skipping web-only administration reads', async () => {
+test('mobile staff loads current rentals and fetches completed history through a bounded page', async () => {
   const fixture = countedDatabase({ rentals: { history: { status: 'COMPLETED', item_id: 'bike', customer_id: 'customer' } },
     customers: { customer: { full_name: 'Customer' } }, items: { bike: { name: 'Bike', status: 'AVAILABLE' } },
     audit_logs: { log: { created_at: new Date() } }, item_status_history: { old: {} }, item_condition_records: { old: {} }, users: { owner: { role: 'OWNER' } } });
   const services = createFirebaseServices({ db: fixture.db });
   const workspace = await services.mobileAdminWorkspace('OWNER');
-  assert.equal(workspace.transactions[0].status, 'COMPLETED');
-  assert.equal(workspace.transactions[0].customer_name, 'Customer');
+  assert.equal(workspace.transactions.length,0);
+  const history=await services.recordPage('rentals',{status:'COMPLETED',limit:25});
+  assert.equal(history.records[0].status,'COMPLETED');
   assert.ok(workspace._dashboard); assert.ok(workspace._inventory);
   for (const name of ['audit_logs', 'item_status_history', 'item_condition_records', 'users', 'settings']) {
     assert.equal(fixture.reads.some(read => read.label === name || read.label.startsWith(name + '.')), false, name);
   }
-  assert.equal(fixture.reads.some(read => read.label === 'maintenance_records'), true);
-  const maintenanceReads = fixture.reads.filter(read => read.label === 'maintenance_records').length;
+  assert.equal(fixture.reads.some(read => read.label.startsWith('maintenance_records')), true);
+  const maintenanceReads = fixture.reads.filter(read => read.label.startsWith('maintenance_records')).length;
   await services.mobileAdminWorkspace('OWNER');
-  assert.equal(fixture.reads.filter(read => read.label === 'maintenance_records').length, maintenanceReads);
+  assert.equal(fixture.reads.filter(read => read.label.startsWith('maintenance_records')).length, maintenanceReads);
   await services.workspace('OWNER');
   assert.ok(fixture.reads.some(read => read.label.startsWith('audit_logs')));
   assert.ok(fixture.reads.some(read => read.label === 'users'));
@@ -201,7 +202,7 @@ test('a newly committed booking invalidates filtered availability and only its c
   await services.mobileRentalList({ ...customer, id: 'another-customer' });
   await services.inventoryList();
   const otherReads = fixture.reads.filter(read => read.label.includes('another-customer')).length;
-  const { rental } = await services.createMobileRentalRequest(customer, { itemId: 'bike', durationMinutes: 180, requestKey: 'a'.repeat(32) });
+  const { rental } = await services.createMobileRentalRequest(customer, { itemId: 'bike', durationMinutes: 180, deliveryLocation: 'Customer resort', requestKey: 'a'.repeat(32) });
   assert.equal((await services.inventoryList()).items[0].open_rentals, 1);
   assert.equal((await services.mobileRentalList(customer)).rentals[0].id, rental.id);
   await services.mobileRentalList({ ...customer, id: 'another-customer' });

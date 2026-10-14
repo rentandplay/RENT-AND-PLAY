@@ -11426,3 +11426,73 @@ input[aria-invalid="true"]{border-color:#b42318!important}
   .ana-axis-label { font-size: 26px; }
   .ana-bar-value { font-size: 28px; }
 }
+
+/* Receipt controls stay visible independently of the long thermal preview. */
+#modal[open]:has(.receipt-print-dialog) { display: flex; flex-direction: column; width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; background: var(--ui-surface); color: var(--ui-text); border: 1px solid var(--ui-border); border-radius: 18px; }
+#modal:has(.receipt-print-dialog) > .modal-heading { flex: 0 0 auto; margin: 0; padding: 20px 24px; border-bottom: 1px solid var(--ui-border); }
+#modal:has(.receipt-print-dialog) > .modal-heading h2 { font-size: 19px; }
+#modal:has(.receipt-print-dialog) #close-modal { width: 34px; height: 34px; border: 1px solid var(--ui-border); border-radius: 9px; background: var(--ui-soft); color: var(--ui-muted); }
+.receipt-print-dialog { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.receipt-overview { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; }
+.receipt-overview strong { font-size: 15px; }
+.receipt-overview p { margin: 4px 0 0; color: var(--ui-muted); font-size: 12px; overflow-wrap: anywhere; }
+.receipt-paper-badge { flex-shrink: 0; padding: 6px 9px; border-radius: 7px; background: color-mix(in srgb, var(--orange) 10%, var(--ui-surface)); color: var(--orange); font-size: 11px; font-weight: 600; }
+.receipt-print-body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 20px; padding: 0 24px 22px; min-height: 0; overflow: auto; }
+.receipt-preview-panel { min-width: 0; }
+.receipt-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+.receipt-section-heading h3, .receipt-device-card h3, .receipt-roll-card h3 { margin: 0; font-size: 13px; font-weight: 650; }
+.receipt-section-heading > span { font-size: 10px; color: var(--ui-muted); }
+.receipt-preview-viewport { max-height: min(52dvh, 470px); overflow: auto; padding: 20px 16px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-soft); scrollbar-gutter: stable; }
+.receipt-paper { box-sizing: border-box; width: 330px; max-width: 100%; margin: 0 auto; padding: 12px 0; background: white; box-shadow: 0 3px 12px #07132018; }
+.receipt-paper > img { display: block; width: 87.272727%; height: auto; margin: auto; }
+.receipt-preview-caption { margin: 10px 0 0; color: var(--ui-muted); font-size: 11px; line-height: 1.6; }
+.receipt-print-controls { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.receipt-device-card, .receipt-roll-card { padding: 18px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); }
+.receipt-device-heading { display: flex; gap: 11px; align-items: center; }
+.receipt-device-heading p { font-size: 11px; color: var(--ui-muted); margin: 4px 0 0; }
+.receipt-device-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 9px; background: color-mix(in srgb, var(--orange) 10%, var(--ui-surface)); color: var(--orange); }
+.receipt-device-icon svg { width: 18px; height: 18px; }
+.receipt-connection { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+.receipt-connection p { margin: 0; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.receipt-status-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--ui-muted); }
+.receipt-connection[data-state=connected] .receipt-status-dot { background: #22a56f; }
+.receipt-connection[data-state=busy] .receipt-status-dot, .receipt-connection[data-state=warning] .receipt-status-dot { background: var(--orange); }
+.receipt-connection-help { margin: 7px 0 14px; color: var(--ui-muted); font-size: 11px; line-height: 1.7; }
+.receipt-connect { width: 100%; min-height: 40px; }
+.receipt-device-card progress { display: block; width: 100%; height: 6px; margin-top: 16px; accent-color: var(--orange); }
+.receipt-device-card progress[hidden], .receipt-message[hidden] { display: none; }
+.receipt-message { padding: 11px 12px; margin-top: 14px; border: 1px solid color-mix(in srgb, #db5a5a 32%, var(--ui-border)); background: color-mix(in srgb, #db5a5a 7%, var(--ui-surface)); border-radius: 8px; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.receipt-message[data-kind=success] { border-color: color-mix(in srgb, #22a56f 32%, var(--ui-border)); background: color-mix(in srgb, #22a56f 7%, var(--ui-surface)); }
+.receipt-roll-card dl { display: block; margin: 13px 0; }
+.receipt-roll-card dl > div { display: flex; justify-content: space-between; gap: 14px; margin-top: 9px; font-size: 12px; }
+.receipt-roll-card dt { color: var(--ui-muted); }
+.receipt-roll-card dd { margin: 0; font-weight: 600; }
+.receipt-roll-card p { padding-top: 12px; margin: 0; border-top: 1px solid var(--ui-border); color: var(--ui-muted); font-size: 11px; line-height: 1.7; }
+.receipt-print-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: 0 0 auto; padding: 16px 24px; border-top: 1px solid var(--ui-border); background: var(--ui-surface); }
+.receipt-print-footer > div { display: flex; gap: 10px; }
+.receipt-print-footer button { display: inline-flex; justify-content: center; align-items: center; gap: 8px; min-height: 42px; }
+.receipt-print-footer button svg { width: 16px; height: 16px; }
+.receipt-print-dialog button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 640px) {
+  #modal[open]:has(.receipt-print-dialog) { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 14px; }
+  #modal:has(.receipt-print-dialog) > .modal-heading { padding: 16px; }
+  .receipt-overview { padding: 14px 16px; align-items: flex-start; gap: 8px; }
+  .receipt-paper-badge { font-size: 10px; }
+  .receipt-print-body { display: flex; flex-direction: column; padding: 0 16px 16px; gap: 18px; }
+  .receipt-print-controls { order: -1; }
+  .receipt-roll-card { padding: 13px 16px; }
+  .receipt-roll-card dl { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 10px 0; }
+  .receipt-roll-card dl > div { display: block; margin: 0; font-size: 11px; }
+  .receipt-roll-card dd { margin-top: 4px; }
+  .receipt-roll-card p { display: none; }
+  .receipt-device-card { padding: 16px; }
+  .receipt-connection { margin-top: 14px; }
+  .receipt-preview-viewport { max-height: none; overflow: visible; }
+  .receipt-print-footer { flex-direction: column-reverse; gap: 8px; padding: 12px 16px; }
+  .receipt-print-footer > div { width: 100%; }
+  .receipt-print-footer > div button { flex: 1; min-width: 0; padding: 10px 8px; font-size: 11px; }
+  .receipt-print-footer > .text-button { min-height: 30px; }
+}
+/* Payments and the short local delivery plan share the workspace surfaces. */
+.record-server-filters,.finance-filters{display:flex;flex-wrap:wrap;align-items:end;gap:14px;padding:18px;margin-bottom:18px}.record-server-filters label,.finance-filters label{display:grid;gap:6px}.record-server-filters small{color:var(--muted)}.finance-metrics{grid-template-columns:repeat(3,minmax(0,1fr));margin:20px 0}.finance-chart{display:flex;align-items:end;gap:8px;height:140px;padding:12px 8px 24px;border-bottom:1px solid var(--border);overflow-x:auto}.finance-chart>div{height:100%;min-width:38px;flex:1;display:flex;align-items:center;justify-content:end;flex-direction:column;position:relative}.finance-chart i{display:block;width:70%;background:#f5822a;border-radius:5px 5px 0 0}.finance-chart small{position:absolute;bottom:-20px;font-size:10px}.local-delivery-plan{padding:20px;margin-bottom:20px}.delivery-plan-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.delivery-plan-list button{display:grid;text-align:left;gap:7px}.delivery-plan-list small{color:var(--muted)}@media(max-width:700px){.finance-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.record-server-filters label,.finance-filters label{flex:1;min-width:130px}}
+.report-finance{padding:22px;margin-bottom:22px}.report-money-chart>div{flex-direction:row;align-items:end;gap:3px}.report-money-chart span,.report-money-chart i{display:block;width:30%;border-radius:4px 4px 0 0}

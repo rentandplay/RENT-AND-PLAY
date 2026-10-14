@@ -112,12 +112,23 @@ test('HTTP access gates Owner/Operator accounts until password change and protec
     assert.equal((await request('/users', input)).status, 403); assert.equal(creates, 0);
     const changed = await request('/auth/change-password', { currentPassword: password, newPassword: 'NewPass88', confirmPassword: 'NewPass88' });
     assert.equal(changed.status, 200); assert.equal((await changed.json()).user.mustChangePassword, false); assert.equal(changes, 1);
-    assert.equal((await request('/dashboard')).status, 200);
-    assert.equal((await request('/users', input)).status, 403, 'Operators cannot create privileged accounts');
+    for (const extra of [{}, { Authorization: 'Bearer mobile-token' }]) {
+      assert.equal((await request('/dashboard', undefined, extra)).status, 200);
+      assert.equal((await request('/users', input, extra)).status, 403, 'Operators cannot create privileged accounts on web or mobile');
+    }
+    assert.equal(creates, 0);
     await db.collection('users').doc('staff').update({ role: 'OWNER' });
-    assert.equal((await request('/users', input)).status, 201); assert.equal(creates, 1);
+    for (const extra of [{}, { Authorization: 'Bearer mobile-token' }]) {
+      assert.equal((await request('/users', input, extra)).status, 201);
+    }
+    assert.equal(creates, 2);
     await db.collection('users').doc('staff').update({ role: 'CUSTOMER' });
-    assert.equal((await request('/dashboard')).status, 401); assert.equal((await request('/auth/change-password', {})).status, 403);
+    for (const extra of [{}, { Authorization: 'Bearer mobile-token' }]) {
+      assert.equal((await request('/dashboard', undefined, extra)).status, 401);
+      assert.equal((await request('/auth/change-password', {}, extra)).status, 403);
+    }
+    await db.collection('users').doc('staff').update({ role: 'OPERATOR', is_active: false });
+    assert.equal((await request('/dashboard', undefined, { Authorization: 'Bearer mobile-token' })).status, 401);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 

@@ -30,7 +30,14 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     if (method === 'PATCH') {
       if (input.name !== undefined) { validationFailure(nameError(input.name)); changes.full_name = clean(input.name, 150, 'name'); changes.name = changes.full_name; }
       if (input.phone !== undefined) { validationFailure(phoneError(input.phone, false)); changes.phone = clean(input.phone, 40, 'phone'); }
-      if (input.validIdUrl !== undefined) changes.validIdUrl = clean(input.validIdUrl, 2048, 'ID reference');
+      if (input.hasAcknowledgedIdRequirement !== undefined) {
+        if (typeof input.hasAcknowledgedIdRequirement !== 'boolean') fail(400, 'ID requirement acknowledgement must be true or false.');
+        changes.hasAcknowledgedIdRequirement = input.hasAcknowledgedIdRequirement;
+      } else if (input.validIdUrl === 'physical_id_presented') {
+        // Compatibility for an older installed app. This is an acknowledgement,
+        // never a claim that staff have already inspected the physical ID.
+        changes.hasAcknowledgedIdRequirement = true;
+      } else if (input.validIdUrl !== undefined) fail(400, 'Use the ID requirement acknowledgement field.');
       if (input.profileImageUrl !== undefined) changes.profileImageUrl = clean(input.profileImageUrl, 2048, 'profile image');
     }
     if (method === 'PATCH' || (!existing && method === 'POST')) {
@@ -52,7 +59,7 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
       const customerDoc = await tx.get(customerRef);
       if (customerDoc.exists) {
         const customerChanges = {};
-        if (changes.full_name !== undefined) customerChanges.full_name = changes.full_name;
+        if (changes.full_name !== undefined) { customerChanges.full_name = changes.full_name; customerChanges.search_name = changes.full_name.toLowerCase().replace(/\s+/g,' '); }
         if (changes.phone !== undefined) customerChanges.phone = changes.phone || null;
         if (Object.keys(customerChanges).length) {
           customerChanges.updated_at = now;
@@ -65,7 +72,7 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     return { profile: { ...created, ...changes }, created: !existing };
   });
   if (created || method === 'PATCH') onWrite(method === 'PATCH' ? ['users', 'customers'] : ['users']);
-  return { user: serializeMobile({ id: claims.uid, uid: claims.uid, name: profile.full_name || profile.name || '', full_name: profile.full_name || profile.name || '', email: profile.email || claims.email || '', phone: profile.phone || '', role: normalizeRole(profile.role) || 'CUSTOMER', mustChangePassword: profile.must_change_password === true, is_active: profile.is_active !== false, validIdUrl: profile.validIdUrl || profile.valid_id_url || null, profileImageUrl: profile.profileImageUrl || null, hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false, createdAt: profile.created_at || profile.createdAt || null }) };
+  return { user: serializeMobile({ id: claims.uid, uid: claims.uid, name: profile.full_name || profile.name || '', full_name: profile.full_name || profile.name || '', email: profile.email || claims.email || '', phone: profile.phone || '', role: normalizeRole(profile.role) || 'CUSTOMER', mustChangePassword: profile.must_change_password === true, is_active: profile.is_active !== false, hasAcknowledgedIdRequirement: profile.hasAcknowledgedIdRequirement ?? Boolean(profile.validIdUrl || profile.valid_id_url), profileImageUrl: profile.profileImageUrl || null, hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false, createdAt: profile.created_at || profile.createdAt || null }) };
 }
 
 // Only configured equipment belongs in the customer catalog; admin inventory retains all records.
@@ -136,8 +143,9 @@ export async function resolveMobileItem(db, input) {
   const normalized=code.toLowerCase(),matchedUnits=inventory.items.filter(unit=>unit.is_active!==false&&[unit.id,unit.item_code,unit.qrCode,unit.qr_token,unit.legacy_item_code].some(value=>value&&String(value).toLowerCase()===normalized));
   const groups=new Set(matchedUnits.map(unit=>String(unit.stock_group_id||unit.id)));
   const matches=catalog.items.filter(item=>groups.has(item.stock_group_id)||[item.id,item.item_code,item.qr_token].some(value=>value&&String(value).toLowerCase()===normalized));
-  if (matches.length !== 1) fail(404, 'This QR label does not identify an active equipment record.');
-  return { item: matches[0] };
+  if (matches.length !== 1 || matchedUnits.length > 1) fail(404, 'This QR label does not identify a unique active equipment record.');
+  const scannedUnit = matchedUnits[0];
+  return { item: { ...matches[0], scanned_unit_id: scannedUnit?.id || null, scanned_unit_code: scannedUnit?.item_code || null } };
 }
 
 export function serializeMobile(value) {
@@ -147,7 +155,7 @@ export function serializeMobile(value) {
   return value;
 }
 
-export async function mobileRentalList(db, actor, rentalId = '') {
+export async function mobileRentalList(db, actor, rentalId = '', options = {}) {
   const ownerId = String(actor.id);
   let rentals;
   if (rentalId) {
@@ -156,8 +164,17 @@ export async function mobileRentalList(db, actor, rentalId = '') {
     rentals = [docData(doc)];
     if (String(rentals[0].customer_id ?? rentals[0].customerId) !== ownerId) fail(403, 'You can only view your own rentals.');
   } else {
-    const snapshots = await Promise.all(['customer_id', 'customerId'].map(field => db.collection('rentals').where(field, '==', ownerId).get()));
-    rentals = [...new Map(snapshots.flatMap(snapshot => snapshot.docs.map(docData)).map(rental => [rental.id, rental])).values()];
+    const limit=Math.min(100,Math.max(1,Number(options.limit)||50));
+    let cursor=null;
+    if(options.cursor){cursor=await db.collection('rentals').doc(String(options.cursor)).get();if(!cursor.exists||String(cursor.data().customer_id??cursor.data().customerId)!==ownerId)fail(400,'Refresh your rental history before loading another page.');}
+    const fields=['customer_id','customerId'],closedStates=['COMPLETED','CANCELLED','REJECTED','EXPIRED'],openStates=['ACTIVE','APPROVED','RETURN_PENDING_INSPECTION','PENDING_ADMIN_APPROVAL','PENDING_ESP32_RENT','PENDING_VERIFICATION','PENDING_ESP32_RETURN','PENDING_RETURN_VERIFICATION'],closed=[...closedStates,...closedStates.map(s=>s.toLowerCase())],open=[...openStates,...openStates.map(s=>s.toLowerCase())];
+    const snapshots=await Promise.all(fields.map(async field=>{
+      let query=db.collection('rentals').where(field,'==',ownerId).where('status','in',closed).orderBy('__name__');if(cursor)query=query.startAfter(cursor);return query.limit(limit+1).get();
+    }));
+    const history=[...new Map(snapshots.flatMap(snapshot=>snapshot.docs.map(docData)).map(rental=>[rental.id,rental])).values()].sort((a,b)=>a.id.localeCompare(b.id));
+    const current=cursor?[]:(await Promise.all(fields.map(field=>db.collection('rentals').where(field,'==',ownerId).where('status','in',open).get()))).flatMap(snapshot=>snapshot.docs.map(docData));
+    options.nextCursor=history.length>limit?history[limit-1].id:null;
+    rentals=[...new Map([...current,...history.slice(0,limit)].map(rental=>[rental.id,rental])).values()];
   }
   const itemIds = [...new Set(rentals.map(rental => rental.item_id ?? rental.itemId).filter(Boolean))];
   const itemDocs = await Promise.all(itemIds.map(id => db.collection('items').doc(String(id)).get()));
@@ -173,7 +190,7 @@ export async function mobileRentalList(db, actor, rentalId = '') {
       customer_id: rental.customer_id ?? rental.customerId, customer_name: rental.customer_name || rental.customerName,
       status: String(rental.status || '').toUpperCase(),
       start_at: rental.confirmed_rental_at || rental.start_at || null,
-      hold_expires_at: rental.hold_expires_at || null,
+      hold_expires_at: rental.handoff_expires_at || rental.hold_expires_at || null,
       received_at: rental.received_at || null,
       due_at: rental.due_at || rental.dueDate,
       rental_fee: rental.rental_fee ?? rental.rateFee,
@@ -182,5 +199,5 @@ export async function mobileRentalList(db, actor, rentalId = '') {
       can_request_return: String(rental.status).toUpperCase() === 'ACTIVE' && isMobileRental(rental) && rental.latest_return_request_status !== 'PENDING_ADMIN_APPROVAL' && !rental.received_at
     };
   }).sort((a, b) => (asDate(b.created_at || b.start_at)?.getTime() || 0) - (asDate(a.created_at || a.start_at)?.getTime() || 0));
-  return serializeMobile(rentalId ? { rental: result[0] } : { rentals: result });
+  return serializeMobile(rentalId ? { rental: result[0] } : { rentals: result, nextCursor:options.nextCursor||null });
 }

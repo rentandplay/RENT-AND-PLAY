@@ -98,7 +98,7 @@ export function buildMx10PrintJob(rows, settings = {}) {
     parts.push(command(0xa1, new Uint8Array([startDots & 0xff, (startDots >> 8) & 0xff])));
   }
   for (const row of rows) {
-    if (row.length !== PRINTER.width) throw new Error('MX10 print rows must be 384 dots wide.');
+    if (row.length !== PRINTER.width) throw new Error('Printer rows must be 384 dots wide.');
     parts.push(encodeRow(row));
   }
   parts.push(command(0xbd, new Uint8Array([MX10_IMAGE_PRINT_PROFILE.endSpeed])));
@@ -194,7 +194,8 @@ export function normalizeMx10LabelCalibration(calibration = {}, printImage = {})
 async function rasterizeLabel(svg, calibration, printImage = {}) {
   calibration = normalizeMx10LabelCalibration(calibration, printImage);
   const width = PRINTER.width;
-  const height = 30 * PRINTER.dotsPerMm;
+  const height = printImage.receiptHeight ?? 30 * PRINTER.dotsPerMm;
+  if (!Number.isInteger(height) || height < 1 || height > 8192) throw new Error('The print image must be between 1 and 8192 rows.');
   const image = await loadImage(svg, width, height);
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -769,7 +770,7 @@ export function createMx10Printer() {
 
   void restoreSavedDevice();
 
-  async function printLabel(svg, calibration = {}, printImage = {}, settings = {}) {
+  async function printRasterJob(prepareRaster, calibration = {}, settings = {}) {
     if (!connected()) throw new Error('Connect your printer before printing.');
     if (printing || sensorSearching) throw new Error('Wait for the current printer operation to finish.');
     const { paperMode, darkness, startFeedMm, tearFeedMm } = normalizeMx10PrintSettings(settings);
@@ -783,7 +784,7 @@ export function createMx10Printer() {
       if (rxCharacteristic?.properties.notify || rxCharacteristic?.properties.indicate) await refreshPrinterStatus();
       if (paperOut) throw new Error('The printer is out of paper. Reload the label roll before printing.');
       if (headHot) throw new Error(printerWarning);
-      const raster = await rasterizeLabel(svg, calibration, printImage);
+      const raster = await prepareRaster();
       const job = buildMx10PrintJob(raster.rows, { paperMode, darkness, startFeedMm, tearFeedMm });
       await writeBytes(job, sent => {
         const changed = sent !== progress;
@@ -813,13 +814,24 @@ export function createMx10Printer() {
     }
   }
 
+  const printLabel = (svg, calibration = {}, printImage = {}, settings = {}) => printRasterJob(() => rasterizeLabel(svg, calibration, printImage), calibration, settings);
+  const printReceipt = (svg, height, settings = {}) => {
+    if (settings.paperMode && settings.paperMode !== 'continuous') return Promise.reject(new Error('Use a continuous paper roll for rental receipts.'));
+    return printRasterJob(() => rasterizeLabel(svg, {}, { receiptHeight: height }), {}, { ...settings, paperMode: 'continuous' });
+  };
+
   return {
     status,
     connect,
     disconnect,
     printLabel,
+    printReceipt,
     calibrateLabel,
     refreshPrinterStatus,
     subscribe(listener) { listeners.add(listener); listener(status()); return () => listeners.delete(listener); },
   };
 }
+
+let sharedPrinter;
+// QR labels and receipts use one connection and one busy/flow-control state.
+export const getMx10Printer = () => sharedPrinter ??= createMx10Printer();

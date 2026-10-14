@@ -84,7 +84,7 @@ const openMaintenance=records=>records.filter(isOpenMaintenance);
 const stockVersion=units=>createHash('sha256').update(JSON.stringify(units.map(unit=>[String(unit.id),localDateTime(unit.updated_at),String(unit.status||'UNAVAILABLE').toUpperCase(),unit.is_active!==false,unit.condition_status||null,unit.name||'',String(unit.category_id),unit.reserved_rental_id||null,unit.current_rental_id||null]).sort((a,b)=>a[0].localeCompare(b[0])))).digest('hex');
 const mapItem=(item,category,rates,rentals,maintenance)=>{
   const rate=currentRate(rates)||{};
-  const open=openRentals(rentals).length;
+  const open=openRentals(rentals).filter(rental=>!rental.scheduled_start_at||rental.confirmed_rental_at||['PREPARED','OUT_FOR_DELIVERY','DELIVERY_FAILED'].includes(rental.delivery_status)).length;
   const status=String(item.status||'UNAVAILABLE').toUpperCase();
   const maintenanceCount=openMaintenance(maintenance).length;
   const effectiveStatus=item.is_active===false?(status==='RETIRED'?'RETIRED':'INACTIVE'):status==='AVAILABLE'&&(open>0||item.reserved_rental_id)?'RESERVED_PENDING':status==='AVAILABLE'&&(maintenanceCount||!healthyUnit(item))?'UNDER_MAINTENANCE':status;

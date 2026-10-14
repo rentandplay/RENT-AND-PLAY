@@ -1,8 +1,8 @@
-import { createMx10Printer, renderLabelPng, normalizeMx10PrintSettings, normalizeMx10LabelCalibration } from './mx10-printer.js';
+import { getMx10Printer, renderLabelPng, normalizeMx10PrintSettings, normalizeMx10LabelCalibration } from './mx10-printer.js';
 import { createEquipmentQrLabel as qrLabelSvg, QR_LABEL_GEOMETRY as qrLabelGeometry } from './equipment-label.js';
 import { groupInventory, stockMatchesStatus, stockMatchesSearch, inventoryStockCounts } from './inventory-stock.js';
 
-const printer = createMx10Printer();
+const printer = getMx10Printer();
 
 const archiveUnavailableReason = item => {
   if (item.is_active === false) return 'Equipment is already archived.';

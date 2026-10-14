@@ -1,0 +1,28 @@
+{
+  "rental": {
+    "id": "rental_internal",
+    "rental_code": "R-0042",
+    "booking_qr_token": "private-qr-token",
+    "status": "ACTIVE",
+    "customer_name": "Ana Reyes",
+    "customer_phone": "09171234567",
+    "item_name": "Bicycle",
+    "item_code": "EQUIP-017",
+    "fulfillment_mode": "SHOP_HANDOVER",
+    "delivery_location": "Rent & Play, Lakewoods",
+    "confirmed_rental_at": "2026-10-14T02:30:00Z",
+    "due_at": "2026-10-14T03:30:00Z",
+    "rental_fee": 200,
+    "rental_paid_amount": 200,
+    "payment_method": "CASH",
+    "balance_due": 0,
+    "fee_breakdown": {"billed_minutes": 60, "overtime_rate": 200, "overtime_unit_minutes": 60, "grace_minutes": 0}
+  },
+  "expected_text": [
+    "RENT & PLAY", "Lakewoods Subdivision", "Los Banos, Laguna", "RENTAL RECEIPT", "R-0042", "",
+    "Status: ACTIVE", "Customer: Ana Reyes", "Contact: 09171234567", "Equipment: Bicycle", "Unit: EQUIP-017",
+    "Handover: At shop", "Location: Rent & Play, Lakewoods", "Started: 2026-10-14 10:30", "Due: 2026-10-14 11:30", "Duration: 60 min", "",
+    "Rental fee: PHP 200.00", "Payment method: CASH", "Payment received: PHP 200.00", "Balance due: PHP 0.00", "",
+    "Late rate: PHP 200.00 / started 60 min", "Grace: 0 min", "Keep this rental reference.", "Timer stops when staff receives the item.", "Return is subject to inspection. Damage or missing parts may affect final charges."
+  ]
+}

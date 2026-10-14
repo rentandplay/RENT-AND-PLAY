@@ -5,9 +5,11 @@ import { auditFields, stageAudit } from './audit.mjs';
 import { isStaffRole, normalizeRole } from './roles.mjs';
 import { allocateCustomerCode } from './customer-codes.mjs';
 import { validateInstapayQr } from './payment-proof.mjs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { emailError, nameError, passwordError, passwordMatchError, phoneError, validationFailure, createEmailDomainValidator } from './account-validation.mjs';
 import { createAccountMailer } from './account-mail.mjs';
+import { recordPage } from './record-pages.mjs';
+import { OPEN_RENTALS } from './rental-calendar.mjs';
 
 const validateEmailDomain = createEmailDomainValidator();
 const sendAccountCredentials = createAccountMailer();
@@ -35,10 +37,10 @@ export function validateCustomer(input = {}) {
   if (!/^[A-Z0-9][A-Z0-9_-]{1,49}$/.test(customer_code)) fail(400, 'Customer code must use letters, numbers, dashes, or underscores.');
   validationFailure(emailError(input.email || '', false));
   validationFailure(phoneError(phone, false));
-  return { full_name, customer_code, email: email || null, phone: phone || null, address: address || null };
+  return { full_name, search_name:full_name.toLowerCase().replace(/\s+/g,' '), customer_code, email: email || null, phone: phone || null, address: address || null };
 }
 
-export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { ownerUid = '', mobile = false } = {}) {
+export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { ownerUid = '', mobile = false, view = '', filters = {} } = {}) {
   role = normalizeRole(role);
   const names = ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history', 'item_condition_records'];
   const auditCollection = db.collection('audit_logs');
@@ -46,14 +48,36 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   // Mobile staff share the rental and maintenance desks with the web. Keep
   // their complete ticket history while skipping web-only administration logs.
   const mobileCollections = new Set(['customers', 'rentals', 'items', 'maintenance_records']);
+  const kind = view === 'Customers' ? 'customers' : view === 'Maintenance' ? 'maintenance' : ['Rentals','Returns','Transaction History'].includes(view) ? 'rentals' : null;
+  const page = kind ? await recordPage(db,kind,{...filters,status:filters.status || (view==='Rentals'?'OPEN':view==='Returns'?'RETURN_PENDING_INSPECTION':undefined)}) : null;
+  const readCollection = async name => {
+    if (page && name === {customers:'customers',rentals:'rentals',maintenance:'maintenance_records'}[kind]) return {docs:page.records.map(row=>({id:row.id,data:()=>row}))};
+    let query = db.collection(name);
+    if (view) {
+      if (name === 'rentals') {
+        if (view === 'Reports') {
+          const from=filters.from || new Date(now.getTime()-365*86400000).toISOString().slice(0,10);
+          query=query.where('confirmed_rental_at','>=',new Date(Date.parse(from+'T00:00:00+08:00')-31*86400000));
+        } else query=query.where('status','in',OPEN_RENTALS).limit(201);
+      }
+      if (name === 'customers') query=query.limit(50);
+      if (name === 'maintenance_records' && view !== 'Reports') query=query.where('status','in',['OPEN','IN_PROGRESS']).limit(100);
+      if (['item_status_history','item_condition_records','verification_requests'].includes(name)) query=query.limit(100);
+    }
+    return query.get();
+  };
   const [snapshots, auditSnapshot] = await Promise.all([
-    Promise.all(names.map(name => !mobile || mobileCollections.has(name) ? db.collection(name).get() : Promise.resolve({ docs: [] }))),
-    !mobile && isStaffRole(role) ? auditQuery.get() : Promise.resolve({ docs: [] })
+    Promise.all(names.map(name => !mobile || mobileCollections.has(name) ? readCollection(name) : Promise.resolve({ docs: [] }))),
+    !mobile && isStaffRole(role) && (!view || ['Reports','Settings'].includes(view)) ? auditQuery.get() : Promise.resolve({ docs: [] })
   ]);
   const source = Object.fromEntries(names.map((name, index) => [name, rows(snapshots[index])]));
   source.audit_logs = auditSnapshot.docs.map(docData);
   const itemMap = new Map(source.items.map(item => [item.id, item]));
   const customerMap = new Map(source.customers.map(customer => [customer.id, customer]));
+  if(view){
+    const summaries=await Promise.all(source.customers.map(customer=>db.collection('customer_report_summaries').doc(customer.id).get()));
+    source.customers.forEach((customer,index)=>{if(summaries[index].exists)customer.rental_summary=summaries[index].data();});
+  }
   const transactions = source.rentals.map(record => {
     const rawStatus = String(record.status || '').toUpperCase();
     const status = rawStatus === 'PENDING_ESP32_RENT' ? 'PENDING_ADMIN_APPROVAL' : rawStatus === 'ACTIVE' ? 'ACTIVE' : rawStatus === 'COMPLETED' ? 'COMPLETED' : rawStatus;
@@ -89,7 +113,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   const settings = settingsDoc.exists ? settingsDoc.data() : { business_name: 'Rent & Play', location: 'Los Baños, Laguna', currency: 'PHP', timezone: 'Asia/Manila', default_late_grace_hours: 0 };
   let users = [];
   const userProfiles = new Map();
-  if (role === 'OWNER' && !mobile) {
+  if (role === 'OWNER' && !mobile && (!view || view==='Settings')) {
     users = rows(await db.collection('users').get()).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(user => serial({ ...user, role: String(user.id) === String(ownerUid) ? 'OWNER' : normalizeRole(user.role) || user.role }));
     for (const user of users) userProfiles.set(String(user.id), user);
   }
@@ -139,20 +163,53 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
       ? { ...customer, full_name: linkedProfile.full_name || linkedProfile.name || customer.full_name, email: linkedProfile.email || customer.email, phone: linkedProfile.phone || customer.phone }
       : customer;
   });
-  return { customers: customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, refreshedAt: now.toISOString() };
+  return { customers: customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, page_meta:page ? {kind,nextCursor:page.nextCursor,limit:page.limit} : null, refreshedAt: now.toISOString() };
 }
 
 export async function createCustomer(db, actor, input, now = new Date()) {
-  const value = { ...validateCustomer(input), customer_code: await allocateCustomerCode(db, now) };
-  const ref = db.collection('customers').doc(), batch = db.batch();
-  batch.create(ref, { ...value, is_active: true, created_at: now, updated_at: now, created_by: String(actor) });
-  stageAudit(batch, db, actor, 'CUSTOMER_CREATED', 'CUSTOMER', ref.id, { after: { ...value, is_active: true }, now });
-  await batch.commit();
-  return serial({ id: ref.id, ...value, is_active: true, created_at: now, updated_at: now });
+  const value = { ...validateCustomer({ ...input, code: input?.code || 'AUTO' }), customer_code: await allocateCustomerCode(db, now) };
+  validationFailure(phoneError(value.phone));
+  value.phone = normalizeCustomerPhone(value.phone);
+  const key = input.requestKey;
+  if (key != null && !/^[a-f0-9]{32}$/.test(key)) fail(400, 'A valid operation key is required.');
+  const ref = db.collection('customers').doc(key ? `walkin_${key}` : undefined);
+  return serial(await db.runTransaction(async tx => {
+    const existing = await tx.get(ref);
+    if (existing.exists) {
+      const saved = existing.data();
+      if (saved.full_name !== value.full_name || normalizeCustomerPhone(saved.phone) !== value.phone || saved.email !== value.email || saved.address !== value.address) fail(409, 'This operation key belongs to different customer details.');
+      return { id: ref.id, ...saved };
+    }
+    await checkCustomerDuplicate(tx, db, value);
+    const saved = { ...value, search_name:value.full_name.toLowerCase().replace(/\s+/g,' '), is_active: true, auth_uid: null, created_at: now, updated_at: now, created_by: String(actor) };
+    tx.create(ref, saved);
+    stageAudit(tx, db, actor, 'CUSTOMER_CREATED', 'CUSTOMER', ref.id, { after: saved, now });
+    return { id: ref.id, ...saved };
+  }));
+}
+
+const normalizeCustomerPhone = value => {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits ? `0${digits.slice(-10)}` : '';
+};
+async function checkCustomerDuplicate(tx, db, value, exceptId = null) {
+  // A shared contact number is allowed for different people. Match name + phone,
+  // and serialize matching creations so double clicks cannot create two profiles.
+  const identity = `${value.full_name.toLowerCase().replace(/\s+/g, ' ')}:${normalizeCustomerPhone(value.phone)}`;
+  const lock = db.collection('customer_identity_keys').doc(createHash('sha256').update(identity).digest('hex'));
+  await tx.get(lock);
+  const emailLock = value.email ? db.collection('customer_identity_keys').doc(createHash('sha256').update(`email:${value.email}`).digest('hex')) : null;
+  if (emailLock) await tx.get(emailLock);
+  const customers = await tx.get(db.collection('customers'));
+  const duplicate = customers.docs.find(doc => doc.id !== exceptId && (value.email && doc.data().email?.toLowerCase() === value.email || doc.data().full_name?.toLowerCase().replace(/\s+/g, ' ') === value.full_name.toLowerCase().replace(/\s+/g, ' ') && normalizeCustomerPhone(doc.data().phone) === normalizeCustomerPhone(value.phone)));
+  if (duplicate) fail(409, `Customer already exists (${duplicate.data().customer_code || duplicate.id}). Select or restore their existing profile instead.`);
+  // Must be the final read in the calling transaction.
+  tx.set(lock, { updated_at: new Date() }, { merge: true });
+  if (emailLock) tx.set(emailLock, { updated_at: new Date() }, { merge: true });
 }
 
 export async function createMobileCustomerAccount(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailDomain } = {}) {
-  const validated = validateCustomer(input), password = typeof input?.password === 'string' ? input.password : '', confirmPassword = typeof input?.confirmPassword === 'string' ? input.confirmPassword : '';
+  const validated = validateCustomer({ ...input, code: input?.code || 'AUTO' }), password = typeof input?.password === 'string' ? input.password : '', confirmPassword = typeof input?.confirmPassword === 'string' ? input.confirmPassword : '';
   if (!actor) fail(401, 'An authenticated administrator is required.');
   if (!validated.email) fail(400, 'An email address is required for mobile app sign-in.');
   validationFailure(passwordError(password));
@@ -160,20 +217,30 @@ export async function createMobileCustomerAccount(auth, db, actor, input, now = 
   validationFailure(phoneError(validated.phone));
   await validateEmail(validated.email);
   if (!(await db.collection('users').where('email', '==', validated.email).limit(1).get()).empty) fail(409, 'An account with that email already exists. Activate or recover the existing account instead.');
-  if (!(await db.collection('customers').where('email', '==', validated.email).limit(1).get()).empty) fail(409, 'A customer with that email already exists. Edit the existing customer or use another email.');
+  const existingId = input.customerId;
+  if (existingId != null && (typeof existingId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(existingId))) fail(400, 'Choose a valid customer profile.');
+  const existingRef = existingId ? db.collection('customers').doc(existingId) : null;
+  const existing = existingRef ? await existingRef.get() : null;
+  if (existingRef && (!existing.exists || existing.data().is_active === false || existing.data().auth_uid)) fail(409, 'Choose an active customer profile without an app login.');
+  const matchingEmails = await db.collection('customers').where('email', '==', validated.email).get();
+  if (matchingEmails.docs.some(doc => doc.id !== existingId)) fail(409, 'A customer with that email already exists. Edit the existing customer or use another email.');
 
-  const value = { ...validated, customer_code: await allocateCustomerCode(db, now) };
+  const value = { ...validated, phone: normalizeCustomerPhone(validated.phone), customer_code: existing?.data().customer_code || await allocateCustomerCode(db, now) };
   let created;
   try {
-    created = await auth.createUser({ displayName: value.full_name, email: value.email, password, emailVerified: false, disabled: false });
-    const uid = String(created.uid), userRef = db.collection('users').doc(uid), customerRef = db.collection('customers').doc(uid), batch = db.batch();
+    created = await auth.createUser({ ...(existingId ? { uid: existingId } : {}), displayName: value.full_name, email: value.email, password, emailVerified: false, disabled: false });
+    const uid = String(created.uid), userRef = db.collection('users').doc(uid), customerRef = db.collection('customers').doc(uid);
     const profile = { full_name: value.full_name, email: value.email, phone: value.phone, role: 'CUSTOMER', is_active: true, hasAcceptedTerms: false, created_at: now, updated_at: now, last_login_at: null };
-    const customer = { ...value, auth_uid: uid, is_active: true, created_at: now, updated_at: now, created_by: String(actor) };
-    batch.create(userRef, profile);
-    batch.create(customerRef, customer);
-    stageAudit(batch, db, actor, 'USER_CREATED', 'USER', uid, { after: { ...profile, hasAcceptedTerms: false }, now });
-    stageAudit(batch, db, actor, 'CUSTOMER_CREATED', 'CUSTOMER', uid, { after: customer, now });
-    await batch.commit();
+    const customer = { ...value, auth_uid: uid, is_active: true, created_at: existing?.data().created_at || now, updated_at: now, created_by: existing?.data().created_by || String(actor) };
+    await db.runTransaction(async tx => {
+      const current = await tx.get(customerRef);
+      if (existingId && (!current.exists || current.data().is_active === false || current.data().auth_uid)) fail(409, 'This customer profile changed. Refresh before adding app access.');
+      await checkCustomerDuplicate(tx, db, value, existingId);
+      tx.create(userRef, profile);
+      if (existingId) tx.update(customerRef, customer); else tx.create(customerRef, customer);
+      stageAudit(tx, db, actor, 'USER_CREATED', 'USER', uid, { after: { ...profile, hasAcceptedTerms: false }, now });
+      stageAudit(tx, db, actor, existingId ? 'CUSTOMER_APP_LOGIN_CREATED' : 'CUSTOMER_CREATED', 'CUSTOMER', uid, { after: customer, now });
+    });
     return serial({ id: uid, ...customer, role: 'CUSTOMER' });
   } catch (error) {
     if (created?.uid) await auth.deleteUser(String(created.uid)).catch(() => { });
@@ -234,7 +301,7 @@ export async function updateCustomer(db, actor, id, input, now = new Date(), aut
     batch.update(userRef, { full_name: value.full_name, email: value.email, phone: value.phone, updated_at: now });
     stageAudit(batch, db, actor, 'USER_UPDATED', 'USER', authUid, { before: auditFields(userProfile, accountFields), after: { ...auditFields(userProfile, accountFields), full_name: value.full_name, email: value.email, phone: value.phone }, now });
   }
-  batch.update(ref, { ...value, updated_at: now });
+  batch.update(ref, { ...value, search_name:value.full_name.toLowerCase().replace(/\s+/g,' '), updated_at: now });
   stageAudit(batch, db, actor, 'CUSTOMER_UPDATED', 'CUSTOMER', ref.id, { before, after: { ...before, ...value }, now });
   let authUpdated = false;
   try {

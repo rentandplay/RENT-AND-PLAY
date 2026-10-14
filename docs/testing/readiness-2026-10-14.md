@@ -1,5 +1,7 @@
 # Web and Android readiness check — 14 October 2026
 
+The later [walk-in flow verification](walk-in-2026-10-14.md) adds staff-assisted rentals. [Bluetooth receipt verification](bluetooth-receipt-2026-10-14.md) covers receipt printing. [The latest system audit](system-audit-2026-10-14.md) reports current test totals, fixes and Android build/device status. Device-install evidence below describes the earlier build tested that day.
+
 The current rental flow uses the shared backend without ESP32. The local backend was restarted with `ENABLE_ESP32=false`. Terminal polling and confirmation return HTTP 409 with a standby message. Firmware, device contracts, terminal history and isolated hardware tests remain available for the final project phase.
 
 ## Audit gaps resolved

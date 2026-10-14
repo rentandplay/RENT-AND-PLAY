@@ -1,4 +1,4 @@
-export const pageRoutes = Object.freeze({ Dashboard: '/', Inventory: '/equipment', Customers: '/customers', 'Rates & Fees': '/rates', Rentals: '/rentals', Returns: '/returns', 'Transaction History': '/transactions', Maintenance: '/maintenance', 'ESP32 terminal': '/verification', Reports: '/reports', Settings: '/settings', Profile: '/profile' });
+export const pageRoutes = Object.freeze({ Dashboard: '/', Inventory: '/equipment', Customers: '/customers', 'Rates & Fees': '/rates', Rentals: '/rentals', Returns: '/returns', 'Transaction History': '/transactions', Maintenance: '/maintenance', 'ESP32 terminal': '/verification', Reports: '/reports', Settings: '/settings', Payments: '/payments', Profile: '/profile' });
 export const routePages = Object.fromEntries(Object.entries(pageRoutes).map(([page, route]) => [route, page]));
 const reportSectionRoutes = Object.freeze({ '/reports': 'performance', '/reports/equipment': 'performance', '/reports/operations': 'performance', '/reports/forecast': 'forecast', '/reports/recommendations': 'recommendations', '/reports/audit': 'performance' });
 const reportSectionPaths = Object.freeze({ performance: '/reports', forecast: '/reports/forecast', recommendations: '/reports/recommendations' });
@@ -33,6 +33,7 @@ export const pageInfo = Object.freeze({
   Maintenance: ['Keep your collection ready', 'Track inspections and repairs, and return serviced equipment to the collection.', 'settings'],
   'ESP32 terminal': ['Hardware on standby', '', 'chip'],
   Reports: ['See how your business is doing', 'Explore rental performance, equipment use, forecasts, and practical next steps.', 'chart'],
+  Payments: ['Payments & expenses', 'Follow cash and QR receipts, refunds, expenses and daily cash totals.', 'money'],
   Settings: ['Make this workspace yours', 'Manage business details, appearance, and your workspace preferences.', 'settings'],
   Profile: ['Your workspace account', 'Keep your name and sign-in details up to date.', 'users']
 });

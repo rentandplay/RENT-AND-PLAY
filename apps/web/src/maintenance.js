@@ -36,7 +36,7 @@ export function createMaintenanceUI(h) {
   function bind(root = document) {
     root.querySelector('[data-maintenance-report]')?.addEventListener('click', () => reportForm());
     root.querySelectorAll('[data-maintenance-open]').forEach(button => button.onclick = () => details(button.dataset.maintenanceOpen));
-    root.querySelectorAll('[data-maintenance-scope]').forEach(button => button.onclick = () => { scope = button.dataset.maintenanceScope; stageFilter = ''; h.resetPage?.(); h.redraw(); });
+    root.querySelectorAll('[data-maintenance-scope]').forEach(button => button.onclick = () => { scope = button.dataset.maintenanceScope; h.onRecordScope?.({open:'OPEN',history:'CLOSED',all:'ALL'}[scope]); stageFilter = ''; h.resetPage?.(); h.redraw(); });
     root.querySelectorAll('[data-maintenance-filter]').forEach(select => select.onchange = () => { if (select.dataset.maintenanceFilter === 'stage') stageFilter = select.value; else priorityFilter = select.value; h.resetPage?.(); h.redraw(); });
   }
   async function loadStaff() {
@@ -152,7 +152,7 @@ export function createMaintenanceUI(h) {
       });
     } catch (error) { if (current()) showError(error); }
   }
-  return { render, bind, details, reportForm, reset: () => { scope = 'open'; stageFilter = ''; priorityFilter = ''; staff = []; staffLoaded = false; staffLoading = null; staffVersion++; requestVersion++; } };
+  return { render, bind, details, reportForm, setStatus:value=>{scope=['OPEN','IN_PROGRESS'].includes(value)?'open':['CLOSED','COMPLETED','RETIRED'].includes(value)?'history':'all';}, reset: () => { scope = 'open'; stageFilter = ''; priorityFilter = ''; staff = []; staffLoaded = false; staffLoading = null; staffVersion++; requestVersion++; } };
 }
 
 async function preparePhotos(files) {

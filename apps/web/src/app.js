@@ -47,7 +47,7 @@ const brand = `<img src="/public/logo.png" alt="Rent and Play logo"/><span>rent<
 const sportArt = `<svg class="sport-art" viewBox="0 0 320 230" aria-hidden="true"><g fill="none" stroke="#efbe8b"><circle cx="188" cy="106" r="100"/><circle cx="188" cy="106" r="80"/><path d="M50 210 280 12M94 230 320 34"/></g><g transform="rotate(-18 187 100)"><circle cx="190" cy="95" r="66" fill="#f99235" stroke="#b7561b" stroke-width="3"/><path d="M124 95h132M190 29v132M144 47c55 10 64 86 9 103M227 41c-53 23-54 87-6 112" stroke="#a74918" stroke-width="3" fill="none"/></g><g transform="rotate(21 92 166)"><rect x="39" y="127" width="109" height="67" rx="29" fill="#223957"/><path d="M62 148v23M50 159h24" stroke="#fff" stroke-width="5"/><circle cx="122" cy="153" r="5" fill="#fb9b50"/><circle cx="112" cy="166" r="5" fill="#91b7aa"/></g><g transform="rotate(14 263 166)"><rect x="236" y="136" width="54" height="54" rx="10" fill="#fff" stroke="#ddc6b0"/><g fill="#203750"><circle cx="249" cy="149" r="3"/><circle cx="277" cy="149" r="3"/><circle cx="263" cy="163" r="3"/><circle cx="249" cy="177" r="3"/><circle cx="277" cy="177" r="3"/></g></g></svg>`;
 const navGroups = [
   { id: 'management', label: 'Management', emoji: '📦', items: [['Equipment', 'Inventory'], ['Customers', 'Customers'], ['Rates & Fees', 'Rates & Fees']] },
-  { id: 'transactions', label: 'Transactions', emoji: '🔄', items: [['Rentals', 'Rentals'], ['Returns', 'Returns'], ['Rental History', 'Transaction History']] },
+  { id: 'transactions', label: 'Transactions', emoji: '🔄', items: [['Rentals', 'Rentals'], ['Returns', 'Returns'], ['Rental History', 'Transaction History'], ['Payments & expenses', 'Payments']] },
   { id: 'operations', label: 'Operations', emoji: '🔧', items: [['Maintenance', 'Maintenance'], ['ESP32 / Verification', 'ESP32 terminal']] },
   { id: 'analytics', label: 'Analytics', emoji: '📊', items: [['Performance', 'Reports', 'performance'], ['Forecasting', 'Reports', 'forecast'], ['Recommendations', 'Reports', 'recommendations']] }
 ];
@@ -57,7 +57,7 @@ try {
   for (const group of navGroups) if (typeof savedNavGroups[group.id] === 'boolean') navGroupExpanded[group.id] = savedNavGroups[group.id];
 } catch { }
 const pageLabels = { Inventory: 'Equipment', 'Transaction History': 'Rental History', 'ESP32 terminal': 'ESP32 / Verification' };
-const workspacePages = new Set(['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings', 'ESP32 terminal']);
+const workspacePages = new Set(['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Payments', 'Settings', 'ESP32 terminal']);
 const dashboardSnapshot = value => value ? JSON.stringify(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'refreshedAt'))) : '';
 let user = null, data = null, page = pageForPath(location.pathname), filter = 'All rentals', query = '', period = 'This week', category = '', connectionError = '', toastTimer, refreshing = false, manualRefreshPending = false, rentalPage = 0, verificationPage = 0;
 let rentalEventSource = null, rentalEventAccount = null, rentalEventsDisabled = false, rentalEventSyncTimer = null, rentalEventSyncing = false, rentalEventSyncPending = false;
@@ -607,12 +607,12 @@ function bind() {
   const openRental = id => {
     const r = data.rentals.find(r => String(r.id) === String(id));
     if (!r) return;
-    showModal('Rental details', `<div class="detail-header"><div><h3>${escape(r.item_name)}</h3><p>${escape(r.rental_code)}</p></div>${badge(r.displayStatus)}</div><dl><dt>Customer</dt><dd>${escape(r.customer)}</dd><dt>Due</dt><dd>${escape(formatDate(r.due_at))}</dd><dt>Rental fee</dt><dd>${money(r.rental_fee)}</dd><dt>Rental confirmed</dt><dd>${escape(formatDate(r.confirmed_rental_at))}</dd></dl><div class="info-box">Request a return from the Returns page or the mobile QR workflow, record the inspection, then confirm it at the physical terminal.</div>`);
+    showModal('Rental details', `<div class="detail-header"><div><h3>${escape(r.item_name)}</h3><p>${escape(r.rental_code)}</p></div>${badge(r.displayStatus)}</div><dl><dt>Customer</dt><dd>${escape(r.customer)}</dd><dt>Due</dt><dd>${escape(formatDate(r.due_at))}</dd><dt>Rental fee</dt><dd>${money(r.rental_fee)}</dd><dt>Rental confirmed</dt><dd>${escape(formatDate(r.confirmed_rental_at))}</dd></dl><div class="info-box">Use Returns to record physical receipt and inspect the unit. Physical receipt stops the timer; completing inspection updates availability or maintenance.</div>`);
   };
   document.querySelectorAll('[data-rental]').forEach(el => el.onclick = () => openRental(el.dataset.rental));
   bindRecordLinks(app, { 'dashboard-rental': openRental });
   const workflow = document.querySelector('#rental-workflow');
-  if (workflow) workflow.onclick = () => showModal('Rental workflow', '<p>Prepare a rental from the Rentals page or scan an equipment QR in the mobile app. Record the release inspection, then confirm the handoff at the physical counter terminal.</p><div class="info-box">Check the equipment and transaction details before pressing the physical confirmation button.</div>');
+  if (workflow) workflow.onclick = () => showModal('Rental workflow', '<p>Review and approve the request, then scan the assigned equipment QR to prepare the unit. At handover, verify the customer rental QR, identity, payment, condition and accessories before confirming release.</p><div class="info-box">The timer starts at physical handover and stops when staff records physical receipt. Inspect returned equipment before making it available again.</div>');
   const select = document.querySelector('#period'); if (select) select.onchange = e => { period = e.target.value; render(); };
   const exp = document.querySelector('#export'); if (exp) exp.onclick = exportCsv;
   const profileEdit = document.querySelector('#profile-edit'); if (profileEdit) profileEdit.onclick = () => { profileEditing = true; render(); document.querySelector('#profile-form input')?.focus(); };

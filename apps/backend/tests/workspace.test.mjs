@@ -4,7 +4,7 @@ import { validateCustomer, loadWorkspace, createWorkspaceUser, updateCustomer } 
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
 test('customer validation normalizes safe directory fields', () => {
-  assert.deepEqual(validateCustomer({ fullName: '  Maria Santos ', code: ' cust-001 ', email: 'MARIA@EXAMPLE.COM', phone: ' 09171234567 ', address: ' Los Baños ' }), { full_name: 'Maria Santos', customer_code: 'CUST-001', email: 'maria@example.com', phone: '09171234567', address: 'Los Baños' });
+  assert.deepEqual(validateCustomer({ fullName: '  Maria Santos ', code: ' cust-001 ', email: 'MARIA@EXAMPLE.COM', phone: ' 09171234567 ', address: ' Los Baños ' }), { full_name: 'Maria Santos', search_name: 'maria santos', customer_code: 'CUST-001', email: 'maria@example.com', phone: '09171234567', address: 'Los Baños' });
 });
 
 test('mobile staff workspace includes exact-unit open and closed maintenance history', async () => {

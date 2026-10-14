@@ -43,6 +43,7 @@ export function createReadCache(db, { ttlMs = 30000, maxEntries = 512, now = Dat
     where: (...args) => query(name, reference.where(...args), [...clauses, ['where', ...args]]),
     orderBy: (...args) => query(name, reference.orderBy(...args), [...clauses, ['orderBy', ...args]]),
     limit: (...args) => query(name, reference.limit(...args), [...clauses, ['limit', ...args]]),
+    startAfter: snapshot => query(name,reference.startAfter(snapshot),[...clauses,['startAfter',snapshot.id]]),
     doc: id => ({ get: () => cached(name, [['doc', String(id)]], () => reference.doc(id).get()) })
   });
   return {

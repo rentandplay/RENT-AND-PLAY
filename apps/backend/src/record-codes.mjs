@@ -2,6 +2,7 @@
 // tokens. Every client receives the same reference; existing links stay valid.
 export const recordTypes = Object.freeze({
   rentals: { field: 'rental_code', prefix: 'R', digits: 4, counter: 'rental_codes_R' },
+  payment_ledger: { field: 'ledger_code', prefix: 'PAY', digits: 5, counter: 'payment_codes_PAY' },
   verification_requests: { field: 'request_code', prefix: 'V', digits: 4 },
   maintenance_records: { field: 'maintenance_code', prefix: 'M', digits: 4 },
   audit_logs: { field: 'audit_code', prefix: 'A', digits: 4 },

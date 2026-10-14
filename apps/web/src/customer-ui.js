@@ -23,8 +23,9 @@ export function customerActivity(customers = [], transactions = [], now = new Da
     const confirmed = history.filter(row => row.confirmed_rental_at || row.status === 'ACTIVE' || returned(row));
     const active = history.filter(row => row.status === 'ACTIVE' && !returned(row));
     const overdue = active.filter(row => { const due = customerDate(row.due_at); return due && due < now; });
-    return { customer, history, total: confirmed.length, active: active.length, overdue: overdue.length,
-      returned: history.filter(returned).length, lastActivity: history[0]?.confirmed_rental_at || history[0]?.created_at || null };
+    const summary=customer.rental_summary;
+    return { customer, history, total: summary?.rentals ?? confirmed.length, active: summary?.active ?? active.length, overdue: overdue.length,
+      returned: summary?.completed ?? history.filter(returned).length, lastActivity: history[0]?.confirmed_rental_at || history[0]?.created_at || null };
   });
 }
 
@@ -34,7 +35,7 @@ export function filterCustomerRows(rows, { search = '', status = 'all', activity
     const c = row.customer;
     if (query && ![c.full_name, c.customer_code, c.email, c.phone, c.address].some(value => String(value || '').toLowerCase().includes(query))) return false;
     if (status === 'active' && c.is_active === false || status === 'archived' && c.is_active !== false) return false;
-    if (activity === 'out' && !row.active || activity === 'overdue' && !row.overdue || activity === 'new' && row.history.length) return false;
+    if (activity === 'out' && !row.active || activity === 'overdue' && !row.overdue || activity === 'new' && (row.total || row.history.length)) return false;
     return true;
   });
   const byName = (a, b) => String(a.customer.full_name || '').localeCompare(String(b.customer.full_name || ''));
@@ -64,7 +65,8 @@ export function customersCsv(rows) {
 export function createCustomerUI(h) {
   const { api, escape: e, showModal, modal, toast, formatDate, icon, model, refresh, transactionDetails, confirmAction, confirmSubmit } = h;
   const state = { status: 'all', activity: 'all', sort: 'name' };
-  let currentSearch = '', redraw = () => {}, helpers;
+  let currentSearch = '', redraw = () => {}, helpers, detailVersion=0;
+  const historyPages=new Map();
   const rows = () => customerActivity(model()?.customers, model()?.transactions);
   const initials = name => String(name || '?').trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
   const avatar = customer => {
@@ -99,17 +101,17 @@ export function createCustomerUI(h) {
   }
 
   function form(customer = {}) {
-    const isNew = !customer.id, mobileAccount = Boolean(customer.auth_uid), emailRequired = isNew || mobileAccount;
+    const isNew = !customer.id, mobileAccount = Boolean(customer.auth_uid), emailRequired = mobileAccount;
     const code = /^CUST-\d+$/i.test(customer.customer_code || '')
       ? customer.customer_code
       : nextCustomerCode((model()?.customers || []).filter(row => String(row.id) !== String(customer.id)));
     const intro = isNew
-      ? 'Create a customer profile and a mobile-app login. They can request rentals after signing in.'
+      ? 'Create a walk-in customer profile. App login is optional; check for an existing name and contact number first.'
       : mobileAccount ? 'Update customer details. Changes to the email address also update their mobile-app login.' : 'Keep their details up to date for a smoother rental.';
-    const loginSection = isNew
-      ? `<section class="customer-form-section"><h3><span>03</span> Mobile app login <small>Required</small></h3><div class="form-grid">${passwordField('customer-password', 'password', 'Password', true, 'At least 8 characters, one capital letter, and one number. The customer will use this with their email to sign in.')}${passwordField('customer-confirm-password', 'confirmPassword', 'Confirm password', true, 'Enter the same password again.')}</div></section>`
+    const loginSection = !mobileAccount
+      ? `<section class="customer-form-section"><h3><span>03</span> Mobile app login <small>Optional</small></h3><label class="pricing-check"><input type="checkbox" name="createAppLogin"/><span>Create mobile app access for this customer</span></label><p>A walk-in customer can rent without an email, password, or app. Adding app access keeps the same customer code and rental history.</p><div class="form-grid" data-new-login hidden>${passwordField('customer-password', 'password', 'Password', true, 'At least 8 characters, one capital letter, and one number. The customer will use this with their email to sign in.')}${passwordField('customer-confirm-password', 'confirmPassword', 'Confirm password', true, 'Enter the same password again.')}</div></section>`
       : mobileAccount ? `<section class="customer-form-section"><h3><span>03</span> Mobile app login <small>Optional change</small></h3><p>Set a new password only when needed. The current password cannot be viewed here.</p><div class="form-grid">${passwordField('customer-new-password', '', 'New password', false, 'At least 8 characters, one capital letter, and one number. Leave both fields blank to keep the current password.')}${passwordField('customer-confirm-new-password', '', 'Confirm new password', false, 'Enter the new password again.')}</div><div class="customer-password-actions"><button type="button" class="secondary" data-change-customer-password disabled>Change password</button></div><p class="customer-password-error form-error" role="alert"></p></section>` : '';
-    showModal(customer.id ? 'Edit customer' : 'Add customer', `<form id="customer-form" class="admin-form customer-form"><p class="customer-form-intro">${intro}</p><section class="customer-form-section"><h3><span>01</span> Customer information</h3><div class="form-grid"><label>Full name <span class="customer-required">Required</span><input name="fullName" value="${e(customer.full_name || '')}" placeholder="e.g. Juan Dela Cruz" autocomplete="name" minlength="2" maxlength="150" required/></label><label>Customer code <span class="customer-required">Required</span><input name="code" value="${e(code)}" pattern="CUST-[0-9]{3,}" minlength="8" maxlength="50" readonly required/><small>Automatically assigned in the standard CUST-### format.</small></label></div></section><section class="customer-form-section"><h3><span>02</span> Contact details <small>${emailRequired ? 'Email required for app login' : 'Optional'}</small></h3><div class="form-grid"><label>Email address ${emailRequired ? '<span class="customer-required">Required</span>' : ''}<input type="email" name="email" value="${e(customer.email || '')}" placeholder="name@example.com" autocomplete="email" maxlength="254" ${emailRequired ? 'required' : ''}/><small>${emailRequired ? 'This is the customer’s mobile-app sign-in.' : 'Add an email if this customer will need mobile-app access.'}</small></label><label>Phone number<input type="tel" name="phone" value="${e(customer.phone || '')}" placeholder="e.g. 0917 123 4567" autocomplete="tel" maxlength="40" pattern="[+]?[0-9() .-]{7,24}" ${isNew ? 'required' : ''} title="Enter a Philippine mobile number."/></label></div><label>Address<textarea name="address" placeholder="Street, barangay, city / municipality" autocomplete="street-address" maxlength="500" rows="3">${e(customer.address || '')}</textarea></label><p>${isNew ? 'A Philippine mobile number is required. Address is optional.' : 'Phone number and address are optional.'}</p></section>${loginSection}<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${customer.id ? 'Save changes' : 'Create customer account'}</button></div></form>`);
+    showModal(customer.id ? 'Edit customer' : 'Add customer', `<form id="customer-form" class="admin-form customer-form"><p class="customer-form-intro">${intro}</p><section class="customer-form-section"><h3><span>01</span> Customer information</h3><div class="form-grid"><label>Full name <span class="customer-required">Required</span><input name="fullName" value="${e(customer.full_name || '')}" placeholder="e.g. Juan Dela Cruz" autocomplete="name" minlength="2" maxlength="150" required/></label><label>Customer code <span class="customer-required">Required</span><input name="code" value="${e(code)}" pattern="CUST-[0-9]{3,}" minlength="8" maxlength="50" readonly required/><small>Automatically assigned in the standard CUST-### format.</small></label></div></section><section class="customer-form-section"><h3><span>02</span> Contact details <small data-contact-requirements>${emailRequired ? 'Email required for app login' : isNew ? 'Phone required' : 'Email and address optional'}</small></h3><div class="form-grid"><label>Email address ${emailRequired ? '<span class="customer-required">Required</span>' : ''}<input type="email" name="email" value="${e(customer.email || '')}" placeholder="name@example.com" autocomplete="email" maxlength="254" ${emailRequired ? 'required' : ''}/><small>${emailRequired ? 'This is the customer’s mobile-app sign-in.' : 'Add an email if this customer will need mobile-app access.'}</small></label><label>Phone number<input type="tel" name="phone" value="${e(customer.phone || '')}" placeholder="e.g. 0917 123 4567" autocomplete="tel" maxlength="40" pattern="[+]?[0-9() .-]{7,24}" ${isNew ? 'required' : ''} title="Enter a Philippine mobile number."/></label></div><label>Address<textarea name="address" placeholder="Street, barangay, city / municipality" autocomplete="street-address" maxlength="500" rows="3">${e(customer.address || '')}</textarea></label><p>${isNew ? 'A Philippine mobile number is required. Address is optional.' : 'Phone number and address are optional.'}</p></section>${loginSection}<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${customer.id ? 'Save changes' : 'Create customer account'}</button></div></form>`);
     const formElement = modal.querySelector('form');
     const clearPasswordFields = () => {
       formElement.querySelectorAll('[data-sensitive-password]').forEach(input => { input.value = ''; input.type = 'password'; });
@@ -125,10 +127,25 @@ export function createCustomerUI(h) {
     const passwordInput = formElement.querySelector('#customer-password'), confirmPasswordInput = formElement.querySelector('#customer-confirm-password');
     const newPasswordInput = formElement.querySelector('#customer-new-password'), confirmNewPasswordInput = formElement.querySelector('#customer-confirm-new-password'), changePasswordButton = formElement.querySelector('[data-change-customer-password]');
     const validation = bindAccountValidation(formElement, {
-      fullName: nameError, email: value => emailError(value, emailRequired), phone: value => phoneError(value, isNew),
+      fullName: nameError, email: value => emailError(value, mobileAccount || Boolean(formElement.elements.createAppLogin?.checked)), phone: value => phoneError(value, isNew || Boolean(formElement.elements.createAppLogin?.checked)),
       ...(passwordInput ? { password: passwordError, confirmPassword: value => passwordMatchError(passwordInput.value, value) } : {}),
       ...(newPasswordInput ? { 'customer-new-password': value => value || confirmNewPasswordInput.value ? passwordError(value) : '', 'customer-confirm-new-password': value => value || newPasswordInput.value ? passwordMatchError(newPasswordInput.value, value) : '' } : {})
     });
+    const createLogin = formElement.elements.createAppLogin;
+    if (createLogin) {
+      const toggleLogin = () => {
+        formElement.querySelector('[data-new-login]').hidden = !createLogin.checked;
+        for (const input of [passwordInput, confirmPasswordInput]) { input.disabled = !createLogin.checked; input.required = createLogin.checked; if (!createLogin.checked) input.value = ''; }
+        formElement.elements.email.required = createLogin.checked;
+        formElement.querySelector('[data-contact-requirements]').textContent = createLogin.checked ? 'Email and phone required for app login' : isNew ? 'Phone required' : 'Email and address optional';
+        formElement.elements.phone.required = isNew || createLogin.checked;
+        formElement.querySelector('[type="submit"]').textContent = createLogin.checked ? (isNew ? 'Create profile and app login' : 'Add app login') : (isNew ? 'Create customer profile' : 'Save changes');
+        validation.update();
+      };
+      createLogin.onchange = toggleLogin;
+      toggleLogin();
+    }
+    const requestKey = globalThis.crypto.randomUUID().replaceAll('-', '');
     if (newPasswordInput && confirmNewPasswordInput && changePasswordButton) {
       const passwordError = formElement.querySelector('.customer-password-error');
       const syncPasswordValidity = () => {
@@ -160,14 +177,15 @@ export function createCustomerUI(h) {
         }
       }, true);
     }
-    confirmSubmit(formElement, { title: customer.id ? 'Save customer changes?' : 'Create this customer account?', description: customer.id ? 'The updated contact details and mobile sign-in email will be saved.' : 'This creates a mobile sign-in account and adds the customer to the directory. Share their password with them securely.', confirmLabel: customer.id ? 'Yes, save changes' : 'Yes, create account' }, async () => {
+    confirmSubmit(formElement, { title: customer.id ? 'Save customer changes?' : 'Save this customer profile?', description: customer.id ? 'The updated contact details and mobile sign-in email will be saved.' : 'This adds a customer profile. If app access is selected, an email sign-in is also created. Share the password with the customer securely.', confirmLabel: customer.id ? 'Yes, save changes' : 'Yes, create account' }, async () => {
       const button = formElement.querySelector('[type="submit"]'), error = formElement.querySelector('.form-error');
       button.disabled = true; error.textContent = '';
       try {
-        const endpoint = customer.id ? `/customers/${encodeURIComponent(customer.id)}` : '/customer-accounts';
-        await api(endpoint, { method: customer.id ? 'PATCH' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(formElement))) });
+        const withLogin = Boolean(createLogin?.checked);
+        const endpoint = withLogin ? '/customer-accounts' : customer.id ? `/customers/${encodeURIComponent(customer.id)}` : '/customers';
+        await api(endpoint, { method: customer.id && !withLogin ? 'PATCH' : 'POST', body: JSON.stringify({ ...Object.fromEntries(new FormData(formElement)), requestKey, ...(withLogin && customer.id ? { customerId: customer.id } : {}) }) });
       } catch (problem) { error.textContent = problem.message; button.disabled = false; return; }
-      modal.close(); toast(customer.id ? 'Customer updated.' : 'Mobile customer account created.');
+      modal.close(); toast(createLogin?.checked ? 'Customer profile and mobile app access saved.' : customer.id ? 'Customer updated.' : 'Walk-in customer profile created.');
       try { await refresh(); } catch { toast('Customer saved. Select Refresh to update the directory.'); }
       redraw();
     });
@@ -210,15 +228,25 @@ export function createCustomerUI(h) {
     } finally { button.disabled = false; }
   }
 
-  function details(id, historyPage = 0) {
+  async function details(id, historyPage = 0) {
     const row = rows().find(item => String(item.customer.id) === String(id));
     if (!row) return;
-    const c = row.customer, pageSize = 5, pageCount = Math.max(1, Math.ceil(row.history.length / pageSize));
-    historyPage = Math.max(0, Math.min(historyPage, pageCount - 1));
-    const history = row.history.slice(historyPage * pageSize, (historyPage + 1) * pageSize);
+    const c=row.customer, pageSize=25, version=++detailVersion;
+    let state=historyPages.get(String(id));
+    if(!state||historyPage===0){state={cursor:'',previous:[],page:0,next:null};historyPages.set(String(id),state);}
+    else if(historyPage>state.page && state.next){state.previous.push(state.cursor);state.cursor=state.next;state.page++;}
+    else if(historyPage<state.page){state.cursor=state.previous.pop()||'';state.page--;}
+    showModal('Customer profile','<p role="status" data-customer-history-loading>Loading customer rental history…</p>');
+    const marker=modal.querySelector('[data-customer-history-loading]');
+    let page;
+    try{page=await api('/records/rentals?'+new URLSearchParams({customerId:String(id),limit:'25',...(state.cursor?{cursor:state.cursor}:{})}));}
+    catch(problem){if(version===detailVersion&&modal.open&&marker.isConnected)showModal('Customer profile',`<p class="form-error" role="alert">${e(problem.message)}</p>`);return;}
+    if(version!==detailVersion || !modal.open || !marker.isConnected)return;
+    state.next=page.nextCursor;historyPage=state.page;
+    const history=page.records;row.history=history;
     const statusLabel = rental => rental.status === 'ACTIVE' && !rental.confirmed_return_at && customerDate(rental.due_at) && customerDate(rental.due_at) < new Date() ? 'Overdue' : rental.status === 'COMPLETED' || rental.confirmed_return_at ? 'Returned' : rental.status === 'PENDING_ADMIN_APPROVAL' ? 'Pending admin review' : rental.status === 'PENDING_VERIFICATION' ? 'Pending verification' : rental.status === 'CANCELLED' ? 'Cancelled' : String(rental.status || 'Unknown').replaceAll('_', ' ');
     const historyHtml = history.length ? helpers.table(['EQUIPMENT / RENTAL', 'RENTED', 'DUE / RETURNED', 'STATUS', '<span class="customer-sr-only">Actions</span>'], history.map(rental => `<tr ${recordAttrs('transaction', rental.id, recordCode(rental))}><td><strong>${e(rental.item_name || 'Unknown equipment')}</strong><small>${e(recordCode(rental))}</small></td><td>${e(shortDate(rental.confirmed_rental_at || rental.created_at))}<small>${rental.confirmed_rental_at ? 'Confirmed rental' : 'Request created'}</small></td><td>${e(shortDate(rental.confirmed_return_at || rental.due_at))}<small>${rental.confirmed_return_at ? 'Returned' : 'Due date'}</small></td><td>${helpers.status(statusLabel(rental))}</td><td><button type="button" class="customer-view" data-customer-rental="${e(rental.id)}" aria-label="View rental ${e(recordCode(rental))}">Details ${icon('arrow')}</button></td></tr>`).join('')) : `<div class="customer-history-empty">${icon('box')}<h3>No rental history yet</h3><p>Their rental records will appear here after their first request.</p></div>`;
-     showModal('Customer profile', `<div class="customer-profile"><header class="customer-profile-heading">${avatar(c)}<div><span class="eyebrow">${e(c.customer_code)}</span><h3>${e(c.full_name)}</h3><p>${c.created_at ? `Customer since ${e(shortDate(c.created_at))}` : 'Customer record'}</p></div>${badge(c)}</header><dl class="customer-profile-contact"><div><dt>Email address</dt><dd>${e(c.email || 'Not provided')}</dd></div><div><dt>Phone number</dt><dd>${e(c.phone || 'Not provided')}</dd></div><div><dt>Address</dt><dd>${e(c.address || 'Not provided')}</dd></div></dl><section class="customer-profile-metrics" aria-label="Customer rental overview"><div><strong>${row.total}</strong><span>Confirmed rentals</span></div><div><strong>${row.active}</strong><span>Equipment out</span></div><div><strong>${row.returned}</strong><span>Returned</span></div><div class="${row.overdue ? 'customer-overdue-text' : ''}"><strong>${row.overdue}</strong><span>Overdue</span></div></section><div class="customer-profile-actions"><button type="button" class="secondary" data-profile-edit>Edit customer</button><button type="button" class="text-button" data-profile-toggle>${c.is_active === false ? 'Restore customer' : 'Archive customer'}</button>${c.is_active === false ? '<button type="button" class="customer-delete" data-profile-delete>Delete permanently</button>' : ''}</div><section class="customer-profile-history"><div class="customer-history-heading"><h3>Rental history <span>${row.history.length}</span></h3><p>Latest activity first · Philippine time</p></div>${historyHtml}${row.history.length ? `<div class="module-pagination"><span>${historyPage * pageSize + 1}–${Math.min((historyPage + 1) * pageSize, row.history.length)} of ${row.history.length} records</span><div><button type="button" class="secondary" data-history-prev ${historyPage ? '' : 'disabled'}>← Previous</button><button type="button" class="secondary" data-history-next ${historyPage + 1 < pageCount ? '' : 'disabled'}>Next →</button></div></div>` : ''}</section><p class="customer-profile-error form-error" role="alert"></p></div>`);
+     showModal('Customer profile', `<div class="customer-profile"><header class="customer-profile-heading">${avatar(c)}<div><span class="eyebrow">${e(c.customer_code)}</span><h3>${e(c.full_name)}</h3><p>${c.created_at ? `Customer since ${e(shortDate(c.created_at))}` : 'Customer record'}</p></div>${badge(c)}</header><dl class="customer-profile-contact"><div><dt>Email address</dt><dd>${e(c.email || 'Not provided')}</dd></div><div><dt>Phone number</dt><dd>${e(c.phone || 'Not provided')}</dd></div><div><dt>Address</dt><dd>${e(c.address || 'Not provided')}</dd></div></dl><section class="customer-profile-metrics" aria-label="Customer rental overview"><div><strong>${row.total}</strong><span>Confirmed rentals</span></div><div><strong>${row.active}</strong><span>Equipment out</span></div><div><strong>${row.returned}</strong><span>Returned</span></div><div class="${row.overdue ? 'customer-overdue-text' : ''}"><strong>${row.overdue}</strong><span>Overdue</span></div></section><div class="customer-profile-actions"><button type="button" class="secondary" data-profile-edit>Edit customer</button><button type="button" class="text-button" data-profile-toggle>${c.is_active === false ? 'Restore customer' : 'Archive customer'}</button>${c.is_active === false ? '<button type="button" class="customer-delete" data-profile-delete>Delete permanently</button>' : ''}</div><section class="customer-profile-history"><div class="customer-history-heading"><h3>Rental history <span>${history.length} loaded</span></h3><p>Stored rental records · Philippine time</p></div>${historyHtml}${row.history.length ? `<div class="module-pagination"><span>${historyPage * pageSize + 1}–${historyPage * pageSize + history.length} · 25 records per page</span><div><button type="button" class="secondary" data-history-prev ${historyPage ? '' : 'disabled'}>← Previous</button><button type="button" class="secondary" data-history-next ${state.next ? '' : 'disabled'}>Next →</button></div></div>` : ''}</section><p class="customer-profile-error form-error" role="alert"></p></div>`);
     modal.querySelector('[data-profile-edit]').onclick = () => form(c);
     modal.querySelector('[data-profile-toggle]').onclick = event => changeStatus(c, row, event.currentTarget, true);
     modal.querySelector('[data-profile-delete]')?.addEventListener('click', event => deleteCustomer(c, event.currentTarget, true));
@@ -247,7 +275,7 @@ export function createCustomerUI(h) {
     document.querySelectorAll('[data-customer-delete]').forEach(button => button.onclick = () => { const row = rows().find(item => String(item.customer.id) === button.dataset.customerDelete); if (row) void deleteCustomer(row.customer, button); });
     document.querySelectorAll('[data-customer-detail]').forEach(button => button.onclick = () => details(button.dataset.customerDetail));
     bindRecordLinks(document, { customer: id => details(id) });
-    document.querySelectorAll('[data-customer-filter]').forEach(button => button.onclick = () => { state.status = button.dataset.customerFilter; update(); document.getElementById(`customer-filter-${state.status}`)?.focus(); });
+    document.querySelectorAll('[data-customer-filter]').forEach(button => button.onclick = () => { state.status = button.dataset.customerFilter; h.onRecordScope?.({all:'ALL',active:'ACTIVE',archived:'INACTIVE'}[state.status]); update(); document.getElementById(`customer-filter-${state.status}`)?.focus(); });
     document.querySelector('#customer-activity')?.addEventListener('change', event => { state.activity = event.target.value; update(); });
     document.querySelector('#customer-sort')?.addEventListener('change', event => { state.sort = event.target.value; update(); });
     document.querySelectorAll('[data-customer-clear]').forEach(button => button.onclick = () => { Object.assign(state, { status: 'all', activity: 'all', sort: 'name' }); clearSearch(); update(); });
@@ -261,5 +289,5 @@ export function createCustomerUI(h) {
     });
   }
 
-  return { render, bind, reset: () => { Object.assign(state, { status: 'all', activity: 'all', sort: 'name' }); currentSearch = ''; } };
+  return { render, bind, setStatus:value=>{state.status={ACTIVE:'active',INACTIVE:'archived'}[value]||'all';}, reset: () => { Object.assign(state, { status: 'all', activity: 'all', sort: 'name' }); currentSearch = ''; } };
 }

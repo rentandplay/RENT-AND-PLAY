@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Rent & Play API
-  version: 0.4.0
-  description: Admin-confirmed pickup and physical return. ESP32 routes default to standby (ENABLE_ESP32=false).
+  version: 0.5.0
+  description: Local Lakewood delivery, scheduled rentals, verified payment records and physical return. ESP32 routes default to standby (ENABLE_ESP32=false).
 paths:
   /api/auth/email-check:
     post:
@@ -153,7 +153,7 @@ paths:
         '401': {description: Active administrator session required}
   /api/customer-accounts:
     post:
-      summary: Create an active mobile customer Firebase account and linked customer profile
+      summary: Create optional app access or add it to an existing walk-in profile without changing its identity
       security: [{adminSession: []}, {mobileAdminToken: []}]
       requestBody:
         required: true
@@ -161,9 +161,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [fullName, code, email, phone, password, confirmPassword]
+              required: [fullName, email, phone, password, confirmPassword]
               properties:
                 fullName: {type: string, minLength: 2, maxLength: 150}
+                customerId: {type: string, description: Existing active profile without app access. Auth UID equals this ID so rental history stays linked}
                 code: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{1,49}$'}
                 email: {type: string, format: email, maxLength: 254}
                 phone: {type: string, maxLength: 40}
@@ -174,7 +175,69 @@ paths:
         '201': {description: Firebase CUSTOMER account and customer profile created with the same UID}
         '400': {description: Invalid name, customer code, contact details, or password}
         '401': {description: Administrator authentication required}
-        '409': {description: Email or customer code already in use}
+        '409': {description: Duplicate customer/email or profile already has app access}
+  /api/customers:
+    post:
+      summary: Create a walk-in customer profile without an auth login
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fullName, phone]
+              properties:
+                fullName: {type: string, minLength: 2, maxLength: 150}
+                phone: {type: string, maxLength: 40, description: Valid Philippine mobile number}
+                email: {type: string, maxLength: 254, description: Optional valid email}
+                address: {type: string, maxLength: 500}
+                requestKey: {$ref: '#/components/schemas/OperationKey'}
+      responses:
+        '201': {description: Profile created or matching retry returned; server assigns its CUST-code}
+        '400': {description: Invalid customer details}
+        '401': {description: Active staff authentication required}
+        '409': {description: Name and normalized phone or email matches an existing profile; reuse or restore it}
+  /api/rentals/{rentalId}/prepare-delivery:
+    post:
+      summary: Verify the exact reserved unit at the shop before either shop handover or resort delivery
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {in: path, name: rentalId, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inventoryCode]
+              properties:
+                inventoryCode: {type: string, maxLength: 256}
+                manualLookup: {type: boolean}
+                manualReason: {type: string, maxLength: 1000}
+      responses:
+        '200': {description: Unit prepared with the rental timer stopped; repeated preparation is idempotent}
+        '409': {description: Expired hold, wrong unit, or changed reservation}
+  /api/rentals/{rentalId}/release-verification:
+    post:
+      summary: Read-only verification of a prepared rental using customer QR or an audited staff-assisted public reference
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {in: path, name: rentalId, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionCode]
+              properties:
+                transactionCode: {type: string, maxLength: 256}
+                manualLookup: {type: boolean}
+                manualReason: {type: string, maxLength: 1000}
+      responses:
+        '200': {description: Matching rental reference and prepared unit verified without starting the timer}
+        '409': {description: Wrong reference, unprepared unit, expired hold, or changed assignment}
   /api/customers/{customerId}:
     delete:
       summary: Permanently delete an archived customer and linked mobile account
@@ -333,7 +396,7 @@ paths:
       responses:
         '200': {description: Audited money movement and recalculated balances, or identical duplicate}
         '400': {description: Amounts exceed balances or no positive amount supplied}
-        '409': {description: Rental still open, legacy receipts unknown or reused key changed}
+        '409': {description: Legacy receipts unknown or reused key changed}
   /api/rental-inspection-photos/{photoId}:
     parameters:
       - {name: photoId, in: path, required: true, schema: {type: string}}
@@ -387,7 +450,7 @@ paths:
               properties:
                 code: {type: string, minLength: 1, maxLength: 512}
       responses:
-        '200': {description: Actual public item and Firebase project ID}
+        '200': {description: Public equipment group with scanned_unit_id and scanned_unit_code for the exact physical label, plus Firebase project ID; group-only lookup leaves the scanned unit fields null}
         '404': {description: Unknown or ambiguous QR label}
   /api/mobile/profile:
     get:
@@ -695,6 +758,167 @@ paths:
                   caption: {type: string}
         '401': {description: Staff authentication required}
         '404': {description: Ticket or photo missing, or photo does not belong to the ticket}
+  /api/records/{kind}:
+    get:
+      summary: Read a bounded rental/customer/maintenance page
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {name: kind, in: path, required: true, schema: {type: string, enum: [rentals, customers, maintenance]}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: status, in: query, schema: {type: string}}
+        - {name: from, in: query, schema: {type: string, format: date}}
+        - {name: to, in: query, schema: {type: string, format: date}}
+        - {name: search, in: query, schema: {type: string}}
+        - {name: customerId, in: query, schema: {type: string}}
+        - {name: itemId, in: query, schema: {type: string}}
+        - {name: scheduledDay, in: query, schema: {type: string, format: date}}
+      responses:
+        '200': {description: Successful authenticated operation}
+        '400': {description: Invalid fields}
+        '401': {description: Active staff authentication required}
+        '409': {description: Changed state or conflicting reservation}
+  /api/finance/summary:
+    get:
+      summary: Precomputed cash/QR collections, refunds, expenses and net recorded cash
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      description: Selected from/to Philippine business days; up to 366 days. Ledger entries only, without guessed historical receipts.
+      responses:
+        '200': {description: Successful authenticated operation}
+        '400': {description: Invalid fields}
+        '401': {description: Active staff authentication required}
+        '409': {description: Changed state or conflicting reservation}
+  /api/finance/ledger:
+    get:
+      summary: Bounded immutable payment ledger entries
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      description: limit 1-100; cursor, from/to, day, type, method and rentalId filters. Public references use PAY-00001; fingerprints are private.
+      responses:
+        '200': {description: Successful authenticated operation}
+        '400': {description: Invalid fields}
+        '401': {description: Active staff authentication required}
+        '409': {description: Changed state or conflicting reservation}
+  /api/finance/expenses:
+    post:
+      summary: Record an actual cash/QR expense
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExpensePaid'}
+      responses:
+        '200': {description: Successful authenticated operation}
+        '201': {description: Expense recorded}
+        '400': {description: Invalid fields}
+        '401': {description: Active staff authentication required}
+        '409': {description: Changed state or conflicting reservation}
+  /api/reports/daily:
+    get:
+      summary: Precomputed assessed rental charges by handoff day
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      description: from/to Philippine business days. Unknown charges are counted separately and do not invent amounts.
+      responses:
+        '200': {description: Successful authenticated operation}
+        '400': {description: Invalid fields}
+        '401': {description: Active staff authentication required}
+        '409': {description: Changed state or conflicting reservation}
+  /api/rentals/{rentalId}/delivery:
+    post:
+      summary: Advance a short local delivery or physically receive an unsuccessful delivery
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {name: rentalId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LocalDeliveryAction'}
+      responses:
+        '200': {description: Successful authenticated operation}
+        '400': {description: Invalid fields}
+        '401': {description: Active staff authentication required}
+        '409': {description: Changed state or conflicting reservation}
+  /api/rentals/{rentalId}/extension-review:
+    post:
+      summary: Approve or reject the current extension after rechecking the next reservation
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {name: rentalId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [action, requestKey], properties: {action: {type: string, enum: [APPROVE, REJECT]}, requestKey: {$ref: '#/components/schemas/OperationKey'}, reason: {type: string, maxLength: 1000, description: Required for rejection}}}
+      responses:
+        '200': {description: Successful authenticated operation}
+        '400': {description: Invalid fields}
+        '401': {description: Active staff authentication required}
+        '409': {description: Changed state or conflicting reservation}
+  /api/mobile/rentals/{rentalId}/extension-quote:
+    post:
+      summary: Quote additional rental time without changing the rental
+      security: [{customerFirebaseToken: []}]
+      parameters:
+        - {name: rentalId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RentalExtensionRequest'}
+      responses:
+        '200': {description: Quote or pending request; current due time applies until approval}
+        '400': {description: Invalid duration, price or missing staff-witnessed customer agreement}
+        '403': {description: Another customer's rental}
+        '409': {description: Due time, return, pending request or next reservation prevents extension}
+  /api/mobile/rentals/{rentalId}/extension:
+    post:
+      summary: Request additional rental time with the exact agreed price
+      security: [{customerFirebaseToken: []}]
+      parameters:
+        - {name: rentalId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RentalExtensionRequest'}
+      responses:
+        '200': {description: Quote or pending request; current due time applies until approval}
+        '400': {description: Invalid duration, price or missing staff-witnessed customer agreement}
+        '403': {description: Another customer's rental}
+        '409': {description: Due time, return, pending request or next reservation prevents extension}
+  /api/rentals/{rentalId}/extension-quote:
+    post:
+      summary: Quote additional rental time without changing the rental
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {name: rentalId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RentalExtensionRequest'}
+      responses:
+        '200': {description: Quote or pending request; current due time applies until approval}
+        '400': {description: Invalid duration, price or missing staff-witnessed customer agreement}
+        '403': {description: Another customer's rental}
+        '409': {description: Due time, return, pending request or next reservation prevents extension}
+  /api/rentals/{rentalId}/extension:
+    post:
+      summary: Request additional rental time with the exact agreed price
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {name: rentalId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RentalExtensionRequest'}
+      responses:
+        '200': {description: Quote or pending request; current due time applies until approval}
+        '400': {description: Invalid duration, price or missing staff-witnessed customer agreement}
+        '403': {description: Another customer's rental}
+        '409': {description: Due time, return, pending request or next reservation prevents extension}
 components:
   securitySchemes:
     adminSession: {type: apiKey, in: cookie, name: rent_play_session}
@@ -799,8 +1023,12 @@ components:
       type: object
       required: [itemId, customerId, requestKey]
       properties:
+        scheduledStartAt: {type: string, format: date-time, description: Optional; timezone required; at least 5 minutes ahead and within 180 days}
+        deliveryArea: {type: string, enum: ["Lakewood Subdivision, Los Baños, Laguna"]}
         itemId: {type: string}
         customerId: {type: string}
+        rentalChannel: {type: string, enum: [WALK_IN], description: Staff-assisted rental; omitted for legacy counter clients}
+        fulfillmentMode: {type: string, enum: [SHOP_HANDOVER, DELIVERY], default: SHOP_HANDOVER, description: Used for WALK_IN; resort delivery requires deliveryLocation}
         requestKey: {$ref: '#/components/schemas/OperationKey'}
         mode: {type: string, enum: [TIMED, WHOLE_STAY], default: TIMED}
         durationMinutes: {type: integer, minimum: 1, maximum: 10080, description: Required for TIMED}
@@ -820,13 +1048,15 @@ components:
               items: {type: string, maxLength: 150000, description: Valid JPEG base64 data URL}
     AdminRelease:
       type: object
-      required: [requestKey, transactionCode, inventoryCode, customerVerified, inspection]
+      required: [requestKey, transactionCode, customerVerified, inspection]
       properties:
         requestKey: {$ref: '#/components/schemas/OperationKey'}
         transactionCode: {type: string, maxLength: 256}
         inventoryCode: {type: string, maxLength: 256}
         customerVerified: {type: boolean, enum: [true]}
+        customerTermsAcknowledged: {type: boolean, enum: [true], description: Required for WALK_IN; staff witnessed customer agreement to total, duration, late fees, grace and return terms}
         paymentVerified: {type: boolean, description: Required true unless saved full payment was already received}
+        manualLookup: {type: boolean, description: Allows the saved public rental reference instead of its secret QR token}
         manualReason: {type: string, minLength: 1, maxLength: 1000}
         inspection: {$ref: '#/components/schemas/AdminInspection'}
     AdminReceipt:
@@ -851,7 +1081,9 @@ components:
       properties:
         requestKey: {$ref: '#/components/schemas/OperationKey'}
         paymentAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0}
-        rentalRefundAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0, description: Only for cancelled/rejected/expired bookings}
+        rentalRefundAmount: {type: number, minimum: 0, multipleOf: 0.01, default: 0, description: Only for cancelled/rejected/expired rentals}
+        paymentMethod: {type: string, enum: [CASH, QR], default: CASH}
+        reference: {type: string, maxLength: 150, description: Required for manually recorded QR receipts/refunds}
         notes: {type: string, minLength: 1, maxLength: 1000}
     Inspection:
       type: object
@@ -874,8 +1106,10 @@ components:
         inspection: {$ref: '#/components/schemas/Inspection'}
     MobileRentalRequest:
       type: object
-      required: [itemId, durationMinutes, requestKey]
+      required: [itemId, durationMinutes, deliveryLocation, requestKey]
       properties:
+        scheduledStartAt: {type: string, format: date-time, description: Optional; timezone required; at least 5 minutes ahead and within 180 days}
+        deliveryArea: {type: string, enum: ["Lakewood Subdivision, Los Baños, Laguna"]}
         itemId: {type: string}
         stockGroupId: {type: string, description: Group identifier; backend selects one healthy available physical unit from this group}
         acceptedRentalTerms: {type: boolean, description: Current Android checkout includes true after the customer accepts this specific rental's terms}
@@ -905,7 +1139,8 @@ components:
         name: {type: string, maxLength: 150}
         phone: {type: string, maxLength: 40}
         profileImageUrl: {type: string, maxLength: 2048}
-        validIdUrl: {type: string, maxLength: 2048}
+        hasAcknowledgedIdRequirement: {type: boolean, description: Acknowledges the requirement to show physical ID at handoff; not identity verification}
+        validIdUrl: {type: string, deprecated: true, enum: [physical_id_presented], description: Compatibility acknowledgement for older Android clients}
         hasAcceptedTerms: {type: boolean}
     MobileReturnReview:
       type: object
@@ -927,3 +1162,34 @@ components:
         inspection: {$ref: '#/components/schemas/Inspection'}
         penaltyAmount: {type: number, nullable: true, minimum: 0, multipleOf: 0.01, description: Missing is unknown; explicit amount including zero required before confirmation}
         penaltyReason: {type: string, maxLength: 1000, description: Required for a positive penalty}
+
+    ExpensePaid:
+      type: object
+      required: [requestKey, amount, notes, paymentMethod]
+      properties:
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        amount: {type: number, minimum: 0.01, maximum: 9999999999.99, multipleOf: 0.01}
+        paymentMethod: {type: string, enum: [CASH, QR]}
+        category: {type: string, enum: [DELIVERY, MAINTENANCE, SUPPLIES, UTILITIES, OTHER]}
+        reference: {type: string, maxLength: 150, description: Required for QR}
+        notes: {type: string, minLength: 1, maxLength: 500}
+    RentalExtensionRequest:
+      type: object
+      required: [requestKey, additionalMinutes]
+      properties:
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        additionalMinutes: {type: integer, minimum: 15, maximum: 10080}
+        expectedAdditionalFee: {type: number, minimum: 0, multipleOf: 0.01, description: Required when requesting; must equal the current quote}
+        customerRequestedExtension: {type: boolean, description: Required true for a staff-assisted request}
+    LocalDeliveryAction:
+      type: object
+      required: [requestKey, action]
+      properties:
+        requestKey: {$ref: '#/components/schemas/OperationKey'}
+        action: {type: string, enum: [DEPART, FAIL, RETURN_TO_SHOP]}
+        reason: {type: string, maxLength: 1000, description: Required for unsuccessful delivery}
+        inventoryCode: {type: string, description: Exact returning unit QR/token or public equipment code}
+        manualReason: {type: string, maxLength: 1000, description: Required for equipment-code lookup}
+        condition: {type: string, enum: [GOOD, FAIR, DAMAGED, NEEDS_INSPECTION]}
+        notes: {type: string, maxLength: 2000, description: Required for damage or inspection}
+        physicalReceiptConfirmed: {type: boolean, description: Required true before freeing or maintaining the returned unit}

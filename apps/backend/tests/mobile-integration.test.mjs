@@ -76,6 +76,23 @@ test('quantity groups show live stock and customer bookings reserve individual p
   assert.equal(new Set(rentals.map(rental=>rental.item_id)).size,3);
 });
 
+test('customer equipment scans preserve the exact physical unit within a grouped catalog and reject ambiguous labels', async () => {
+  const db = fixture();
+  const fleet = await createItem(db, admin.id, { categoryId: 'sports', name: 'Rental bike fleet', description: 'Three identical bikes', condition: 'GOOD', rateType: 'HOURLY', rentalRate: 50, latePenalty: 10, pricingProductId: 'bike', quantity: 3 });
+  const unitId = fleet.ids[1];
+  await db.collection('rentals').doc('sibling-rental').set({ customer_id: customer.id, item_id: unitId, stock_group_id: fleet.stock_group_id, status: 'ACTIVE', created_at: now });
+  const owned = (await mobileRentalList(db, customer)).rentals;
+  for (let index = 0; index < fleet.ids.length; index++) {
+    const resolved = (await resolveMobileItem(db, { code: fleet.codes[index] })).item;
+    assert.equal(resolved.id, fleet.stock_group_id);
+    assert.equal(resolved.scanned_unit_id, fleet.ids[index]);
+    assert.equal(resolved.scanned_unit_code, fleet.codes[index]);
+    assert.equal(owned.filter(rental => rental.item_id === resolved.scanned_unit_id).length, index === 1 ? 1 : 0);
+  }
+  await db.collection('items').doc(fleet.ids[2]).update({ qr_token: fleet.codes[1] });
+  await assert.rejects(resolveMobileItem(db, { code: fleet.codes[1] }), hasStatus(404));
+});
+
 test('equipment appears for customers after rates are configured and stays visible while rented', async () => {
   const db = fixture();
   await db.collection('items').doc('unconfigured-document').update({ category_id: 'other', status: 'RENTED' });

@@ -7,6 +7,7 @@ import { DEFAULT_PRICING, equipmentRateOptions, quoteRental, validatePricing } f
 import { firebaseFailure, isQuotaError } from './firebase-errors.mjs';
 import { isMobileRental } from './mobile.mjs';
 import { queueRentalNotification } from './notifications.mjs';
+import { scheduledStart, calendarConflict } from './rental-calendar.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const rows = snapshot => snapshot.docs.map(docData);
@@ -35,7 +36,8 @@ const dateValue = (value, label) => {
 };
 const isOpen = rental => ['ACTIVE', 'APPROVED', 'RETURN_PENDING_INSPECTION', 'PENDING_VERIFICATION', 'PENDING_ADMIN_APPROVAL', 'PENDING_ESP32_RENT'].includes(String(rental.status || '').toUpperCase());
 export async function rentalsForItem(tx, db, itemId) {
-  const snapshots = await Promise.all(['item_id', 'itemId'].map(field => tx.get(db.collection('rentals').where(field, '==', itemId))));
+  const statuses=['ACTIVE','APPROVED','RETURN_PENDING_INSPECTION','PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','PENDING_ESP32_RENT'];
+  const snapshots = await Promise.all(['item_id', 'itemId'].map(field => tx.get(db.collection('rentals').where(field, '==', itemId).where('status','in',[...statuses,...statuses.map(status=>status.toLowerCase())]))));
   return { docs: [...new Map(snapshots.flatMap(snapshot => snapshot.docs).map(doc => [doc.id, doc])).values()] };
 }
 const requestType = request => String(request.transaction_type || request.type || '').toUpperCase();
@@ -92,7 +94,7 @@ export function finalCharges(rental, request) {
   return { ...saved, snapshot_version: saved.snapshot_version || null, pricing_source: saved.pricing_source || 'LEGACY_INCOMPLETE', rental_fee: amount(saved.rental_fee) ? saved.rental_fee : amount(rental.rental_fee) ? rental.rental_fee : null, due_at: saved.due_at || rental.due_at || null, actual_return_at: request.actual_return_at, overtime_units: units, overtime_fee: overtime, penalty_amount: penalty, penalty_reason: request.penalty_reason || null, final_rental_charges: total, finalized_at: null };
 }
 
-export async function frozenQuote(tx, db, item, input, now) {
+export async function frozenQuote(tx, db, item, input, now, allowFutureStart = false) {
   const [pricingDoc, businessDoc, rateDocs] = await Promise.all([tx.get(ref(db, 'settings', 'pricing')), tx.get(ref(db, 'settings', 'business')), tx.get(db.collection('item_rates').where('item_id', '==', item.id))]);
   const grace = Number(businessDoc.exists ? businessDoc.data().default_late_grace_hours ?? 0 : 0);
   if (!Number.isFinite(grace) || grace < 0 || grace > 168) fail(400, 'Correct the business grace period before requesting a rental.');
@@ -123,7 +125,7 @@ export async function frozenQuote(tx, db, item, input, now) {
     const units = Math.ceil(minutes / unitMinutes), billed = units * unitMinutes;
     saved = { pricing_source: 'ITEM_RATE', product_id: null, product_name: item.name, rate_id: rate.id, rate_label: `${rate.rate_type} equipment rate`, rate_kind: rate.rate_type, rate_components: [{ rate_id: rate.id, label: rate.rate_type, kind: rate.rate_type, units, unit_amount: rate.rental_rate, duration_minutes: unitMinutes, total_amount: round(units * rate.rental_rate) }], mode: 'TIMED', requested_minutes: minutes, billed_minutes: billed, rental_fee: round(units * rate.rental_rate), start_at: start, due_at: new Date(start.getTime() + billed * 60000), overtime_rate: rate.late_penalty_rate, overtime_unit_minutes: rate.rate_type === 'DAILY' ? 1440 : 60, lost_piece_fee: null };
   }
-  if (saved.due_at <= now || start > new Date(now.getTime() + 5 * 60000) || start < new Date(now.getTime() - 5 * 60000)) fail(400, 'Rental starts must be within five minutes of now and due after now.');
+  if (saved.due_at <= now || !allowFutureStart && (start > new Date(now.getTime() + 5 * 60000) || start < new Date(now.getTime() - 5 * 60000))) fail(400, 'Rental starts must be within five minutes of now and due after now.');
   return { ...saved, snapshot_version: 1, currency: 'PHP', saved_at: now, grace_minutes: grace * 60, actual_return_at: null, overtime_units: null, overtime_fee: null, penalty_amount: null, penalty_reason: null, final_rental_charges: null, finalized_at: null };
 }
 
@@ -137,6 +139,7 @@ const audit = (tx, db, actor, action, id, now, extra = {}) => tx.create(db.colle
 
 export async function quoteEquipmentRental(db, input, now = new Date()) {
   if (!input || typeof input !== 'object') fail(400, 'Rental details are required.');
+  const start = scheduledStart(input, now);
   const itemId = idValue(input.itemId);
   const stockGroupId = input.stockGroupId == null || input.stockGroupId === '' ? null : idValue(input.stockGroupId);
   const fee = await db.runTransaction(async tx => {
@@ -153,11 +156,12 @@ export async function quoteEquipmentRental(db, input, now = new Date()) {
     docs.sort((a,b)=>(a.id===itemId?-1:b.id===itemId?1:a.id.localeCompare(b.id)));
     for(const itemDoc of docs){
       const item=docData(itemDoc);
-      if(item.is_active===false||String(item.status).toUpperCase()!=='AVAILABLE'||item.reserved_rental_id||item.current_rental_id||!healthyUnit(item))continue;
+      if(item.is_active===false||!healthyUnit(item)|| (start ? !['AVAILABLE','RESERVED_PENDING','RENTED'].includes(item.status) : String(item.status).toUpperCase()!=='AVAILABLE'||item.reserved_rental_id||item.current_rental_id))continue;
       if(await unitHasMaintenance(tx,db,itemDoc.id))continue;
       const openDocs=await rentalsForItem(tx,db,itemDoc.id);
-      if(rows(openDocs).some(isOpen))continue;
-      return frozenQuote(tx,db,item,input,now);
+      const quote = await frozenQuote(tx,db,item,{...input,startAt:(start||now).toISOString()},now,Boolean(start));
+      if(calendarConflict(rows(openDocs),start||now,asDate(quote.due_at),now))continue;
+      return quote;
     }
     fail(409,'This equipment is currently unavailable. Refresh the catalog to see the latest stock.');
   });

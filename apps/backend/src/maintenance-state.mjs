@@ -6,7 +6,7 @@ export const maintenanceStage = row => {
     ? row.workflow_stage : String(row?.status || '').toUpperCase() === 'OPEN' ? 'REPORTED' : 'IN_REPAIR';
 };
 export async function unitHasMaintenance(tx, db, itemId) {
-  const snapshot = await tx.get(db.collection('maintenance_records').where('item_id', '==', String(itemId)));
+  const snapshot = await tx.get(db.collection('maintenance_records').where('item_id', '==', String(itemId)).where('status','in',['OPEN','IN_PROGRESS','open','in_progress']));
   return snapshot.docs.some(doc => isOpenMaintenance(doc.data()));
 }
 export const healthyUnit = item => {

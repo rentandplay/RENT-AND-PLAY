@@ -11,7 +11,7 @@ const admin = { id: 'admin', full_name: 'Inspector', role: 'ADMIN', is_active: t
 const customer = { id: 'customer', full_name: 'Customer', role: 'USER', is_active: true };
 const after = minutes => new Date(now.getTime() + minutes * 60000);
 const key = letter => letter.repeat(32);
-const input = { itemId: 'cards', durationMinutes: 60, requestKey: key('a') };
+const input = { itemId: 'cards', durationMinutes: 60, deliveryLocation: 'Customer resort', requestKey: key('a') };
 const inspection = { condition: 'GOOD', result: 'AVAILABLE', notes: 'All pieces counted.', accessoriesChecked: true };
 const status = expected => error => error.status === expected;
 function fixture() {
@@ -38,6 +38,25 @@ async function active(db) {
   await releaseBooking(db, admin, rental.id, releaseInput(rental), after(2));
   return rental;
 }
+
+test('customer requests require a delivery location and do not silently become shop pickup', async () => {
+  const db = fixture();
+  for (const deliveryLocation of [undefined, '', '   ']) await assert.rejects(createBooking(db, customer, { ...input, deliveryLocation }, now), status(400));
+  assert.equal(db.records('rentals').length, 0); assert.equal(db.data('items', 'cards').status, 'AVAILABLE');
+  const { rental } = await createBooking(db, customer, { ...input, deliveryLocation: 'ASRI Hotspring Resort' }, now);
+  assert.equal(rental.delivery_location, 'ASRI Hotspring Resort'); assert.equal(rental.fulfillment_mode, 'DELIVERY');
+});
+
+test('inventory scans resolve a unique approved reservation and reject pending or ambiguous rentals', async () => {
+  const db = fixture(), { rental } = await createBooking(db, customer, input, now);
+  await assert.rejects(lookupRental(db, { kind: 'INVENTORY', code: 'rp-qr-cards' }), status(409));
+  await reviewBooking(db, admin, rental.id, { action: 'APPROVE' }, after(1));
+  const found = await lookupRental(db, { kind: 'INVENTORY', code: 'rp-qr-cards' });
+  assert.equal(found.rental.id, rental.id); assert.equal(found.rental.status, 'APPROVED'); assert.equal(found.rental.start_at, null);
+  await assert.rejects(lookupRental(db, { kind: 'INVENTORY', code: 'rp-qr-spare' }), status(409));
+  await db.collection('rentals').doc('conflicting-active').set({ item_id: 'cards', status: 'ACTIVE' });
+  await assert.rejects(lookupRental(db, { kind: 'INVENTORY', code: 'rp-qr-cards' }), status(409));
+});
 
 test('two customers racing for a unit get one booking and one hold', async () => {
   const db = fixture();

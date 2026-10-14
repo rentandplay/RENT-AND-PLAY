@@ -7,6 +7,22 @@ test('customer validation normalizes safe directory fields', () => {
   assert.deepEqual(validateCustomer({ fullName: '  Maria Santos ', code: ' cust-001 ', email: 'MARIA@EXAMPLE.COM', phone: ' 09171234567 ', address: ' Los Baños ' }), { full_name: 'Maria Santos', customer_code: 'CUST-001', email: 'maria@example.com', phone: '09171234567', address: 'Los Baños' });
 });
 
+test('mobile staff workspace includes exact-unit open and closed maintenance history', async () => {
+  const db = memoryFirestore({
+    items: { bike: { name: 'Bicycle', item_code: 'EQUIP-001', status: 'UNDER_MAINTENANCE' } },
+    maintenance_records: {
+      open: { maintenance_code: 'M-0001', item_id: 'bike', status: 'IN_PROGRESS', workflow_stage: 'AWAITING_INSPECTION', revision: 3, started_at: new Date('2026-10-14T01:00:00Z') },
+      closed: { maintenance_code: 'M-0002', item_id: 'bike', status: 'COMPLETED', revision: 4, started_at: new Date('2026-10-13T01:00:00Z') }
+    }
+  });
+  const mobile = await loadWorkspace(db, 'OPERATOR', new Date('2026-10-14T02:00:00Z'), { mobile: true });
+  const web = await loadWorkspace(db, 'OPERATOR');
+  assert.deepEqual(mobile.maintenance, web.maintenance);
+  assert.equal(mobile.maintenance.length, 2);
+  assert.equal(mobile.maintenance[0].item_code, 'EQUIP-001');
+  assert.equal(mobile.maintenance[0].revision, 3);
+});
+
 test('customer validation rejects unsafe or incomplete records', () => {
   for (const value of [{ fullName: '', code: 'C-1' }, { fullName: 'Customer', code: 'bad code' }, { fullName: 'Customer', code: 'CUST-1', email: 'invalid' }]) assert.throws(() => validateCustomer(value), error => error.status === 400);
 });

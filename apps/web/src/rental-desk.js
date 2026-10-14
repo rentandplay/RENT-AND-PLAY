@@ -28,7 +28,8 @@ const qrIcon = '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strok
 
 export function renderBookingPrice(quote, { escape: e, money }) {
   const amount = value => typeof value === 'number' && Number.isFinite(value) ? e(money(value)) : 'Not available';
-  return `<section class="rental-booking-price"><h3>Price summary</h3><dl><div><dt>Rental fee</dt><dd>${amount(quote.rental_fee)}</dd></div></dl><p>Billed for ${e(quote.billed_minutes)} min. Timer starts at handoff.</p></section>`;
+  const duration = typeof quote.billed_minutes === 'number' && Number.isFinite(quote.billed_minutes) && quote.billed_minutes > 0 ? `${e(quote.billed_minutes)} min` : 'Not available';
+  return `<section class="rental-booking-price"><h3>Price summary</h3><dl><div><dt>Rental fee</dt><dd>${amount(quote.rental_fee)}</dd></div></dl><p>Billed duration: ${duration}. Timer starts at handoff.</p></section>`;
 }
 export const rentalOperationKey = () => globalThis.crypto.randomUUID().replaceAll('-', '');
 export function createRentalDesk(h) {

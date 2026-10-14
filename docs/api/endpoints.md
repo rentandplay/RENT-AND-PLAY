@@ -119,6 +119,20 @@ These routes accept the web admin session cookie or an active Android account's 
 
 Booking and return events persist inbox entries atomically with their rental changes. Push is asynchronous and retryable. See [notification flow](../architecture/rental-notifications.md).
 
+## Unit maintenance on web and Android
+
+These routes accept an active Owner/Operator web session or Android Firebase bearer token. Public ticket references (`M-0001`) and physical unit codes (`EQUIP-001`) are saved by the backend and shared by both clients. Internal document IDs are used in API paths.
+
+| Method | Route | Behavior |
+| --- | --- | --- |
+| POST | `/api/maintenance` | Report one physical unit with `itemId`, exact saved `version`, issue, condition, priority, staff, target date and optional resized photos. Busy units and duplicate open tickets are rejected. |
+| GET | `/api/maintenance-staff` | Minimal active staff choices for assignments. |
+| GET | `/api/maintenance/{id}` | Current ticket, workflow stage, saved references and unit; historical tickets may have `item: null`. |
+| PATCH | `/api/maintenance/{id}` | Require `revision` and `action`: `update`, `start-repair`, `send-inspection`, `inspection-failed`, `complete` or `retire`. Completion needs Good/Fair condition and all three inspection checks. A stale revision returns 409. |
+| GET | `/api/maintenance/{id}/photos/{photoId}` | Authenticated photo from this exact ticket. |
+
+Repair cost is the full actual total for the ticket, with null meaning unknown and zero meaning no cost. Up to three resized photos may be added per update and six per ticket. Closed tickets allow expense corrections, notes and photos without changing stock. See [the maintenance procedure](../architecture/maintenance-flow.md) and OpenAPI schemas for field limits.
+
 ## ESP32 terminal on standby
 
 Keep `ENABLE_ESP32=false`, the default. The ESP32 terminal tab and existing records/firmware remain present. Legacy `POST /api/rentals`, `POST /api/returns`, `GET /api/terminals/{id}/pending` and `POST /api/terminals/{id}/confirm` return 409 standby and cannot change the current rent flow.

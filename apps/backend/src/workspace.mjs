@@ -43,9 +43,9 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   const names = ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history', 'item_condition_records'];
   const auditCollection = db.collection('audit_logs');
   const auditQuery = typeof auditCollection.orderBy === 'function' ? auditCollection.orderBy('created_at', 'desc').limit(200) : auditCollection;
-  // The mobile counter uses rentals, customers and equipment. Keep complete
-  // rental history, but skip the web-only audit, administration and repair logs.
-  const mobileCollections = new Set(['customers', 'rentals', 'items']);
+  // Mobile staff share the rental and maintenance desks with the web. Keep
+  // their complete ticket history while skipping web-only administration logs.
+  const mobileCollections = new Set(['customers', 'rentals', 'items', 'maintenance_records']);
   const [snapshots, auditSnapshot] = await Promise.all([
     Promise.all(names.map(name => !mobile || mobileCollections.has(name) ? db.collection(name).get() : Promise.resolve({ docs: [] }))),
     !mobile && isStaffRole(role) ? auditQuery.get() : Promise.resolve({ docs: [] })

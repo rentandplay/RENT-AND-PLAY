@@ -47,20 +47,20 @@ test('a locked equipment QR control cannot open the camera', async () => {
 });
 
 test('a camera capture updates the QR field and calls its verification hook after releasing the camera', async () => {
-  const keys = ['navigator', 'isSecureContext', 'jsQR', 'document'];
+  const keys = ['navigator', 'isSecureContext', 'jsQR', 'document', 'requestAnimationFrame'];
   const originals = Object.fromEntries(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   let stopped = 0, removed = 0, inputEvent;
-  const captured = [], value = 'rp-booking-camera-test';
+  const captured = [], value = 'rp-rental-camera-test';
   const field = { value: '', dispatchEvent(event) { inputEvent = event.type; } };
   const button = { dataset: { scanField: 'transactionCode' }, innerHTML: 'Scan', classList: { add() {}, remove() {} }, setAttribute() {}, removeAttribute() {} };
   let scannerFrame;
   const output = { textContent: '', classList: { add() {}, remove() {} }, after(frame) { scannerFrame = frame; } };
   const video = { readyState: 2, videoWidth: 2, videoHeight: 2, play: async () => {} };
   const canvas = { getContext: () => ({ drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(16) }) }) };
-  const element = () => ({ className: '', setAttribute() {}, append() {}, remove() { removed++; scannerFrame = null; } });
+  const element = () => ({ className: '', setAttribute() {}, append() {}, scrollIntoView() {}, remove() { removed++; scannerFrame = null; } });
   const values = {
     navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() { stopped++; } }], getVideoTracks: () => [] }) } },
-    isSecureContext: true, jsQR: () => ({ data: value }),
+    isSecureContext: true, jsQR: () => ({ data: value }), requestAnimationFrame: callback => callback(),
     document: { hidden: false, createElement: tag => tag === 'video' ? video : tag === 'canvas' ? canvas : element() },
   };
   for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: values[key] });

@@ -182,7 +182,10 @@ test('mobile staff retains completed rental history while skipping web-only admi
   for (const name of ['audit_logs', 'item_status_history', 'item_condition_records', 'users', 'settings']) {
     assert.equal(fixture.reads.some(read => read.label === name || read.label.startsWith(name + '.')), false, name);
   }
-  assert.equal(fixture.reads.some(read => read.label === 'maintenance_records'), false);
+  assert.equal(fixture.reads.some(read => read.label === 'maintenance_records'), true);
+  const maintenanceReads = fixture.reads.filter(read => read.label === 'maintenance_records').length;
+  await services.mobileAdminWorkspace('OWNER');
+  assert.equal(fixture.reads.filter(read => read.label === 'maintenance_records').length, maintenanceReads);
   await services.workspace('OWNER');
   assert.ok(fixture.reads.some(read => read.label.startsWith('audit_logs')));
   assert.ok(fixture.reads.some(read => read.label === 'users'));

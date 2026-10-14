@@ -49,7 +49,9 @@ All 12 workspace pages were reviewed in the browser against an isolated local AP
 
 ## Remaining external validation
 
-### Live Firestore quota finding — 6 October 2026
+### Historical Firestore quota finding — 6 October 2026
+
+A read-only connectivity check on 14 October 2026 succeeded for both Firebase Authentication and Firestore in `rent-and-play`. The earlier quota finding below describes the historical incident; it is not the current service status.
 
 The configured service-account file exists and matches `rent-and-play`. Authenticated read-only checks against the real Firestore project returned HTTP `429 RESOURCE_EXHAUSTED: Quota exceeded.` The updated diagnostic also reported SDK error `8 RESOURCE_EXHAUSTED: Quota exceeded.` This is a confirmed live usage-limit failure; successful local tests do not imply that cloud inventory is currently accessible.
 

@@ -93,17 +93,20 @@ test('equipment appears for customers after rates are configured and stays visib
   assert.equal((await resolveMobileItem(db, { code: 'unconfigured-document' })).item.id, item.id);
 });
 
-test('equipment requiring a deposit stays in admin inventory but is hidden from customers until configured', async () => {
+test('legacy deposit settings do not hide equipment or add charges to current rental quotes', async () => {
   const db = fixture();
   const pricing = structuredClone(DEFAULT_PRICING);
   pricing.products.find(row => row.id === 'bike').deposit_amount = 0;
   await savePricing(db, admin.id, pricing, now);
-  assert.equal((await mobileCatalog(db)).items.some(row => row.id === input.itemId), false);
+  assert.equal((await mobileCatalog(db)).items.find(row => row.id === input.itemId).can_rent, true);
   assert.ok((await inventoryList(db)).items.some(row => row.id === input.itemId));
-  await assert.rejects(resolveMobileItem(db, { code: 'rp-qr-actual-bike' }), hasStatus(404));
+  assert.equal((await resolveMobileItem(db, { code: 'rp-qr-actual-bike' })).item.id, input.itemId);
   pricing.products.find(row => row.id === 'bike').deposit_amount = 100;
   await savePricing(db, admin.id, pricing, now);
   assert.equal((await mobileCatalog(db)).items.find(row => row.id === input.itemId).can_rent, true);
+  const { quote } = await quoteEquipmentRental(db, input, now);
+  assert.equal(quote.deposit_amount, undefined);
+  assert.equal(quote.total_to_collect, quote.rental_fee);
 });
 
 test('profile bootstrap and edits cannot grant admin access or change token identity', async () => {
@@ -132,8 +135,8 @@ test('customer profile edits update the linked customer directory record', async
 
 test('quotes and checkout use saved package rates; duplicate requests reserve exactly one item', async () => {
   const db = fixture(), { quote } = await quoteEquipmentRental(db, input, now);
-  assert.equal(quote.rental_fee, 500); assert.equal(quote.deposit_amount, 100); assert.equal(quote.billed_minutes, 180); assert.equal(quote.total_to_collect, 600);
-  const payload = { ...input, expectedQuote: { rentalFee: quote.rental_fee, depositAmount: quote.deposit_amount, billedMinutes: quote.billed_minutes } };
+  assert.equal(quote.rental_fee, 500); assert.equal(quote.deposit_amount, undefined); assert.equal(quote.billed_minutes, 180); assert.equal(quote.total_to_collect, 500);
+  const payload = { ...input, expectedQuote: { rentalFee: quote.rental_fee, billedMinutes: quote.billed_minutes } };
   const results = await Promise.all([createMobileRentalRequest(db, customer, payload, now), createMobileRentalRequest(db, customer, payload, now)]);
   assert.equal(results[0].rental.id, results[1].rental.id); assert.equal(results[1].duplicate, true);
   assert.equal(db.records('rentals').length, 1); assert.equal(db.records('audit_logs').length, 1);
@@ -155,7 +158,7 @@ test('stale quote, missing rates, and legacy active rentals cannot create a rese
   await assert.rejects(itemAction(db, admin.id, input.itemId, { action: 'archive', version: localDateTime(now) }), hasStatus(409));
 });
 
-test('approval waits for physical release; scans, payment, deposit and inspection start the saved duration', async () => {
+test('approval waits for physical release; scans, rental payment and inspection start the saved duration', async () => {
   const db = fixture(), { rental } = await createMobileRentalRequest(db, customer, input, now);
   await reviewMobileRental(db, admin, rental.id, { action: 'APPROVE' }, now);
   assert.equal(db.data('rentals', rental.id).status, 'APPROVED');
@@ -163,9 +166,8 @@ test('approval waits for physical release; scans, payment, deposit and inspectio
   assert.equal(db.data('items', input.itemId).status, 'AVAILABLE');
   await prepareRentalDelivery(db, admin, rental.id, { inventoryCode: 'rp-qr-actual-bike' }, now);
   const releaseAt = new Date(now.getTime() + 5 * 60000);
-  const release = { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, depositReceived: true, inspection };
+  const release = { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, inspection };
   await assert.rejects(releaseBooking(db, admin, rental.id, { ...release, paymentVerified: false }, releaseAt), hasStatus(400));
-  await assert.rejects(releaseBooking(db, admin, rental.id, { ...release, depositReceived: false }, releaseAt), hasStatus(400));
   await assert.rejects(releaseBooking(db, admin, rental.id, { ...release, inspection: null }, releaseAt), hasStatus(400));
   await releaseBooking(db, admin, rental.id, release, releaseAt);
   const saved = db.data('rentals', rental.id);
@@ -215,7 +217,7 @@ test('customer return stays active until staff receipt; final fees use original 
   await assert.rejects(reviewMobileReturn(db, admin, id, { requestKey: 'c'.repeat(32), inspection }, receipt), hasStatus(400));
   await reviewMobileReturn(db, admin, id, { action: 'APPROVE', requestKey: 'c'.repeat(32), inspection, penaltyAmount: 50, penaltyReason: 'Missing accessory' }, receipt);
   const saved = db.data('rentals', id);
-  assert.equal(saved.status, 'COMPLETED'); assert.equal(saved.fee_breakdown.rental_fee, 500); assert.equal(saved.fee_breakdown.deposit_amount, 100);
+  assert.equal(saved.status, 'COMPLETED'); assert.equal(saved.fee_breakdown.rental_fee, 500); assert.equal(saved.fee_breakdown.deposit_amount, undefined);
   assert.equal(saved.fee_breakdown.overtime_fee, 200); assert.equal(saved.fee_breakdown.final_rental_charges, 750);
   assert.equal(saved.returned_at.toISOString(), receipt.toISOString()); assert.equal(saved.return_condition.inspected_by, admin.id);
   assert.equal((await mobileCatalog(db)).items.find(row => row.id === input.itemId).can_rent, true);
@@ -243,14 +245,7 @@ test('HTTP connects public catalog, Firebase customer rentals, web cookie review
     if (token === 'admin-token') return { uid: admin.id };
     throw Error('Invalid token');
   } } });
-  Object.assign(services, {
-    firebaseProjectId: 'rent-and-play',
-    mobileQuote: data => quoteEquipmentRental(db, data, now),
-    createMobileRentalRequest: (actor, data) => createMobileRentalRequest(db, actor, data, now),
-    reviewMobileRental: (actor, id, data) => reviewMobileRental(db, actor, id, data, now),
-    requestMobileReturn: (actor, id, data) => requestMobileReturn(db, actor, id, data, now),
-    reviewMobileReturn: (actor, id, data) => reviewMobileReturn(db, actor, id, data, new Date(now.getTime() + 60000)),
-  });
+  services.firebaseProjectId = 'rent-and-play';
   const server = createApi({ services, sessions: { verify: async token => token === 'web-admin-cookie' ? { uid: admin.id } : null }, expiryWorker: false });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -261,11 +256,20 @@ test('HTTP connects public catalog, Firebase customer rentals, web cookie review
     assert.equal((await request('/mobile/rentals')).status, 401);
     assert.equal((await request('/workspace', 'GET', null, owner)).status, 401);
     assert.equal((await request('/workspace', 'GET', null, { Authorization: 'Bearer admin-token' })).status, 200);
-    const created = await request('/mobile/rentals', 'POST', input, owner); assert.equal(created.status, 201);
+    const created = await request('/mobile/rentals', 'POST', { ...input, acceptedRentalTerms: true, rentalTermsVersion: '2026-10-13-rental-v1' }, owner); assert.equal(created.status, 201);
     const { rental } = await created.json();
+    assert.match(rental.rental_code, /^R-\d{4,}$/);
+    assert.equal(db.data('rentals', rental.id).rental_terms_acceptance.accepted_by, customer.id);
+    const mobileStaff = { Authorization: 'Bearer admin-token' };
+    const pendingWorkspace = await (await request('/mobile/admin-workspace', 'GET', null, mobileStaff)).json();
+    assert.equal(pendingWorkspace.transactions.find(row => row.id === rental.id).rental_code, rental.rental_code);
     assert.equal((await request(`/mobile/rentals/${rental.id}/review`, 'POST', { action: 'APPROVE', paymentVerified: true, inspection }, owner)).status, 401);
-    assert.equal((await request(`/mobile/rentals/${rental.id}/review`, 'POST', { action: 'APPROVE', paymentVerified: true, inspection }, staff)).status, 200);
-    const release = { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, depositReceived: true, inspection };
+    assert.equal((await request(`/mobile/rentals/${rental.id}/review`, 'POST', { action: 'APPROVE', paymentVerified: true }, mobileStaff)).status, 200);
+    const webWorkspace = await (await request('/workspace', 'GET', null, staff)).json();
+    const approved = webWorkspace.transactions.find(row => row.id === rental.id);
+    assert.equal(approved.status, 'APPROVED'); assert.equal(approved.rental_code, rental.rental_code); assert.equal(approved.start_at, null);
+    assert.equal((await request(`/mobile/rentals/${rental.id}/review`, 'POST', { action: 'APPROVE', paymentVerified: true }, staff)).status, 200);
+    const release = { requestKey: 'b'.repeat(32), transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, inspection };
     assert.equal((await request(`/rentals/${rental.id}/prepare-delivery`, 'POST', { inventoryCode: 'rp-qr-actual-bike' }, staff)).status, 200);
     const preflightPath = `/rentals/${rental.id}/release-verification`;
     assert.equal((await request(preflightPath, 'POST', { transactionCode: rental.booking_qr_token }, owner)).status, 401);

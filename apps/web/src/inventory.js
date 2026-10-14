@@ -564,7 +564,7 @@ export function createInventory(h) {
       </div>`);
       renderEquipmentImage(modal.querySelector('.inv-detail-art'), i); modal.querySelector('#inv-unit-back').onclick = () => details(i.id); modal.querySelector('#inv-qr').onclick = () => qr(i);
       for (const action of ['archive', 'restore']) { const b = modal.querySelector('#inv-' + action); if (b) b.onclick = () => actionForm(i, action); }
-      const mb = modal.querySelector('#inv-maintenance'); if (mb) mb.onclick = () => h.openMaintenance ? h.openMaintenance(i.id) : actionForm(i, i.status === 'UNDER_MAINTENANCE' || i.effective_status === 'UNDER_MAINTENANCE' ? 'complete-maintenance' : 'maintenance');
+      const mb = modal.querySelector('#inv-maintenance'); if (mb) mb.onclick = () => h.openMaintenance ? h.openMaintenance(i.id, i) : actionForm(i, i.status === 'UNDER_MAINTENANCE' || i.effective_status === 'UNDER_MAINTENANCE' ? 'complete-maintenance' : 'maintenance');
       modal.querySelector('#inv-delete')?.addEventListener('click', () => permanentDelete(i));
     } catch (err) { showModal('Equipment unavailable', errorBody(err)); }
   }

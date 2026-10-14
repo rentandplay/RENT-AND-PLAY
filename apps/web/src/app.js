@@ -646,7 +646,7 @@ async function boot() {
     }
   }
 }
-const inventoryController = createInventory({ api, escape, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, confirmAction, confirmSubmit, openMaintenance: id => workspaceUI.openMaintenanceForUnit(id) });
+const inventoryController = createInventory({ api, escape, icon, symbol, badge, stateLabel, formatDate, showModal, modal, toast, confirmAction, confirmSubmit, openMaintenance: (id, item) => workspaceUI.openMaintenanceForUnit(id, item) });
 const workspaceUI = createWorkspaceUI({ api, escape, icon, showModal, modal, toast, money, formatDate, confirmAction, confirmSubmit, showEquipmentDetails: id => inventoryController.details(id), onMaintenanceSaved: () => inventoryController.refresh({ force: true }), navigate: goTo });
 workspaceUI.setReportSection(reportSectionForPath(location.pathname));
 const rentalNotifications = createRentalNotifications({ api, onChange: syncNotifications,

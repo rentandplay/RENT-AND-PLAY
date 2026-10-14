@@ -65,7 +65,7 @@ test('approved and received bookings stay visible without reporting a running ti
   assert.match(rentals, /All open[^<]*<[^>]*>2</);
   assert.match(rentals, /data-transaction-filter="Awaiting delivery"/);
   assert.match(rentals, /data-transaction-filter="Inspection pending"/);
-  assert.match(returns, /Inspection pending/); assert.match(returns, /received/);
+  assert.match(returns, /inspection pending/i); assert.match(returns, /received/);
   assert.doesNotMatch(returns, /Awaiting terminal/);
 });
 

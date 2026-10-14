@@ -567,6 +567,7 @@ paths:
       - {name: terminalId, in: path, required: true, schema: {type: string}}
     get:
       summary: Poll pending requests and record device heartbeat
+      description: Future hardware integration only. ENABLE_ESP32=false returns 409 before device polling. Current rentals use the staff desk.
       security: [{terminalDeviceKey: []}]
       responses:
         '200': {description: Requests with saved fees, inspection revisions, and deadlines}
@@ -577,6 +578,7 @@ paths:
       - {name: terminalId, in: path, required: true, schema: {type: string}}
     post:
       summary: Atomically confirm or reject an assigned handoff from the terminal
+      description: Future hardware integration only. ENABLE_ESP32=false returns 409 without modifying a handoff.
       security: [{terminalDeviceKey: []}]
       requestBody:
         required: true
@@ -596,8 +598,103 @@ paths:
         '200': {description: Final request status; duplicate retransmissions have duplicate true}
         '400': {description: Invalid button action or missing rejection reason}
         '401': {description: Device authentication required; web cookies never substitute}
-        '409': {description: Incorrect terminal/code/revision, missing inspection/penalty, or inconsistent lifecycle}
+        '409': {description: ESP32 standby or incorrect terminal/code/revision or inconsistent lifecycle}
         '410': {description: Deadline elapsed; expiry has been persisted}
+  /api/maintenance:
+    post:
+      summary: Report an issue for one physical equipment unit
+      description: Staff only. Blocks only this unit from rental, rejects duplicate open tickets and rented or reserved units, and preserves its equipment QR and grouped stock.
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MaintenanceReport'}
+      responses:
+        '201':
+          description: Saved ticket and unavailable physical unit
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MaintenanceMutation'}
+        '400': {description: Invalid issue, assignment, target date or photo}
+        '401': {description: Staff authentication required}
+        '403': {description: Active staff account with completed password change required}
+        '409': {description: Stale unit version, duplicate open ticket, or unit with an unresolved rental}
+  /api/maintenance-staff:
+    get:
+      summary: List active operators and owners eligible for a repair assignment
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      responses:
+        '200':
+          description: Minimal staff identities with saved public account references
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  staff:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: {type: string, description: Internal account identifier used for assignedTo}
+                        account_code: {type: string, example: USER-0001}
+                        full_name: {type: string}
+                        role: {type: string}
+        '401': {description: Staff authentication required}
+        '403': {description: Active staff account required}
+  /api/maintenance/{maintenanceId}:
+    parameters:
+      - {in: path, name: maintenanceId, required: true, schema: {type: string}, description: Internal ticket ID; display maintenance_code to users}
+    get:
+      summary: Read a current maintenance ticket and its physical unit
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      responses:
+        '200':
+          description: Current ticket, saved references and unit; item may be null for preserved historical tickets
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MaintenanceDetail'}
+        '401': {description: Staff authentication required}
+        '404': {description: Ticket not found}
+    patch:
+      summary: Update repair details or advance the maintenance workflow
+      description: Reported to In repair to For inspection to Completed. Failed inspection returns to In repair. Completion requires all three checks and Good or Fair condition. Retirement closes the unit's open tickets and preserves its history. Closed tickets permit only cost corrections, notes and photos. Every mutation checks the saved revision.
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MaintenanceUpdate'}
+      responses:
+        '200':
+          description: Saved ticket, current unit and remaining open issue count
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MaintenanceMutation'}
+        '400': {description: Invalid action, amount, assignment, notes, condition or inspection checks}
+        '401': {description: Staff authentication required}
+        '404': {description: Ticket not found}
+        '409': {description: Stale revision or disallowed stage transition; refresh before retrying}
+  /api/maintenance/{maintenanceId}/photos/{photoId}:
+    get:
+      summary: Read one authenticated maintenance photo
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {in: path, name: maintenanceId, required: true, schema: {type: string}}
+        - {in: path, name: photoId, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Photo belonging to this exact ticket
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  image_data: {type: string, description: Resized JPEG, PNG or WebP data URL}
+                  caption: {type: string}
+        '401': {description: Staff authentication required}
+        '404': {description: Ticket or photo missing, or photo does not belong to the ticket}
 components:
   securitySchemes:
     adminSession: {type: apiKey, in: cookie, name: rent_play_session}
@@ -605,6 +702,78 @@ components:
     customerFirebaseToken: {type: http, scheme: bearer, bearerFormat: Firebase ID token, description: Must map to an active CUSTOMER profile in the same Firebase project}
     terminalDeviceKey: {type: http, scheme: bearer, description: Separately provisioned terminal key; never a Firebase token or web cookie}
   schemas:
+    MaintenancePhotoInput:
+      type: object
+      required: [imageData]
+      properties:
+        imageData: {type: string, maxLength: 200000, description: Valid resized JPEG, PNG or WebP base64 data URL; decoded image under 150 KB}
+        caption: {type: string, maxLength: 120}
+    MaintenanceReport:
+      type: object
+      required: [itemId, reason, version]
+      properties:
+        itemId: {type: string, description: Exact physical unit ID from inventory}
+        version: {type: string, nullable: true, description: Exact saved item.updated_at; null is supported only for older units without a timestamp}
+        reason: {type: string, minLength: 1, maxLength: 255}
+        notes: {type: string, maxLength: 2000}
+        condition: {type: string, enum: [GOOD, FAIR, DAMAGED, NEEDS_INSPECTION], default: NEEDS_INSPECTION}
+        priority: {type: string, enum: [LOW, NORMAL, HIGH, URGENT], default: NORMAL}
+        assignedTo: {type: string, nullable: true}
+        targetDate: {type: string, nullable: true, format: date}
+        photos: {type: array, maxItems: 3, items: {$ref: '#/components/schemas/MaintenancePhotoInput'}}
+    MaintenanceUpdate:
+      type: object
+      required: [action, revision]
+      properties:
+        action: {type: string, enum: [update, start-repair, send-inspection, inspection-failed, complete, retire]}
+        revision: {type: integer, minimum: 0, description: Exact current ticket revision; legacy tickets may start at zero}
+        note: {type: string, maxLength: 2000, description: Required for send-inspection, inspection-failed, complete and retire}
+        repairCost: {type: number, nullable: true, minimum: 0, maximum: 9999999999.99, multipleOf: 0.01, description: Full actual ticket total; null is unknown and zero explicitly means no cost}
+        priority: {type: string, enum: [LOW, NORMAL, HIGH, URGENT]}
+        assignedTo: {type: string, nullable: true}
+        targetDate: {type: string, nullable: true, format: date}
+        condition: {type: string, enum: [GOOD, FAIR], description: Required for completion}
+        checks:
+          type: object
+          required: [functional, safe, complete]
+          description: All checks must be true before the unit returns to rental
+          properties:
+            functional: {type: boolean}
+            safe: {type: boolean}
+            complete: {type: boolean}
+        photos: {type: array, maxItems: 3, items: {$ref: '#/components/schemas/MaintenancePhotoInput'}}
+    MaintenanceRecord:
+      type: object
+      properties:
+        id: {type: string, description: Internal API identifier; never display as the ticket reference}
+        maintenance_code: {type: string, pattern: '^M-[0-9]{4,}$', example: M-0001, description: Persisted public reference shared by web and mobile}
+        item_id: {type: string}
+        item_code: {type: string, example: EQUIP-001, description: Existing physical unit code and QR label are preserved}
+        item_name: {type: string}
+        rental_id: {type: string, nullable: true}
+        status: {type: string, enum: [OPEN, IN_PROGRESS, COMPLETED, RETIRED]}
+        workflow_stage: {type: string, enum: [REPORTED, IN_REPAIR, AWAITING_INSPECTION, COMPLETED, RETIRED]}
+        revision: {type: integer, minimum: 0}
+        reason: {type: string}
+        priority: {type: string, enum: [LOW, NORMAL, HIGH, URGENT]}
+        assigned_to: {type: string, nullable: true}
+        assigned_name: {type: string, nullable: true}
+        target_date: {type: string, nullable: true, format: date}
+        repair_cost: {type: number, nullable: true}
+        photos: {type: array, maxItems: 6, items: {type: object, properties: {id: {type: string}, caption: {type: string}, added_at: {type: string, format: date-time}}}}
+        activity: {type: array, items: {type: object}}
+    MaintenanceDetail:
+      type: object
+      required: [maintenance, item]
+      properties:
+        maintenance: {$ref: '#/components/schemas/MaintenanceRecord'}
+        item: {type: object, nullable: true}
+    MaintenanceMutation:
+      allOf:
+        - {$ref: '#/components/schemas/MaintenanceDetail'}
+        - type: object
+          properties:
+            remaining_open_tickets: {type: integer, minimum: 0}
     AccountEmail:
       type: object
       required: [email]
@@ -708,6 +877,9 @@ components:
       required: [itemId, durationMinutes, requestKey]
       properties:
         itemId: {type: string}
+        stockGroupId: {type: string, description: Group identifier; backend selects one healthy available physical unit from this group}
+        acceptedRentalTerms: {type: boolean, description: Current Android checkout includes true after the customer accepts this specific rental's terms}
+        rentalTermsVersion: {type: string, maxLength: 80, example: 2026-10-13-rental-v1}
         durationMinutes: {type: integer, minimum: 1, maximum: 10080}
         startAt: {type: string, format: date-time, description: Defaults to server time; must be within five minutes of now}
         deliveryLocation: {type: string, minLength: 1, maxLength: 255}

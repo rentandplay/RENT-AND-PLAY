@@ -23,10 +23,10 @@ Completed and retired tickets remain visible under **Closed history**. Staff can
 
 ## Web and Android
 
-The web Maintenance page manages the workflow. The mobile staff Equipment details show the same ticket code, stage, assignment, target date, cost and current stock availability, with **Refresh latest details** for current information. Customer checkout uses the backend's current available-unit checks; a unit with an open maintenance ticket or an unsafe condition cannot be quoted or assigned to a rental, even if older data incorrectly marked it available.
+Web and Android staff manage the same workflow. On Android, open **Staff counter → Manage maintenance**, or open a ticket in Equipment details. Both clients support exact-unit issue reports, staff assignments, target dates, repair costs, photos, repair and inspection stages, failed inspection and retirement. Android completion requires the same three checks and Good or Fair condition. Closed tickets support expense corrections and notes. A stale revision prompts a refresh before another save. Customer checkout uses the backend's current available-unit checks; a unit with an open maintenance ticket or an unsafe condition cannot be quoted or assigned to a rental, even if older data incorrectly marked it available.
 
-All maintenance endpoints require an active staff account. Photos are fetched separately through authenticated ticket-specific endpoints, rather than loading image bytes in every workspace response. Up to three photos may be added per update and six per ticket; web uploads resize before saving.
+All maintenance endpoints require an active staff account. Photos are fetched separately through authenticated ticket-specific endpoints, rather than loading image bytes in every workspace response. Up to three photos may be added per update and six per ticket; web and Android resize uploads before saving.
 
 Open tickets retain lifecycle `status: IN_PROGRESS`, with `workflow_stage` set to `REPORTED`, `IN_REPAIR` or `AWAITING_INSPECTION`. Closed statuses are `COMPLETED` and `RETIRED`. This preserves existing availability queries and analytics. Older `OPEN` records appear as Reported; older `IN_PROGRESS` records appear as In repair.
 
-Relevant regression checks are in `apps/backend/tests/maintenance.test.mjs`, `apps/web/tests/maintenance.test.mjs` and the existing stock, rental/return and confirmation tests.
+Relevant regression checks are in `apps/backend/tests/maintenance.test.mjs`, `apps/backend/tests/workspace.test.mjs`, `apps/web/tests/maintenance.test.mjs`, Android's `test/maintenance_ui_test.dart`, and the existing stock, rental/return and confirmation tests.

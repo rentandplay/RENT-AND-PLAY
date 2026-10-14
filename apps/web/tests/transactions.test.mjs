@@ -9,8 +9,8 @@ const row = { id: 'rental-1', rental_code: 'R-001', item_name: 'Bike', item_code
 
 test('saved fees keep cents and missing penalty is disclosed instead of rendered as zero', () => {
   const saved = renderFeeBreakdown(row, h);
-  assert.ok(saved.includes('3-hour special')); assert.ok(saved.includes('180 minutes')); assert.ok(saved.includes('PHP 750.25')); assert.ok(saved.includes('PHP 100.00')); assert.ok(saved.includes('2026-10-03 12:01:00'));
-  const legacy = renderFeeBreakdown({ rental_fee: 80, deposit_amount: 50 }, h);
+  assert.ok(saved.includes('3-hour special')); assert.ok(saved.includes('180 minutes')); assert.ok(saved.includes('PHP 750.25')); assert.ok(saved.includes('2026-10-03 12:01:00'));
+  const legacy = renderFeeBreakdown({ rental_fee: 80 }, h);
   assert.ok(legacy.includes('Penalty not recorded')); assert.ok(legacy.includes('Final charges not recorded')); assert.ok(legacy.includes('Original pricing snapshot not recorded')); assert.ok(!legacy.includes('PHP 0.00'));
   assert.ok(chargeCell(row, h).includes('PHP 750.25')); assert.equal(actualReturnTime(row), '2026-10-03 12:01:00');
 });

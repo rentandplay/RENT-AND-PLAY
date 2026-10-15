@@ -6,31 +6,85 @@ info:
 paths:
   /api/auth/email-check:
     post:
-      summary: Validate an email and a domain capable of receiving mail
-      description: Public and rate limited. Lowercases emails, rejects whitespace, and accepts valid company or school domains. DNS failures ask the caller to retry.
+      summary: Validate email syntax
+      description: Public and rate limited compatibility endpoint. Normalizes email case and rejects malformed addresses or whitespace. Does not perform a DNS/domain lookup.
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: '#/components/schemas/AccountEmail'}
       responses:
-        '200': {description: Email domain validated}
-        '400': {description: Invalid syntax or INVALID_EMAIL_DOMAIN}
-        '503': {description: Temporary DNS failure}
+        '200': {description: Email syntax validated}
+        '400': {description: Invalid email format}
   /api/auth/password-reset:
     post:
-      summary: Request a reset email for an explicitly entered recipient
-      description: Public and rate limited. Checks email format without DNS/domain validation. Confirmation names the email without revealing whether the account exists. Real provider failures are reported.
+      summary: Request a legacy Firebase password-reset link
+      description: Public, rate limited compatibility endpoint for existing clients and the signed-in Settings shortcut. The current Forgot password screens use the email-code endpoints below.
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: '#/components/schemas/AccountEmail'}
       responses:
-        '200': {description: Recipient and generic reset instructions}
+        '200': {description: Generic reset-email confirmation}
         '400': {description: Invalid email format}
         '429': {description: Too many requests}
         '503': {description: Reset provider temporarily unavailable}
+  /api/auth/password-reset/request:
+    post:
+      summary: Send a one-time password-reset code by email
+      description: Public and rate limited. The response does not disclose whether an active account exists. Codes expire after 10 minutes, allow five guesses, and can be resent after 30 seconds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AccountEmail'}
+      responses:
+        '200': {description: Generic confirmation that a code was requested}
+        '400': {description: Invalid email format}
+        '429': {description: Too many requests}
+        '503': {description: Email provider temporarily unavailable}
+  /api/auth/password-reset/verify:
+    post:
+      summary: Verify a password-reset email code
+      description: Returns a short-lived, single-use proof token only when the code belongs to an active account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email: {type: string, format: email, maxLength: 254}
+                code: {type: string, pattern: '^[0-9]{6}$'}
+      responses:
+        '200': {description: Verification proof and expiration time}
+        '400': {description: Invalid or expired code}
+        '429': {description: Too many attempts}
+  /api/auth/password-reset/complete:
+    post:
+      summary: Set a new password after verifying the email code
+      description: Requires the proof token returned by the verify endpoint. Updates the Firebase password, revokes existing sessions, and clears any temporary-password flag.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, verificationToken, requestKey, newPassword, confirmPassword]
+              properties:
+                email: {type: string, format: email, maxLength: 254}
+                verificationToken: {type: string, minLength: 32, maxLength: 128, writeOnly: true}
+                requestKey: {type: string, pattern: '^[A-Za-z0-9_-]{20,100}$'}
+                newPassword: {$ref: '#/components/schemas/AccountPassword'}
+                confirmPassword: {$ref: '#/components/schemas/AccountPassword'}
+      responses:
+        '200': {description: Password updated and current web session cleared}
+        '400': {description: Missing/expired proof, weak password, or confirmation mismatch}
+        '409': {description: Password update already processing}
+        '429': {description: Too many requests}
+        '503': {description: Password provider temporarily unavailable}
   /api/auth/change-password:
     post:
       summary: Change the temporary password before entering the staff workspace
@@ -133,8 +187,12 @@ paths:
     get:
       summary: Full administration history including every verification attempt
       security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {name: view, in: query, schema: {type: string}, description: Requested workspace view; returned in view_meta.}
+        - {name: rankingFrom, in: query, schema: {type: string, format: date}, description: History popularity period start by Philippine confirmation day; independent of table pagination.}
+        - {name: rankingTo, in: query, schema: {type: string, format: date}, description: History popularity period end by Philippine confirmation day; omit both ranking dates for all time.}
       responses:
-        '200': {description: Workspace records with saved inspections and fees}
+        '200': {description: "Scoped workspace records with saved inspections and fees, view_meta and full rental_ranking for Rental History"}
         '401': {description: Active administrator session required}
   /api/analytics:
     get:
@@ -764,7 +822,7 @@ paths:
       security: [{adminSession: []}, {mobileAdminToken: []}]
       parameters:
         - {name: kind, in: path, required: true, schema: {type: string, enum: [rentals, customers, maintenance]}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 5}}
         - {name: cursor, in: query, schema: {type: string}}
         - {name: status, in: query, schema: {type: string}}
         - {name: from, in: query, schema: {type: string, format: date}}
@@ -782,7 +840,7 @@ paths:
     get:
       summary: Precomputed cash/QR collections, refunds, expenses and net recorded cash
       security: [{adminSession: []}, {mobileAdminToken: []}]
-      description: Selected from/to Philippine business days; up to 366 days. Ledger entries only, without guessed historical receipts.
+      description: Selected from/to Philippine business days; up to 366 days. Returns dated ledger totals and rental_totals for rentals created in the period, including saved payments, outstanding balances and amounts missing receipt dates. Unknown receipt dates are never guessed.
       responses:
         '200': {description: Successful authenticated operation}
         '400': {description: Invalid fields}
@@ -813,6 +871,42 @@ paths:
         '400': {description: Invalid fields}
         '401': {description: Active staff authentication required}
         '409': {description: Changed state or conflicting reservation}
+  /api/finance/rentals:
+    get:
+      summary: Bounded rental payment history with balances and missing receipt details
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      description: Supports from/to creation dates, exact rental reference search, limit 1-100 and filter-bound cursor. Each rental includes finance.charges, saved_paid, balance_due, refund_due, ledger_collections, unposted_paid and receipt_status. Missing payment amounts remain null.
+      responses:
+        '200': {description: Rental financial records and next cursor}
+        '400': {description: Invalid filters or cursor}
+        '401': {description: Active staff authentication required}
+  /api/finance/rentals/{rentalId}/receipt-history:
+    post:
+      summary: Confirm the original receipt for an existing saved rental payment
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {name: rentalId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [requestKey, amount, occurredAt, paymentMethod, notes, confirmed]
+              properties:
+                requestKey: {type: string, pattern: '^[a-f0-9]{32}$'}
+                amount: {type: number, exclusiveMinimum: true, minimum: 0, description: Must match the saved unposted amount}
+                occurredAt: {type: string, format: date-time, description: Original receipt time with timezone, between rental creation and now}
+                paymentMethod: {type: string, enum: [CASH, QR]}
+                reference: {type: string, maxLength: 150, description: Required for QR}
+                notes: {type: string, minLength: 1, maxLength: 500}
+                confirmed: {type: boolean, enum: [true]}
+      responses:
+        '200': {description: Historical receipt journaled without increasing the rental payment}
+        '400': {description: Invalid date, amount, evidence or confirmation}
+        '401': {description: Active staff authentication required}
+        '404': {description: Rental not found}
+        '409': {description: Saved payment changed or already journaled}
   /api/reports/daily:
     get:
       summary: Precomputed assessed rental charges by handoff day
@@ -1002,7 +1096,7 @@ components:
       type: object
       required: [email]
       properties:
-        email: {type: string, format: email, maxLength: 254, description: No whitespace; normalized to lowercase. DNS is checked only by the mobile email-check and registration endpoints}
+        email: {type: string, format: email, maxLength: 254, description: No whitespace; normalized to lowercase. No DNS/domain lookup is performed}
     AccountPassword:
       type: string
       minLength: 8

@@ -41,7 +41,7 @@ export function groupEquipmentPerformance(performance, items, categories = []) {
       utilization: observedHours ? sum(measured, 'rentedHours') / observedHours : null,
       observationAssumed: rows.some(row => row.observationAssumed), unknownObservationUnits: rows.filter(row => row.observedHours === null).length,
       repeatServiceUnits: rows.filter(row => row.maintenanceCount >= 2).length };
-  }).sort((a, b) => b.rentals - a.rentals || b.fees - a.fees || a.name.localeCompare(b.name));
+  }).sort((a, b) => b.rentals - a.rentals || a.name.localeCompare(b.name) || a.stockGroupId.localeCompare(b.stockGroupId));
 }
 
 function comparisonFor(data, selection, current, now) {

@@ -122,7 +122,8 @@ test('web owner cookies and mobile operator tokens access the same ledger; custo
    const res=await fetch(url+'/finance/summary?from=2026-10-14&to=2026-10-14',{headers});assert.equal(res.status,200);const summary=await res.json();assert.equal(summary.totals.cash_net_movement,30);
    const ledger=await fetch(url+'/finance/ledger?limit=25',{headers}).then(row=>row.json());assert.equal(ledger.entries.length,2);assert.ok(ledger.entries.every(row=>/^PAY-\d+$/.test(row.ledger_code)&&!row.fingerprint));
  }
- for(const path of ['/finance/summary','/finance/ledger','/records/customers','/records/maintenance','/reports/daily'])assert.equal((await fetch(url+path,{headers:{authorization:'Bearer customer'}})).status,401);
+ for(const path of ['/finance/summary','/finance/ledger','/finance/rentals','/records/customers','/records/maintenance','/reports/daily'])assert.equal((await fetch(url+path,{headers:{authorization:'Bearer customer'}})).status,401);
+ assert.equal((await fetch(url+'/finance/rentals/legacy/receipt-history',{method:'POST',headers:{authorization:'Bearer customer','content-type':'application/json'},body:'{}'})).status,401);
  assert.equal((await fetch(url+'/finance/expenses',{method:'POST',headers:{authorization:'Bearer customer','content-type':'application/json'},body:'{}'})).status,401);
  const page=await fetch(url+'/records/customers',{headers:operatorHeaders}).then(row=>row.json());assert.deepEqual(page.records.map(row=>row.id),['customer']);assert.equal(db.data('rentals',rental.id).status,'PENDING_ADMIN_APPROVAL');
 });

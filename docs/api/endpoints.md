@@ -2,7 +2,7 @@
 
 ## Database availability errors
 
-Firestore quota exhaustion returns HTTP `429` with `{error, code: "FIRESTORE_QUOTA_EXCEEDED", retryAfterSeconds}` and a `Retry-After` header. During the five-minute cooldown, further database requests fail without consuming more reads. Device clients should honor that header when polling. Logout and password-reset do not require Firestore access and remain available.
+Firestore quota exhaustion returns HTTP `429` with `{error, code: "FIRESTORE_QUOTA_EXCEEDED", retryAfterSeconds}` and a `Retry-After` header. During the five-minute cooldown, further database requests fail without consuming more reads. Device clients should honor that header when polling. Logout and the legacy Firebase reset-link endpoint do not require Firestore access and remain available; the current OTP password-reset endpoints use Firestore.
 
 Temporary database failures return HTTP `503` with code `FIREBASE_UNAVAILABLE`; invalid server configuration or credentials use `FIREBASE_CONFIGURATION_ERROR`. `GET /api/health` returns HTTP `200` with `database: false`, the matching `code`, `warning`, and `retryAfterSeconds` when the database is unavailable. A healthy response includes `database: true`.
 
@@ -15,12 +15,15 @@ Temporary database failures return HTTP `503` with code `FIREBASE_UNAVAILABLE`; 
 
 Canonical roles are `OWNER`, `OPERATOR`, and `CUSTOMER`; old `SUPER_ADMIN`, `ADMIN`, and `USER` values remain compatible. See [account procedures and validation](../architecture/account-access.md).
 
-- POST `/api/auth/email-check` — public, rate limited. `{email}` validates syntax, lowercase normalization, and the ability of the domain to receive mail. Whitespace is rejected; company/school domains are allowed. Invalid domains return `400 INVALID_EMAIL_DOMAIN`; temporary DNS errors return `503`.
+- POST `/api/auth/email-check` — public, rate limited compatibility endpoint. `{email}` checks format, rejects whitespace, and normalizes to lowercase. No DNS/domain lookup is performed; invalid syntax returns `400`.
 - POST `/api/auth/login` — `{email, password, remember?}` checks email format without DNS/domain validation, creates a staff session, and returns a canonical user with `mustChangePassword`.
-- POST `/api/auth/password-reset` — public, rate limited. `{email}` checks format without DNS/domain validation, requests a Firebase reset link, and returns the recipient plus generic instructions without revealing whether the account exists. Service failures are reported.
+- POST `/api/auth/password-reset/request` — public, rate limited. `{email}` checks email format only and requests a six-digit reset code. The generic response does not reveal whether an active account exists; codes expire after 10 minutes, permit five guesses, and have a 30-second resend cooldown.
+- POST `/api/auth/password-reset/verify` — public, rate limited. `{email, code}` returns a short-lived proof token only for a valid code and active account.
+- POST `/api/auth/password-reset/complete` — public, rate limited. `{email, verificationToken, requestKey, newPassword, confirmPassword}` changes the password after code verification, revokes existing sessions, and clears the temporary-password flag.
+- POST `/api/auth/password-reset` — compatibility endpoint for older clients and the signed-in Settings shortcut. `{email}` requests a Firebase reset link; the current Forgot password screens use the OTP endpoints above.
 - GET `/api/auth/me` — staff cookie or Firebase token; includes `mustChangePassword`.
 - POST `/api/auth/change-password` — active staff, rate limited. `{currentPassword, newPassword, confirmPassword, remember?}` requires a different password with 8–128 characters, an uppercase letter, a number, and matching confirmation. Verifies the current identity, revokes prior sessions, and clears `must_change_password`. Web receives a fresh cookie or `signInAgain: true`; mobile signs in again.
-- POST `/api/users` — Owner only. `{fullName, email, role, passwordMode, password?, confirmPassword?}` creates `OWNER` or `OPERATOR` with email format validation and no DNS/domain check. `passwordMode` is `generated` (emailed using backend SMTP) or `manual` (matching password fields required). Returns `mustChangePassword` and `credentialsEmailSent`, never the password. Generated-email failure rolls back account creation.
+- POST `/api/users` — Owner only. `{fullName, email, role, passwordMode, password?, confirmPassword?}` creates `OWNER` or `OPERATOR` after email-format validation. `passwordMode` is `generated` (emailed using backend SMTP) or `manual` (matching password fields required). Returns `mustChangePassword` and `credentialsEmailSent`, never the password. Generated-email failure rolls back account creation.
 
 Other staff endpoints return `403 PASSWORD_CHANGE_REQUIRED` while the account's temporary-password flag is set.
 
@@ -30,7 +33,7 @@ Other staff endpoints return `403 PASSWORD_CHANGE_REQUIRED` while the account's 
 - POST `/api/mobile/registration/verify-email-code` — public JSON `{email, code}`. Checks a six-digit code with at most five guesses and returns a short-lived `verificationToken` on success.
 - POST `/api/mobile/registration/complete` — Firebase bearer token plus `{email, verificationToken, name, phone}`. The email must match the authenticated Firebase account; the backend marks that address verified and creates its customer profile only after the proof is accepted. Names are limited to letters and common name punctuation, and phone numbers must normalize to a Philippine mobile number.
 
-The backend sends mail over Gmail SMTP using `SMTP_USER`, `SMTP_PASSWORD`, and `REGISTRATION_OTP_PEPPER`. The Firestore index configuration enables TTL cleanup for expired OTP records; deploy it with `firebase deploy --only firestore:indexes`.
+The backend sends mail over Gmail SMTP using backend-only `SMTP_USER` and `SMTP_PASSWORD`. Registration OTP hashes use `REGISTRATION_OTP_PEPPER`; password-reset OTP hashes use `PASSWORD_RESET_OTP_PEPPER` (at least 32 random bytes), with the registration pepper as a compatibility fallback. Firestore TTL settings cover both expired registration and password-reset OTP records; deploy index changes with `firebase deploy --only firestore:indexes`.
 
 The current rental desk uses the rental request, payment review, equipment preparation, resort handoff, and receipt endpoints described below. These legacy/proposal endpoints remain documented:
 
@@ -157,7 +160,9 @@ These staff routes accept the same active Owner/Operator web cookie or Android b
 | GET | `/api/records/rentals` | Bounded history/current list with `status`, `customerId`, `itemId`, `search`, `from`, `to`, or `scheduledDay`. |
 | GET | `/api/records/customers` | Active/archive filter and normalized customer name prefix or exact public reference. Staff profiles are excluded. |
 | GET | `/api/records/maintenance` | Open/closed history, exact reference or saved item-name prefix; optional `itemId` and creation dates. |
-| GET | `/api/finance/summary` | Recorded collections, refunds, expenses and net cash movement, grouped by Manila business day for `from`/`to`. |
+| GET | `/api/finance/summary` | Dated receipt totals plus `rental_totals`: saved paid amounts, charges, balances, refund liabilities, and payments needing receipt dates. Rental totals use creation dates; ledger totals use receipt dates. |
+| GET | `/api/finance/rentals` | Bounded rental-payment page for `from`/`to`, exact rental-reference `search`, `limit` and cursor. Each row separates charges, saved paid, dated ledger coverage, balance and missing receipt details. |
+| POST | `/api/finance/rentals/{id}/receipt-history` | Journal an existing saved payment after staff confirms its original receipt date/time, method, amount and evidence. Changes neither the rental paid amount nor its workflow status. Retry-safe; concurrent duplicate confirmations are rejected. |
 | GET | `/api/finance/ledger` | Immutable entries, filtered by day range, `type`, `method` or `rentalId`. |
 | POST | `/api/finance/expenses` | Record an expense already paid: retry key, positive amount, cash/QR method, category, notes and QR reference. |
 | GET | `/api/reports/daily` | Precomputed charge/count summaries for the selected period; unknown historical charges are flagged. |
@@ -168,6 +173,8 @@ These staff routes accept the same active Owner/Operator web cookie or Android b
 | POST | `/api/mobile/rentals/{id}/extension-quote` | Customer quote for their active rental. |
 | POST | `/api/mobile/rentals/{id}/extension` | Customer request after accepting the additional fee; staff review is required. |
 
-List endpoints default to 25 entries with a maximum of 100. Pass `limit` and the returned `nextCursor`; changing a filter requires a fresh cursor. Creation-date filters apply only to known dates; `scheduledDay=YYYY-MM-DD` uses Manila and cannot be combined with creation dates. Exact public references are supported; customer prefixes are normalized, while item-name prefixes retain saved capitalization. Return metadata distinguishes a bounded page from lifetime totals.
+List endpoints default to 5 entries with a maximum of 100. Pass `limit` and the returned `nextCursor`; changing a filter requires a fresh cursor. Creation-date filters apply only to known dates; `scheduledDay=YYYY-MM-DD` uses Manila and cannot be combined with creation dates. Exact public references are supported; customer prefixes are normalized, while item-name prefixes retain saved capitalization. Return metadata distinguishes a bounded page from lifetime totals.
 
-The ledger records in-person cash and manual QR confirmation, without a POS or automatic transfer provider. Assessed charges use the handoff day; collections use their recorded receipt/verification day. Historical payments with unknown receipt times are excluded rather than invented. See [the full rules](../architecture/local-planning-and-payments.md) and [OpenAPI](../../packages/api-contracts/openapi/openapi.yaml) for request schemas.
+`GET /api/workspace?view=Transaction History` also returns `rental_ranking`, computed from all confirmed rentals across physical units, independently of the table cursor, search and status. Optional `rankingFrom` and `rankingTo` filter by Philippine rental-confirmation day; omit both for all time. Counts come from derived equipment summaries, not a download of every rental. `view_meta` identifies the requested workspace view and report dates so clients cannot reuse a paginated history page as a complete analytics dataset. Equal rental counts use equipment name as the tie order in both History and Analytics.
+
+The ledger records in-person cash and manual QR confirmation, without a POS or automatic transfer provider. Historical saved payments appear in Rental payments immediately; their original date must be confirmed before they join dated collections. The confirmation body requires `{requestKey, amount, occurredAt, paymentMethod, reference?, notes, confirmed: true}`. `occurredAt` must include a timezone, be no earlier than rental creation and no later than now; QR requires a reference. This action journals money already recorded as paid and never collects it again. See [the full rules](../architecture/local-planning-and-payments.md) and [OpenAPI](../../packages/api-contracts/openapi/openapi.yaml) for request schemas.

@@ -3,6 +3,7 @@ import { inventoryList } from './inventory.mjs';
 import { equipmentRateOptions, loadPricing } from './pricing.mjs';
 import { normalizeRole } from './roles.mjs';
 import { nameError, phoneError, validationFailure } from './account-validation.mjs';
+import { pageLimit } from './query-validation.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const money = amount => `₱${Number(amount).toFixed(2)}`;
@@ -164,7 +165,7 @@ export async function mobileRentalList(db, actor, rentalId = '', options = {}) {
     rentals = [docData(doc)];
     if (String(rentals[0].customer_id ?? rentals[0].customerId) !== ownerId) fail(403, 'You can only view your own rentals.');
   } else {
-    const limit=Math.min(100,Math.max(1,Number(options.limit)||50));
+    const limit=pageLimit(options.limit);
     let cursor=null;
     if(options.cursor){cursor=await db.collection('rentals').doc(String(options.cursor)).get();if(!cursor.exists||String(cursor.data().customer_id??cursor.data().customerId)!==ownerId)fail(400,'Refresh your rental history before loading another page.');}
     const fields=['customer_id','customerId'],closedStates=['COMPLETED','CANCELLED','REJECTED','EXPIRED'],openStates=['ACTIVE','APPROVED','RETURN_PENDING_INSPECTION','PENDING_ADMIN_APPROVAL','PENDING_ESP32_RENT','PENDING_VERIFICATION','PENDING_ESP32_RETURN','PENDING_RETURN_VERIFICATION'],closed=[...closedStates,...closedStates.map(s=>s.toLowerCase())],open=[...openStates,...openStates.map(s=>s.toLowerCase())];

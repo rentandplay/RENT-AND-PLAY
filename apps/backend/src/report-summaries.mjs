@@ -1,6 +1,8 @@
 import { asDate, docData } from './firebase.mjs';
 import { businessDay, serializeLedger } from './payment-ledger.mjs';
 import { dateRange } from './query-validation.mjs';
+import { rentalFinanceContribution } from './rental-payment-state.mjs';
+import {equipmentRentalContribution,planEquipmentRanking} from './equipment-ranking.mjs';
 
 const round = n => Math.round(n*100)/100;
 function contribution(rental) {
@@ -19,20 +21,36 @@ function contribution(rental) {
 export async function projectRentalSummary(db,id,now=new Date()) {
   return db.runTransaction(async tx => {
     const rentalRef=db.collection('rentals').doc(id), stateRef=db.collection('rental_report_snapshots').doc(id), jobRef=db.collection('report_jobs').doc(id);
-    const [doc,previous,job]=await Promise.all([tx.get(rentalRef),tx.get(stateRef),tx.get(jobRef)]);
-    if (!doc.exists) { if(job.exists)tx.delete(jobRef); return; }
-    const after=contribution(docData(doc)), before=previous.exists?previous.data().contribution:null;
-    if(JSON.stringify(after)===JSON.stringify(before)){if(job.exists)tx.delete(jobRef);return;}
+    const coverageRef=db.collection('rental_payment_totals').doc(id);
+    const [doc,previous,job,coverage]=await Promise.all([tx.get(rentalRef),tx.get(stateRef),tx.get(jobRef),tx.get(coverageRef)]);
+    const after=doc.exists?contribution(docData(doc)):null, before=previous.exists?previous.data().contribution:null;
+    const created=doc.exists?asDate(doc.data().created_at || doc.data().startDate):null;
+    const financeAfter=doc.exists?rentalFinanceContribution(doc.data(),coverage.exists?coverage.data():{},created&&Number.isFinite(created.getTime())?businessDay(created):null):null;
+    const financeBefore=previous.exists?previous.data().finance_contribution || null:null;
+    const equipmentBefore=previous.exists?previous.data().equipment_contribution || null:null;
+    const equipmentAfter=doc.exists?equipmentRentalContribution(doc.data(),now):null;
+    if(JSON.stringify(after)===JSON.stringify(before) && JSON.stringify(financeAfter)===JSON.stringify(financeBefore) && JSON.stringify(equipmentAfter)===JSON.stringify(equipmentBefore)){if(job.exists)tx.delete(jobRef);return;}
     const days=[...new Set([before?.day,after?.day].filter(Boolean))];
     const daily=await Promise.all(days.map(day=>tx.get(db.collection('rental_daily').doc(day))));
     const customers=[...new Set([before?.customer_id,after?.customer_id].filter(Boolean))];
     const customerDocs=await Promise.all(customers.map(customer=>tx.get(db.collection('customer_report_summaries').doc(customer))));
+    const financeDays=[...new Set([financeBefore?.day,financeAfter?.day].filter(Boolean))];
+    const financeDocs=await Promise.all(financeDays.map(day=>tx.get(db.collection('rental_financial_daily').doc(day))));
+    const writeEquipment=await planEquipmentRanking(tx,db,equipmentBefore,equipmentAfter,now);
     for(let i=0;i<days.length;i++) {
       const day=days[i], totals=daily[i].exists?daily[i].data():{rentals:0,fees:0,final_charges:0};
       for (const metric of ['rentals','fees','final_charges','unknown_charges']) totals[metric]=round(Number(totals[metric]||0)-(before?.day===day?Number(before[metric]||0):0)+(after?.day===day?Number(after[metric]||0):0));
       tx.set(daily[i].ref,{...totals,business_day:day,updated_at:now});
     }
-    tx.set(stateRef,{contribution:after,updated_at:now});
+    tx.set(stateRef,{contribution:after,finance_contribution:financeAfter,equipment_contribution:equipmentAfter,updated_at:now});
+    writeEquipment();
+    for(let i=0;i<financeDays.length;i++) {
+      const day=financeDays[i], totals=financeDocs[i].exists?financeDocs[i].data():{};
+      for(const metric of ['rentals','charges','saved_paid','saved_refunded','balance_due','refund_due','unposted_paid','unposted_count','unknown_payments','unknown_charges']) {
+        totals[metric]=round(Number(totals[metric]||0)-(financeBefore?.day===day?Number(financeBefore[metric]||0):0)+(financeAfter?.day===day?Number(financeAfter[metric]||0):0));
+      }
+      tx.set(financeDocs[i].ref,{...totals,business_day:day,updated_at:now});
+    }
     for(let i=0;i<customers.length;i++){
       const customer=customers[i], totals=customerDocs[i].exists?customerDocs[i].data():{rentals:0,active:0,completed:0,fees:0};
       for(const metric of ['rentals','active','completed','fees'])totals[metric]=round(Number(totals[metric]||0)-(before?.customer_id===customer?Number(before[metric]||0):0)+(after?.customer_id===customer?Number(after[metric]||0):0));

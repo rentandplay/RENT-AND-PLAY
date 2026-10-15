@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emailError, nameError, passwordError, createEmailDomainValidator } from '../src/account-validation.mjs';
+import { emailError, nameError, passwordError, validateEmailFormat } from '../src/account-validation.mjs';
 import { createWorkspaceUser, createMobileCustomerAccount } from '../src/workspace.mjs';
 import { changeWorkspacePassword } from '../src/auth.mjs';
 import { createApi } from '../src/server.mjs';
@@ -11,7 +11,7 @@ const validationOptions = { validateEmail: async value => value.toLowerCase() };
 const password = 'SecurePass9';
 const input = { fullName: 'Maria Santos', email: 'maria@school.edu.ph', password, confirmPassword: password, role: 'OPERATOR', passwordMode: 'manual' };
 
-test('account rules reject the reported invalid inputs and keep legitimate names and custom domains', () => {
+test('account rules reject invalid inputs and accept valid email formats with custom domains', () => {
   for (const email of ['some one@gmail.com', ' test@gmail.com', 'test@gmail.com ', 'test..name@gmail.com', 'test@-domain.com', 'no-at-sign']) assert.ok(emailError(email));
   for (const email of ['MARIA@school.edu.ph', 'first.last+tag@company.com', 'juan@university.academy']) assert.equal(emailError(email), '');
   for (const name of ['A', 'A B', 'Juan123 Santos', 'Juan @ Santos', 'raveeeeeeNN hwidawgiodgawqqqqqqqqq']) assert.ok(nameError(name));
@@ -21,23 +21,25 @@ test('account rules reject the reported invalid inputs and keep legitimate names
   assert.equal(normalizeRole('admin'), 'OPERATOR'); assert.equal(normalizeRole('user'), 'CUSTOMER'); assert.equal(normalizeRole('super_admin'), 'OWNER');
 });
 
-test('domain checks support custom MX, reject unknown/null-MX domains, and keep transient failures recoverable', async () => {
-  let calls = 0;
-  const check = createEmailDomainValidator({ allowedDomains: '', resolveMx: async domain => {
-    calls++;
-    if (domain === 'missing.example') throw Object.assign(new Error('missing'), { code: 'ENOTFOUND' });
-    if (domain === 'nullmx.example') return [{ priority: 0, exchange: '' }];
-    if (domain === 'offline.example') throw Object.assign(new Error('timeout'), { code: 'ETIMEOUT' });
-    return [{ exchange: 'mail.' + domain }];
-  } });
-  assert.equal(await check('Maria@school.edu.ph'), 'maria@school.edu.ph');
-  await check('staff@school.edu.ph'); assert.equal(calls, 1, 'cache the domain, not individual user addresses');
-  for (let count = 0; count < 2; count++) await assert.rejects(check('a@missing.example'), error => error.status === 400 && error.code === 'INVALID_EMAIL_DOMAIN');
-  await assert.rejects(check('a@nullmx.example'), error => error.status === 400);
-  await assert.rejects(check('a@offline.example'), error => error.status === 503);
-  await assert.rejects(check('a@offline.example'), error => error.status === 503);
-  const fallback = createEmailDomainValidator({ allowedDomains: '', resolveMx: async () => { throw Object.assign(new Error('no MX'), { code: 'ENODATA' }); }, resolve4: async () => ['192.0.2.1'], resolve6: async () => [] });
-  assert.equal(await fallback('user@custom.example'), 'user@custom.example');
+test('email validation checks format and normalization without looking up the domain', () => {
+  assert.equal(validateEmailFormat('Maria@school.edu.ph'), 'maria@school.edu.ph');
+  assert.equal(validateEmailFormat('User@not-configured.example'), 'user@not-configured.example');
+  assert.throws(() => validateEmailFormat('not an email'), error => error.status === 400);
+});
+
+test('email-check compatibility endpoint accepts any syntactically valid domain without DNS lookup', async () => {
+  const server = createApi({ services: {} });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}/api/auth/email-check`;
+    const valid = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'Person@not-configured.example' }) });
+    assert.equal(valid.status, 200);
+    assert.deepEqual(await valid.json(), { email: 'person@not-configured.example', valid: true });
+    const invalid = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'not an email' }) });
+    assert.equal(invalid.status, 400);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 test('staff creation requires matching strong passwords, preserves selected roles, and hides credentials from records', async () => {

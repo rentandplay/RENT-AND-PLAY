@@ -6,12 +6,12 @@ import { isStaffRole, normalizeRole } from './roles.mjs';
 import { allocateCustomerCode } from './customer-codes.mjs';
 import { validateInstapayQr } from './payment-proof.mjs';
 import { randomBytes, createHash } from 'node:crypto';
-import { emailError, nameError, passwordError, passwordMatchError, phoneError, validationFailure, createEmailDomainValidator } from './account-validation.mjs';
+import { emailError, nameError, passwordError, passwordMatchError, phoneError, validationFailure, validateEmailFormat } from './account-validation.mjs';
 import { createAccountMailer } from './account-mail.mjs';
 import { recordPage } from './record-pages.mjs';
 import { OPEN_RENTALS } from './rental-calendar.mjs';
+import {equipmentRentalRanking} from './equipment-ranking.mjs';
 
-const validateEmailDomain = createEmailDomainValidator();
 const sendAccountCredentials = createAccountMailer();
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -71,6 +71,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
     !mobile && isStaffRole(role) && (!view || ['Reports','Settings'].includes(view)) ? auditQuery.get() : Promise.resolve({ docs: [] })
   ]);
   const source = Object.fromEntries(names.map((name, index) => [name, rows(snapshots[index])]));
+  const rentalRanking=view==='Transaction History'?await equipmentRentalRanking(db,source.items,{from:filters.rankingFrom,to:filters.rankingTo},now):null;
   source.audit_logs = auditSnapshot.docs.map(docData);
   const itemMap = new Map(source.items.map(item => [item.id, item]));
   const customerMap = new Map(source.customers.map(customer => [customer.id, customer]));
@@ -163,7 +164,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
       ? { ...customer, full_name: linkedProfile.full_name || linkedProfile.name || customer.full_name, email: linkedProfile.email || customer.email, phone: linkedProfile.phone || customer.phone }
       : customer;
   });
-  return { customers: customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, page_meta:page ? {kind,nextCursor:page.nextCursor,limit:page.limit} : null, refreshedAt: now.toISOString() };
+  return { view_meta: { view, from: filters.from || null, to: filters.to || null }, rental_ranking: rentalRanking, customers: customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, page_meta:page ? {kind,nextCursor:page.nextCursor,limit:page.limit} : null, refreshedAt: now.toISOString() };
 }
 
 export async function createCustomer(db, actor, input, now = new Date()) {
@@ -208,7 +209,7 @@ async function checkCustomerDuplicate(tx, db, value, exceptId = null) {
   if (emailLock) tx.set(emailLock, { updated_at: new Date() }, { merge: true });
 }
 
-export async function createMobileCustomerAccount(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailDomain } = {}) {
+export async function createMobileCustomerAccount(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailFormat } = {}) {
   const validated = validateCustomer({ ...input, code: input?.code || 'AUTO' }), password = typeof input?.password === 'string' ? input.password : '', confirmPassword = typeof input?.confirmPassword === 'string' ? input.confirmPassword : '';
   if (!actor) fail(401, 'An authenticated administrator is required.');
   if (!validated.email) fail(400, 'An email address is required for mobile app sign-in.');
@@ -465,7 +466,7 @@ export async function savePaymentSettings(db, actor, input, now = new Date()) {
   return { ...value };
 }
 
-export async function createWorkspaceUser(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailDomain, sendCredentials = sendAccountCredentials } = {}) {
+export async function createWorkspaceUser(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailFormat, sendCredentials = sendAccountCredentials } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Account details are required.');
   validationFailure(nameError(input.fullName));
   validationFailure(emailError(input.email));

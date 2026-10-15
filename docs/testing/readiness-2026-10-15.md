@@ -1,5 +1,7 @@
 # Local planning and payments verification — 15 October 2026
 
+Latest verification: [web, Android and backend audit](system-audit-2026-10-15.md). Use that report for current test counts, inventory and Android build evidence; this document records the earlier feature delivery.
+
 The approved changes are implemented in the shared backend, web workspace and Android application. Delivery stays within Lakewood Subdivision, Los Baños, Laguna. Cash is accepted in person; staff record actual receipts. QR transfers remain manually verified. ESP32 stays on standby.
 
 ## Delivered behavior

@@ -1,5 +1,5 @@
 const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
-export function pageLimit(value, fallback = 25) {
+export function pageLimit(value, fallback = 5) {
   if (value == null || value === '') return fallback;
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) fail('Choose a page size from 1 to 100.');

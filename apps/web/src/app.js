@@ -13,6 +13,7 @@ const confirmation = createConfirmationDialog({ dialog: document.querySelector('
 const { confirmAction, confirmSubmit } = confirmation;
 let logoutPending = false;
 let rememberSession = false;
+let passwordResetCountdown = null;
 let invalidateWorkspace = () => {};
 const icons = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5l1.5 1.5M5 19l1.5-1.5M17.5 6.5l1.5-1.5"/>',
@@ -27,6 +28,9 @@ const icons = {
   arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', search: '<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',
   bell: '<path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3ZM10 21h4"/>', out: '<path d="M10 4H4v16h6M8 12h13m-4-4 4 4-4 4"/>',
   money: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 12h1M17 12h1"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/>',
+  lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
   edit: '<path d="m16 3 5 5-12 12-6 1 1-6L16 3ZM14 5l5 5"/>',
   archive: '<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v12h14V8M10 12h4"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>', qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v3M14 20h3M20 20h1"/>', menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
@@ -169,7 +173,8 @@ function showModal(title, body) {
   modal.innerHTML = `<div class="modal-heading"><h2>${escape(title)}</h2><button class="icon-button" id="close-modal" aria-label="Close dialog">✕</button></div>${body}`;
   modal.setAttribute('aria-label', title);
   updateModalLayout();
-  modal.showModal(); modal.scrollTop = 0; document.querySelector('#close-modal').onclick = () => modal.close();
+  if (!modal.open) modal.showModal();
+  modal.scrollTop = 0; document.querySelector('#close-modal').onclick = () => modal.close();
 }
 function stopRentalEventStream() {
   rentalEventSource?.close();
@@ -215,6 +220,8 @@ function scheduleRentalEventSync() {
   }, 180);
 }
 modal.addEventListener('close', () => {
+  clearInterval(passwordResetCountdown);
+  passwordResetCountdown = null;
   if (rentalEventSyncPending) scheduleRentalEventSync();
 });
 function syncRentalEventStream(accountId) {
@@ -323,18 +330,81 @@ function login(message = '') {
     e.currentTarget.setAttribute('aria-label', input.type === 'password' ? 'Show password' : 'Hide password');
   };
   document.querySelector('#forgot').onclick = () => {
-    showModal('Reset your password', `<p>Enter the email registered to your account. Review the address before requesting the reset link.</p><form id="reset-form" class="admin-form"><label>Account email<input name="email" type="email" autocomplete="email" maxlength="254" value="${escape(document.querySelector('#email').value)}" required/></label><p class="form-error" role="alert"></p><button class="primary" type="submit">Send reset link</button></form>`);
-    const form = modal.querySelector('#reset-form');
-    bindAccountValidation(form, { email: emailError });
-    confirmSubmit(form, () => ({ title: 'Send password reset link?', description: `Request a reset link for ${form.elements.email.value}?`, confirmLabel: 'Send reset link' }), async () => {
-      const button = form.querySelector('button'), error = form.querySelector('.form-error'); button.disabled = true; button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span> Sending…';
+    const state = { step: 'email', email: document.querySelector('#email').value.trim().toLowerCase(), code: '', token: '', requestKey: '', newPassword: '', confirmPassword: '', notice: '', error: '', busy: false, resendAt: 0 };
+    const resetSteps = [['email','Verify email'],['code','Enter code'],['password','New password']];
+    const spinner = label => `<span class="button-spinner" aria-hidden="true"></span> ${label}`;
+    function updateResend() {
+      const button = modal.querySelector('[data-reset-resend]');
+      if (!button) { clearInterval(passwordResetCountdown); passwordResetCountdown = null; return; }
+      const seconds = Math.max(0, Math.ceil((state.resendAt - Date.now()) / 1000));
+      button.disabled = state.busy || seconds > 0;
+      button.textContent = seconds ? `Resend code in ${seconds}s` : 'Resend code';
+      if (!seconds) { clearInterval(passwordResetCountdown); passwordResetCountdown = null; }
+    }
+    function render() {
+      const currentStep = resetSteps.findIndex(([id]) => id === state.step);
+      const steps = currentStep < 0 ? '' : `<ol class="password-reset-steps" aria-label="Password reset steps">${resetSteps.map(([id,label],index)=>`<li class="${state.step===id?'current':index<currentStep?'complete':''}" data-reset-step="${id}"${state.step===id?' aria-current="step"':''}><span>${index+1}</span>${label}</li>`).join('')}</ol>`;
+      const stepContent = state.step === 'email' ? `<div class="password-reset-intro"><span class="reset-step-icon">${icon('mail')}</span><p class="eyebrow">ACCOUNT RECOVERY</p><h3>Reset your password</h3><p>Enter the email address linked to your account. We’ll send a one-time code to verify it’s you.</p></div><form id="reset-form" class="admin-form password-reset-form"><label for="reset-email">Account email</label><input id="reset-email" name="email" type="email" autocomplete="email" autocapitalize="none" maxlength="254" value="${escape(state.email)}" placeholder="you@example.com" required/><p class="form-error" role="alert">${escape(state.error)}</p><button class="primary" type="submit" ${state.busy?'disabled':''}>${state.busy?spinner('Sending code…'):'Send verification code'}</button><button class="text-button reset-back-link" type="button" data-reset-close>Back to sign in</button></form>`
+        : state.step === 'code' ? `<div class="password-reset-intro"><span class="reset-step-icon">${icon('mail')}</span><p class="eyebrow">VERIFY YOUR EMAIL</p><h3>Enter your code</h3><p>Enter the 6-digit code to continue. Check your inbox and spam folder if it doesn’t appear.</p></div><div class="reset-email-notice" role="status">${escape(state.notice || 'If an active account exists for this email, a verification code has been sent.')}</div><form id="reset-form" class="admin-form password-reset-form"><label for="reset-code">6-digit verification code for <strong>${escape(state.email)}</strong></label><input id="reset-code" class="password-reset-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="000000" value="${escape(state.code)}" aria-describedby="reset-code-help" required/><small id="reset-code-help">The code expires in 10 minutes. Never share it with anyone.</small><p class="form-error" role="alert">${escape(state.error)}</p><button class="primary" type="submit" ${state.busy?'disabled':''}>${state.busy?spinner('Verifying…'):'Verify code'}</button><div class="reset-secondary-actions"><button class="text-button" type="button" data-reset-resend>Resend code</button><button class="text-button" type="button" data-reset-edit-email>Use another email</button></div></form>`
+        : state.step === 'password' ? `<div class="password-reset-intro"><span class="reset-step-icon">${icon('lock')}</span><p class="eyebrow">EMAIL VERIFIED</p><h3>Choose a new password</h3><p>Your code was verified. Set a new password to finish securing your account.</p></div><form id="reset-form" class="admin-form password-reset-form"><label for="reset-password">New password</label><input id="reset-password" name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" value="${escape(state.newPassword)}" required/><small>${passwordHelp}</small><label for="reset-confirm">Confirm new password</label><input id="reset-confirm" name="confirmPassword" type="password" autocomplete="new-password" maxlength="128" value="${escape(state.confirmPassword)}" required/><label class="checkbox reset-show-password"><input type="checkbox" id="reset-show-password"/> Show passwords</label><p class="form-error" role="alert">${escape(state.error)}</p><button class="primary" type="submit" ${state.busy?'disabled':''}>${state.busy?spinner('Updating password…'):'Update password'}</button><button class="text-button reset-back-link" type="button" data-reset-restart ${state.busy?'disabled':''}>Start over</button></form>`
+        : `<div class="password-reset-complete"><span class="reset-step-icon success">${icon('check')}</span><p class="eyebrow">PASSWORD UPDATED</p><h3>You’re all set</h3><p>Your password has been changed. Sign in with your new password to continue.</p><button class="primary" type="button" data-reset-finished>Back to sign in</button></div>`;
+      showModal('Account recovery', `<div class="password-reset-flow">${steps}${stepContent}</div>`);
+      const form = modal.querySelector('#reset-form');
+      if (form && state.step === 'email') {
+        const validation = bindAccountValidation(form, { email: emailError });
+        form.onsubmit = async event => {
+          event.preventDefault(); if (state.busy || !validation.validate()) return;
+          state.email = form.elements.email.value.trim().toLowerCase(); await sendCode();
+        };
+      } else if (form && state.step === 'code') {
+        const code = form.elements.code;
+        code.oninput = () => { code.value = code.value.replace(/\D/g, '').slice(0, 6); state.code = code.value; };
+        form.onsubmit = async event => {
+          event.preventDefault(); if (state.busy || !form.reportValidity()) return;
+          state.code = code.value; state.busy = true; state.error = ''; render();
+          try {
+            const result = await api('/auth/password-reset/verify', { method: 'POST', body: JSON.stringify({ email: state.email, code: state.code }) });
+            state.token = result.verificationToken; state.requestKey = crypto.randomUUID(); state.step = 'password'; state.code = ''; state.newPassword = ''; state.confirmPassword = ''; state.notice = ''; state.error = '';
+          } catch (problem) { state.error = problem.message; }
+          finally { state.busy = false; render(); }
+        };
+        modal.querySelector('[data-reset-resend]').onclick = () => sendCode();
+        modal.querySelector('[data-reset-edit-email]').onclick = () => { state.step = 'email'; state.code = ''; state.token = ''; state.error = ''; state.notice = ''; state.resendAt = 0; render(); };
+        updateResend();
+      } else if (form && state.step === 'password') {
+        const validation = bindAccountValidation(form, {
+          newPassword: passwordError,
+          confirmPassword: value => passwordMatchError(form.elements.newPassword.value, value)
+        });
+        modal.querySelector('#reset-show-password').onchange = event => {
+          for (const field of [form.elements.newPassword, form.elements.confirmPassword]) field.type = event.target.checked ? 'text' : 'password';
+        };
+        modal.querySelector('[data-reset-restart]').onclick = () => { state.step = 'email'; state.code = ''; state.token = ''; state.requestKey = ''; state.newPassword = ''; state.confirmPassword = ''; state.error = ''; state.notice = ''; render(); };
+        form.onsubmit = async event => {
+          event.preventDefault(); if (state.busy || !validation.validate()) return;
+          state.busy = true; state.error = ''; const values = Object.fromEntries(new FormData(form)); state.newPassword = values.newPassword; state.confirmPassword = values.confirmPassword; render();
+          try {
+            await api('/auth/password-reset/complete', { method: 'POST', body: JSON.stringify({ ...values, email: state.email, verificationToken: state.token, requestKey: state.requestKey }) });
+            state.step = 'done'; state.token = ''; state.requestKey = ''; state.newPassword = ''; state.confirmPassword = ''; state.error = '';
+          } catch (problem) { state.error = problem.message; }
+          finally { state.busy = false; render(); }
+        };
+      }
+      modal.querySelector('[data-reset-close]')?.addEventListener('click', () => modal.close());
+      modal.querySelector('[data-reset-finished]')?.addEventListener('click', () => { const loginEmail = document.querySelector('#email'); if (loginEmail) loginEmail.value = state.email; modal.close(); });
+      modal.querySelector('#reset-email, #reset-code, #reset-password')?.focus({ preventScroll: true });
+    }
+    async function sendCode() {
+      if (state.busy) return;
+      state.busy = true; state.error = ''; state.notice = ''; render();
       try {
-        const result = await api('/auth/password-reset', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
-        modal.close();
-        showModal('Check your email', `<div class="reset-instructions"><p>If an account exists for <strong>${escape(result.email)}</strong>, a reset link has been requested for that address.</p><ol><li>Open the email from Rent & Play. Check your spam folder too.</li><li>Follow the link and choose a new password.</li><li>Return to login and use your new password.</li></ol><button type="button" class="primary" data-reset-close>Back to login</button></div>`);
-        modal.querySelector('[data-reset-close]').onclick = () => modal.close();
-      } catch (problem) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Send reset link'; }
-    });
+        const result = await api('/auth/password-reset/request', { method: 'POST', body: JSON.stringify({ email: state.email }) });
+        state.step = 'code'; state.code = ''; state.token = ''; state.requestKey = ''; state.notice = result.message || 'If an active account exists for this email, a verification code has been sent.'; state.resendAt = Date.now() + 30000;
+      } catch (problem) { state.error = problem.message; }
+      finally { state.busy = false; render(); }
+      if (state.step === 'code') passwordResetCountdown = setInterval(() => { if (!modal.open) { clearInterval(passwordResetCountdown); passwordResetCountdown = null; return; } updateResend(); }, 1000);
+    }
+    render();
   };
   const loginValidation = bindAccountValidation(document.querySelector('#login-form'), { email: emailError, password: value => value ? '' : 'Enter your password.' });
   document.querySelector('#login-form').onsubmit = async e => {

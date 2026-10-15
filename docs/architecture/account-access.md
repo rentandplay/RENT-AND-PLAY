@@ -8,12 +8,12 @@ Owners manage business settings and create staff accounts. Operators run daily r
 
 ## Input rules
 
-- Web email inputs are normalized to lowercase and checked for email format and whitespace. Web login, reset requests, and staff/customer account creation or edits do not perform DNS or domain-provider validation. Mobile registration and the mobile email-check endpoint verify DNS mail records, including custom company/school domains, null MX rejection, and SMTP's A/AAAA fallback.
+- Web, mobile, and backend email inputs are normalized to lowercase and checked for email format and whitespace only. No login, registration, password-reset, account-creation, or email-check flow performs DNS/domain lookup. Registration OTP verifies mailbox ownership when its code is entered; the email-check endpoint remains for compatibility and checks syntax only.
 - Names accept Unicode letters, spaces, apostrophes, hyphens, and middle initials. First and last names need at least two letters. Numbers, unsupported symbols, and four or more consecutive repetitions of the same letter are rejected. This catches the reported repeated-character example; it does not claim to identify every invented name.
 - New passwords require 8–128 characters, at least one ASCII capital letter and one digit. Confirmation must match. Existing login passwords are not revalidated against new-password rules.
 - Customer registration requires a valid Philippine mobile number. Existing customer contact edits can leave the phone blank.
 
-Web and mobile forms display inline errors. The backend checks submitted account details independently. Customer registration retains email-code verification to confirm mailbox ownership; a DNS check verifies the domain, not the existence of an individual mailbox.
+Web and mobile forms display inline errors. The backend checks submitted account details independently. Customer registration retains email-code verification to confirm mailbox ownership.
 
 Web login shows a small spinner and **Logging in…** inside the login button until authentication and the initial workspace request finish. The form is disabled during the request, and errors restore login controls. Even a fast response shows at least half a second of progress feedback.
 
@@ -27,7 +27,9 @@ New staff profiles have `must_change_password: true`. Web and mobile route the a
 
 ## Forgot password
 
-**Forgot password?** opens a separate email-entry step. Opening it sends nothing. Review the address and select **Send reset link**. Web also confirms the recipient before sending. The backend requests a real Firebase reset email and reports delivery/service failures instead of displaying false success. The confirmation repeats the entered email, instructs the user to check inbox/spam, follow the link, and return to login. The response does not reveal whether an account exists.
+**Forgot password?** opens a three-step recovery flow shared by web and Android: enter the account email, verify the six-digit code from the email, then choose and confirm a new password. Recovery checks email format only, so a DNS failure cannot block a code request. The professional Rent & Play security email states that the code expires after 10 minutes, is single-use, and must not be shared. The screens provide resend cooldown and recovery errors without revealing whether an active account exists. The backend limits requests and guesses, stores only keyed code/proof digests, revokes existing Firebase sessions after a successful password change, clears any temporary-password flag, and records an audit event without the password. The new password form is only shown after successful code verification.
+
+The signed-in Settings shortcut and the `/api/auth/password-reset` compatibility endpoint continue to send a Firebase reset link for older clients. New Forgot password screens use `/api/auth/password-reset/request`, `/verify`, and `/complete`.
 
 ## Firebase password enforcement
 

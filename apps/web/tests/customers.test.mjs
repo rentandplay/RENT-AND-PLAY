@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { customerActivity, filterCustomerRows, nextCustomerCode, customersCsv } from '../src/customer-ui.js';
+import { customerActivity, filterCustomerRows, nextCustomerCode, customersCsv, createCustomerUI } from '../src/customer-ui.js';
 import { createWorkspaceUI } from '../src/workspace-ui.js';
 
 const customers = [
@@ -76,4 +76,41 @@ test('customer page renders real records safely and offers useful empty states',
   assert.ok(emptyHtml.includes('Add your first customer'));
   assert.ok(emptyHtml.includes('id="customer-export" disabled'));
   assert.ok(!emptyHtml.includes('Ana Reyes'));
+});
+
+test('customer profiles page and open completed history that is absent from the loaded workspace',async()=>{
+  const prior=globalThis.document,calls=[],opened=[];let html='',marker,buttons={};
+  const detailButton={dataset:{customerDetail:'customer'}};
+  const element=dataset=>({dataset,addEventListener(event,callback){this[event]=callback;}});
+  const modal={open:true,querySelector:selector=>selector==='[data-customer-history-loading]'?marker:buttons[selector]||null,querySelectorAll:selector=>selector==='[data-customer-rental]'?Object.values(buttons).filter(button=>button.dataset?.customerRental):[]};
+  const showModal=(_,content)=>{if(marker)marker.isConnected=false;html=content;marker={isConnected:true};buttons={};
+    for(const name of ['profile-edit','profile-toggle','history-prev','history-next'])if(content.includes(`data-${name}`))buttons[`[data-${name}]`]=element({});
+    for(const match of content.matchAll(/data-customer-rental="([^"]+)"/g))buttons[match[1]]=element({customerRental:match[1]});
+  };
+  globalThis.document={querySelector:()=>null,querySelectorAll:selector=>selector==='[data-customer-detail]'?[detailButton]:[],createElement:()=>({})};
+  try{
+    const ui=createCustomerUI({...helpers,model:()=>({customers:[{id:'customer',full_name:'Past customer'}],transactions:[]}),modal,showModal,transactionDetails:row=>opened.push(row),api:async path=>{
+      const query=new URL(path,'http://local').searchParams;calls.push(query);const second=Boolean(query.get('cursor'));
+      return {records:Array.from({length:second?1:5},(_,i)=>({id:'past-'+(second?6:i+1),rental_code:'R-'+(second?6:i+1),status:'COMPLETED',item_name:'Bicycle'})),nextCursor:second?null:'next-history'};
+    }});
+    ui.render('',{paged:rows=>({rows,footer:''}),table:(_,rows)=>rows,status:String,empty:()=>''});ui.bind(()=>{},()=>{},()=>{});
+    await detailButton.onclick();assert.match(html,/data-history-next/);assert.equal(calls[0].get('limit'),'5');
+    await buttons['[data-history-next]'].click();assert.equal(calls[1].get('cursor'),'next-history');assert.match(html,/6–6/);
+    buttons['past-6'].onclick();assert.equal(opened[0].id,'past-6');
+    await buttons['[data-history-prev]'].click();assert.equal(calls[2].get('cursor'),null);assert.match(html,/1–5/);
+  }finally{globalThis.document=prior;}
+});
+
+test('paginated directory explains its counts and preserves summarized past rentals', async () => {
+  const ui = createWorkspaceUI({ ...helpers, api: async () => ({
+    ...workspace([{ ...customers[0], rental_summary: { rentals: 7, completed: 7, active: 0 } }]),
+    page_meta: { kind: 'customers', limit: 5, nextCursor: 'next' }
+  }) });
+  await ui.load();
+  const html = ui.render('Customers', {});
+  assert.ok(html.includes('Customers on this page'));
+  assert.ok(html.includes('7 rentals'));
+  assert.ok(html.includes('View profile for rental history'));
+  assert.ok(!html.includes('Ready for their first rental'));
+  assert.ok(!html.includes('No rentals yet'));
 });

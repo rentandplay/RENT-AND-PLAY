@@ -156,6 +156,7 @@ function collectionWindows(item,history,start,end) {
 
 export function calculateAnalytics(data,selection={},now=new Date()) {
   const range=analyticsRange(selection,now);if(range.error)return {range,error:range.error};
+  if(data.page_meta?.kind==='rentals')return {range,error:'Analytics needs complete report records. Refresh this page to load the report instead of a rental table page.'};
   const start=ms(range.from),end=ms(shiftDate(range.to,1)),asOf=Math.min(end,now.getTime());
   const within=value=>{const at=ms(value);return at!==null&&at>=start&&at<end&&at<=now.getTime();};
   const items=data.items||[],transactions=data.transactions||[],categories=data.categories||[],maintenance=data.maintenance||[];

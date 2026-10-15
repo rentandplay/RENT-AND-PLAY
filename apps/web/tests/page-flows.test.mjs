@@ -96,8 +96,8 @@ test('due today shows upcoming returns separately from already overdue rentals o
   assert.ok(html.includes('data-transaction-filter="Overdue" aria-pressed="false">Overdue<span>1</span>'));
 });
 
-test('transaction popularity counts confirmed rentals and excludes cancelled or unconfirmed requests', async () => {
-  const ui = createWorkspaceUI({ ...helpers, api: async () => ({ ...model(), transactions: [
+test('transaction popularity uses the complete confirmed ranking instead of counting loaded requests', async () => {
+  const ui = createWorkspaceUI({ ...helpers, api: async () => ({ ...model(), rental_ranking:{total_rentals:1,equipment_count:1,rows:[{name:'Actually rented',rentals:1,item_id:null}]}, transactions: [
     { id: 'confirmed', item_name: 'Actually rented', status: 'COMPLETED', confirmed_rental_at: '2026-10-05T10:00:00Z' },
     ...Array.from({ length: 8 }, (_, i) => ({ id: `cancelled-${i}`, item_name: 'Never handed over', status: 'CANCELLED' })),
     { id: 'pending', item_name: 'Awaiting release', status: 'PENDING_VERIFICATION' }

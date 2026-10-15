@@ -12,6 +12,7 @@ import { phoneError } from './account-validation.mjs';
 import { isStaffRole } from './roles.mjs';
 import { scheduledStart, assertCalendarFree, calendarConflict, handoffDeadline, assertPreparationTime, LOCAL_DELIVERY_AREA } from './rental-calendar.mjs';
 import { planLedgerEntry } from './payment-ledger.mjs';
+import { rentalPaymentSummary as paymentSummary } from './rental-payment-state.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const details = input => { if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Rental details are required.'); return input; };
@@ -44,20 +45,6 @@ const ttl = (setting, fallback) => { const seconds = Number(process.env[setting]
 function remainingDeposit(rental) {
   const applied = round(Number(rental.deposit_applied_amount || 0));
   return round(Math.max(0, Number(rental.deposit_collected_amount || 0) - applied - Number(rental.deposit_refunded_amount || 0)));
-}
-
-function paymentSummary(rental, extra = {}) {
-  const value = { ...rental, ...extra };
-  if (!Object.hasOwn(value, 'rental_paid_amount')) return { balance_due: null, refund_due: null, payment_status: 'UNKNOWN' };
-  const paid = round(Number(value.rental_paid_amount || 0)), applied = round(Number(value.deposit_applied_amount || 0));
-  const base = Number(value.rental_fee ?? value.rateFee ?? 0), final = value.fee_breakdown?.final_rental_charges;
-  const closedWithoutRelease = ['CANCELLED', 'REJECTED', 'EXPIRED'].includes(state(value));
-  const charges = closedWithoutRelease ? 0 : money(final) ? final : base;
-  const balance = round(Math.max(0, charges - paid - applied));
-  const depositRemaining = remainingDeposit(value);
-  const rentalRefund = closedWithoutRelease ? round(Math.max(0, paid - Number(value.rental_refunded_amount || 0))) : 0;
-  const refundDue = ['COMPLETED', 'CANCELLED', 'REJECTED', 'EXPIRED'].includes(state(value)) ? round(depositRemaining + rentalRefund) : 0;
-  return { balance_due: balance, refund_due: refundDue, payment_status: refundDue > 0 ? 'REFUND_PENDING' : balance > 0 ? (paid > 0 ? 'BALANCE_DUE' : 'UNPAID') : 'PAID' };
 }
 
 function collectPayment(rental, input, requirePayment = false) {

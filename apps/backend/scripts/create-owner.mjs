@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import { firebaseAuth, firestore, requireFirebaseConfig } from '../src/firebase.mjs';
-import { createEmailDomainValidator, nameError, normalizeEmail, passwordError, passwordMatchError, validationFailure } from '../src/account-validation.mjs';
+import { nameError, normalizeEmail, passwordError, passwordMatchError, validationFailure, validateEmailFormat } from '../src/account-validation.mjs';
 
 async function hiddenQuestion(prompt) {
   if (!process.stdin.isTTY) throw new Error('Run this command in an interactive VS Code terminal.');
@@ -15,7 +15,7 @@ try {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const name = (await rl.question('Owner full name: ')).trim(), email = normalizeEmail(await rl.question('Owner login email: ')); rl.close();
   validationFailure(nameError(name));
-  await createEmailDomainValidator()(email);
+  validateEmailFormat(email);
   const password = await hiddenQuestion('Choose login password (hidden, 8+ characters, a capital letter and a number): '), repeat = await hiddenQuestion('Repeat password: ');
   validationFailure(passwordError(password)); validationFailure(passwordMatchError(password, repeat));
   created = await firebaseAuth.createUser({ displayName: name, email, password, emailVerified: true, disabled: false });

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
 import { FirebaseSessions, publicUser, changeWorkspacePassword } from './auth.mjs';
-import { createEmailDomainValidator, emailError, normalizeEmail, validationFailure, validateEmailFormat } from './account-validation.mjs';
+import { validateEmailFormat } from './account-validation.mjs';
 import { firebaseAuth as defaultFirebaseAuth, firebaseMessaging as defaultMessaging, firestore as defaultFirestore, requireFirebaseConfig } from './firebase.mjs';
 import { loadDashboard, loadAnalyticsSummary } from './dashboard.mjs';
 import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, setItemQuantity, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
@@ -18,11 +18,13 @@ import { createBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt,
 import { listNotifications, markNotificationsRead, registerNotificationDevice, unregisterNotificationDevice, createNotificationDispatcher } from './notifications.mjs';
 import { isCustomerRole, isOwnerRole, isStaffRole, normalizeRole } from './roles.mjs';
 import { createRegistrationOtpService } from './registration-otp.mjs';
+import { createPasswordResetOtpService } from './password-reset-otp.mjs';
 import { createRentalEventHub } from './rental-events.mjs';
 import { createBackgroundWorker } from './background-worker.mjs';
 import { createRecordCodeService } from './record-codes.mjs';
 import { createMaintenance, updateMaintenance, maintenanceDetail, maintenanceStaff, maintenancePhoto } from './maintenance.mjs';
 import { financeSummary, ledgerPage, createExpense } from './payment-ledger.mjs';
+import { financeRentalPage, confirmHistoricalReceipt } from './finance-rentals.mjs';
 import { decoratedRecordPage } from './record-pages.mjs';
 import { projectRentalSummary, processReportJobs, rentalDailySummary } from './report-summaries.mjs';
 import { updateLocalDelivery, requestRentalExtension, reviewRentalExtension } from './rental-extras.mjs';
@@ -32,11 +34,11 @@ const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; c
 
 function explicitRefreshCollections(path) {
   if(path.startsWith('/api/records/'))return [{rentals:'rentals',customers:'customers',maintenance:'maintenance_records'}[path.split('/').at(-1)]];
-  if(path.startsWith('/api/finance/'))return ['payment_ledger','financial_daily'];
+  if(path.startsWith('/api/finance/'))return ['payment_ledger','financial_daily','rental_financial_daily','rental_payment_totals','rentals'];
   if(path==='/api/reports/daily')return ['rental_daily'];
   if (path === '/api/maintenance-staff') return ['users'];
   if (path.startsWith('/api/maintenance/')) return ['maintenance_records', 'maintenance_photos', 'items'];
-  if (path === '/api/workspace' || path === '/api/mobile/admin-workspace') return ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history', 'item_condition_records', 'audit_logs', 'settings', 'users'];
+  if (path === '/api/workspace' || path === '/api/mobile/admin-workspace') return ['customers', 'rentals', 'items', 'item_categories', 'item_rates', 'maintenance_records', 'terminals', 'verification_requests', 'item_status_history', 'item_condition_records', 'audit_logs', 'settings', 'users', 'equipment_rental_totals', 'equipment_rental_daily'];
   if (path === '/api/analytics') return ['items', 'rentals'];
   if (path === '/api/inventory') return ['items', 'item_categories', 'item_rates', 'customers', 'rentals', 'verification_requests', 'terminals', 'maintenance_records'];
   return null;
@@ -62,8 +64,9 @@ async function serveWeb(req, res, requestPath) {
 
 export function createFirebaseServices({ db = defaultFirestore, auth = defaultFirebaseAuth, messaging = defaultMessaging, now = () => new Date(), superAdminUid = process.env.SUPER_ADMIN_UID || '' } = {}) {
   const firestore = db, firebaseAuth = auth;
-  const validateEmail = createEmailDomainValidator();
+  const validateEmail = validateEmailFormat;
   const registrationOtp = createRegistrationOtpService({ db: firestore, auth: firebaseAuth, now });
+  const passwordResetOtp = createPasswordResetOtpService({ db: firestore, auth: firebaseAuth, now });
   const ownerUid = String(superAdminUid).trim();
   // Display data is refreshed on writes and on explicit manual refresh. A
   // longer shared snapshot window keeps every open client from rereading the
@@ -82,6 +85,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   let healthCheckedAt = -Infinity, healthError = null, healthPending = null;
   const services = {
     financeSummary: options => financeSummary(readDatabase,options,now()),
+    financeRentalPage: options => financeRentalPage(readDatabase,options),
+    confirmHistoricalReceipt: (actor,id,input) => confirmHistoricalReceipt(firestore,actor,id,input,now()),
     ledgerPage: options => ledgerPage(readDatabase,options),
     createExpense: (actor,input) => createExpense(firestore,actor,input,now()),
     recordPage: (kind,options) => decoratedRecordPage(readDatabase,kind,options),
@@ -89,7 +94,11 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     requestRentalExtension: (actor,id,input) => requestRentalExtension(firestore,actor,id,input,now()),
     quoteRentalExtension: (actor,id,input) => requestRentalExtension(firestore,actor,id,input,now(),true),
     reviewRentalExtension: (actor,id,input) => reviewRentalExtension(firestore,actor,id,input,now()),
-    processReportJobs: () => processReportJobs(firestore,now()),
+    processReportJobs: async () => {
+      const result=await processReportJobs(firestore,now());
+      if(result.processed)for(const collection of ['rental_daily','equipment_rental_totals','equipment_rental_daily','rental_report_snapshots','customer_report_summaries','rental_financial_daily'])readCache.invalidate(collection);
+      return result;
+    },
     rentalDailySummary: (options={}) => rentalDailySummary(readDatabase,options.from,options.to,now()),
     createMaintenance: (actor, input) => createMaintenance(firestore, actor, input, now()),
     updateMaintenance: (actor, id, input) => updateMaintenance(firestore, actor, id, input, now()),
@@ -202,6 +211,9 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     },
     sendRegistrationCode: async input => registrationOtp.sendCode(await validateEmail(input?.email)),
     verifyRegistrationCode: input => registrationOtp.verifyCode(input?.email, input?.code),
+    requestPasswordResetCode: email => passwordResetOtp.requestCode(email),
+    verifyPasswordResetCode: input => passwordResetOtp.verifyCode(input?.email, input?.code),
+    completePasswordReset: input => passwordResetOtp.completeReset(input),
     completeMobileRegistration: (claims, input) => registrationOtp.completeRegistration({
       claims,
       input,
@@ -231,6 +243,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   services.updateUser = (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input, now(), { ownerUid });
 
   const cacheInvalidations = {
+    confirmHistoricalReceipt: ['payment_ledger','financial_daily','rental_financial_daily','rental_payment_totals','rentals','audit_logs'],
     createExpense: ['payment_ledger','financial_daily','audit_logs'],
     updateLocalDelivery: ['rentals','items','audit_logs','notification_inboxes'],
     requestRentalExtension: ['rentals','items','audit_logs','notification_inboxes'],
@@ -293,7 +306,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
       if (changedRental?.id) {
         try { await projectRentalSummary(firestore,String(changedRental.id),now()); }
         catch (error) { console.warn(`Rental summary queued for retry: ${error.code || 'SUMMARY_PENDING'}`); result.summaryPending=true; }
-        for(const collection of ['rental_daily','rental_report_snapshots','customer_report_summaries','payment_ledger','financial_daily']) readCache.invalidate(collection);
+        for(const collection of ['rental_daily','equipment_rental_totals','equipment_rental_daily','rental_report_snapshots','customer_report_summaries','payment_ledger','financial_daily','rental_financial_daily','rental_payment_totals']) readCache.invalidate(collection);
       }
       if (result?.duplicate === true) return result;
       verificationSweep.schedule(result);
@@ -354,7 +367,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
 const defaultServices = createFirebaseServices();
 
 export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices, notificationWorker = services === defaultServices, hardwareEnabled = process.env.ENABLE_ESP32 === 'true' } = {}) {
-  const checkEmail = services.validateEmail || (async value => { validationFailure(emailError(value)); return normalizeEmail(value); });
+  const checkEmail = validateEmailFormat;
   const rentalEvents = createRentalEventHub();
   let pushWorker, holdWorker;
   const attempts = new Map();
@@ -460,10 +473,27 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         return send(res, 200, { email: await checkEmail(input?.email), valid: true });
       }
       if (path === '/api/auth/password-reset' && req.method === 'POST') {
-        limitRegistrationRequests(req, 'password-reset', 10);
+        limitRegistrationRequests(req, 'password-reset-link', 10);
         const input = await body(req), email = validateEmailFormat(input?.email);
         await sessions.sendPasswordReset(email);
-        return send(res, 200, { ok: true, email, message: 'If an account exists for this email, a reset link has been requested. Check your inbox and spam folder.' });
+        return send(res, 200, { ok: true, email, message: 'If this account exists, a password reset email has been requested.' });
+      }
+      if (['/api/auth/password-reset/request', '/api/auth/password-reset/verify', '/api/auth/password-reset/complete'].includes(path)) {
+        if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed.' });
+        quotaBackoff.assertAvailable();
+        const input = await body(req);
+        if (path.endsWith('/verify')) {
+          limitRegistrationRequests(req, 'password-reset-verify', 30);
+          return send(res, 200, await services.verifyPasswordResetCode(input));
+        }
+        if (path.endsWith('/complete')) {
+          limitRegistrationRequests(req, 'password-reset-complete', 10);
+          await services.completePasswordReset(input);
+          return send(res, 200, { ok: true, message: 'Your password has been updated. Please sign in with your new password.' }, { 'Set-Cookie': cookie('', 0, true) });
+        }
+        limitRegistrationRequests(req, 'password-reset-send', 10);
+        const result = await services.requestPasswordResetCode(input?.email);
+        return send(res, 200, { ok: true, message: result?.message || 'If an active account exists for this email, a verification code has been sent.' });
       }
       if (path === '/api/auth/change-password' && req.method === 'POST') {
         quotaBackoff.assertAvailable();
@@ -592,7 +622,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       const itemCategoriesRoute = path.match(/^\/api\/item-categories(?:\/([A-Za-z0-9_-]{1,128}))?$/);
       const customerRoute = path.match(/^\/api\/customers(?:\/([A-Za-z0-9_-]{1,128}))?$/), customerPasswordRoute = path.match(/^\/api\/customers\/([A-Za-z0-9_-]{1,128})\/password$/), customerAccountRoute = path === '/api/customer-accounts', userRoute = path.match(/^\/api\/users(?:\/([A-Za-z0-9_-]{1,128}))?$/);
       const recordsRoute=path.match(/^\/api\/records\/(rentals|customers|maintenance)$/);
-      const financeRoute=['/api/finance/summary','/api/finance/ledger','/api/finance/expenses','/api/reports/daily'].includes(path);
+      const historicalReceiptRoute=path.match(/^\/api\/finance\/rentals\/([A-Za-z0-9_-]{1,128})\/receipt-history$/);
+      const financeRoute=historicalReceiptRoute || ['/api/finance/summary','/api/finance/ledger','/api/finance/rentals','/api/finance/expenses','/api/reports/daily'].includes(path);
       const workspaceRoute = recordsRoute || financeRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || maintenanceRoute || maintenanceStaffRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute || rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) {
         const mobileToken = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
@@ -611,6 +642,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (recordsRoute && req.method === 'GET') return send(res,200,await services.recordPage(recordsRoute[1],queryOptions));
         if (path === '/api/finance/summary' && req.method === 'GET') return send(res,200,await services.financeSummary(queryOptions));
         if (path === '/api/finance/ledger' && req.method === 'GET') return send(res,200,await services.ledgerPage(queryOptions));
+        if (path === '/api/finance/rentals' && req.method === 'GET') return send(res,200,await services.financeRentalPage(queryOptions));
+        if (historicalReceiptRoute && req.method === 'POST') return sendRentalUpdate(res,200,await services.confirmHistoricalReceipt(user,historicalReceiptRoute[1],await body(req)),{rentalId:historicalReceiptRoute[1]});
         if (path === '/api/reports/daily' && req.method === 'GET') return send(res,200,await services.rentalDailySummary(queryOptions));
         if (path === '/api/finance/expenses' && req.method === 'POST') return send(res,201,await services.createExpense(user,await body(req)));
         if (recordsRoute || financeRoute) return send(res,405,{error:'Method not allowed.'});

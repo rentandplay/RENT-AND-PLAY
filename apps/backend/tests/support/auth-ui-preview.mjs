@@ -3,7 +3,7 @@ import { createApi } from '../../src/server.mjs';
 import { loadDashboard } from '../../src/dashboard.mjs';
 import { loadWorkspace, createWorkspaceUser, createMobileCustomerAccount } from '../../src/workspace.mjs';
 import { changeWorkspacePassword } from '../../src/auth.mjs';
-import { emailError, validationFailure, validateEmailFormat } from '../../src/account-validation.mjs';
+import { validateEmailFormat } from '../../src/account-validation.mjs';
 import { memoryFirestore } from './memory-firestore.mjs';
 
 const db = memoryFirestore({ users: {
@@ -30,11 +30,7 @@ const sessions = {
   verify: async cookie => cookies.has(cookie) ? { uid: cookies.get(cookie) } : null,
   revoke: cookie => cookies.delete(cookie), sendPasswordReset: async () => {}
 };
-const validateEmail = async value => {
-  validationFailure(emailError(value));
-  if (value.endsWith('@unknown.example')) throw Object.assign(new Error('This email domain cannot receive email. Check the spelling or use another address.'), { status: 400, code: 'INVALID_EMAIL_DOMAIN' });
-  return value.toLowerCase();
-};
+const validateEmail = validateEmailFormat;
 const services = {
   firebaseProjectId: 'local-auth-preview', validateEmail, health: async () => {},
   getUser: async id => db.data('users', id) ? { id, ...db.data('users', id) } : null, touchLogin: async () => {},

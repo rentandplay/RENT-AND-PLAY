@@ -10,7 +10,7 @@ import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createI
 import { updateProfile } from './profile.mjs';
 import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
-import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, terminalPending } from './transactions.mjs';
+import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, terminalPending, testTerminalPing, dispatchRentalToTerminal } from './transactions.mjs';
 import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions } from './mobile.mjs';
 import { createReadCache } from './read-cache.mjs';
 import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-errors.mjs';
@@ -180,8 +180,14 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     },
     pricing: () => loadPricing(readDatabase, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
     authenticateTerminal: (id, key) => authenticateTerminal(firestore, id, key),
-    terminalPending: terminal => terminalPending(firestore, terminal, new Date(), { expire: () => verificationSweep.run() }),
+    terminalPending: async terminal => {
+      const result = await terminalPending(firestore, terminal, new Date(), { expire: () => verificationSweep.run() });
+      readCache.invalidate('terminals');
+      return result;
+    },
     terminalConfirm: (terminal, input) => resolveTerminalRequest(firestore, terminal, input),
+    testTerminalPing: (actor, id) => testTerminalPing(firestore, actor, id, now()),
+    dispatchRentalToTerminal: async (actor, id, input) => { await verificationSweep.run(); return dispatchRentalToTerminal(firestore, actor, id, input, now(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
     createRentalRequest: async (actor, input) => { await verificationSweep.run(); return createRentalRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
     createReturnRequest: async (actor, input) => { await verificationSweep.run(); return createReturnRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
     createMobileRentalRequest: async (actor, input) => { await verificationSweep.run(); return createMobileRentalRequest(firestore, actor, input, now()); },
@@ -272,7 +278,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     inventoryQr: ['items'],
     inventoryQrLabels: ['items'],
     savePricing: ['settings', 'audit_logs'],
-    terminalConfirm: ['verification_requests', 'rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records'],
+    terminalConfirm: ['verification_requests', 'terminals', 'rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records'],
+    dispatchRentalToTerminal: ['rentals', 'items', 'verification_requests', 'audit_logs', 'notification_inboxes'],
     createRentalRequest: ['rentals', 'items', 'verification_requests', 'audit_logs', 'notification_inboxes'],
     createReturnRequest: ['rentals', 'verification_requests', 'audit_logs', 'notification_inboxes'],
     createMobileRentalRequest: ['rentals', 'items', 'audit_logs', 'notification_inboxes', 'rental_payment_proofs'],
@@ -281,6 +288,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     requestMobileReturn: ['rentals', 'audit_logs', 'notification_inboxes'],
     reviewMobileReturn: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records', 'notification_inboxes'],
     saveRequestInspection: ['verification_requests', 'audit_logs'],
+    testTerminalPing: ['verification_requests', 'terminals'],
     createCustomer: ['customers', 'counters', 'audit_logs'],
     createMobileCustomerAccount: ['users', 'customers', 'counters', 'audit_logs'],
     updateCustomer: ['customers', 'users', 'audit_logs'],
@@ -296,7 +304,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     'createCounterBooking', 'releaseBooking', 'prepareRentalDelivery', 'reviewRentalPaymentProof',
     'submitRentalPaymentProof', 'recordRentalReceipt', 'completeRentalReturn', 'changeAssignedUnit',
     'settleRentalPayment', 'createRentalRequest', 'createMobileRentalRequest', 'reviewMobileRental',
-    'cancelMobileRentalRequest', 'requestMobileReturn', 'reviewMobileReturn'
+    'cancelMobileRentalRequest', 'requestMobileReturn', 'reviewMobileReturn', 'dispatchRentalToTerminal'
   ]);
   for (const name of Object.keys(cacheInvalidations)) {
     const operation = services[name];
@@ -611,7 +619,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
       const inspectionRoute = path.match(/^\/api\/verification-requests\/([A-Za-z0-9_-]{1,128})\/inspection$/);
       const transactionRoute = path === '/api/rentals' || path === '/api/returns' || inspectionRoute;
-      const rentalFlowRoute = path.match(/^\/api\/rentals\/([A-Za-z0-9_-]{1,128})\/(release-verification|release|prepare-delivery|payment-proof|payment-review|receipt|complete-return|assignment|settlement|delivery|extension-review|extension-quote|extension)$/);
+      const rentalFlowRoute = path.match(/^\/api\/rentals\/([A-Za-z0-9_-]{1,128})\/(release-verification|release|prepare-delivery|payment-proof|payment-review|receipt|complete-return|assignment|settlement|delivery|extension-review|extension-quote|extension|terminal-dispatch)$/);
       const rentalLookupRoute = path === '/api/rentals/lookup';
       const counterBookingRoute = path === '/api/rental-bookings';
       const inspectionPhotoRoute = path.match(/^\/api\/rental-inspection-photos\/([A-Za-z0-9_-]{1,128})$/);
@@ -624,7 +632,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       const recordsRoute=path.match(/^\/api\/records\/(rentals|customers|maintenance)$/);
       const historicalReceiptRoute=path.match(/^\/api\/finance\/rentals\/([A-Za-z0-9_-]{1,128})\/receipt-history$/);
       const financeRoute=historicalReceiptRoute || ['/api/finance/summary','/api/finance/ledger','/api/finance/rentals','/api/finance/expenses','/api/reports/daily'].includes(path);
-      const workspaceRoute = recordsRoute || financeRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
+      const terminalTestRoute = path.match(/^\/api\/terminals\/([A-Za-z0-9_-]{1,128})\/test-ping$/);
+      const workspaceRoute = recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || maintenanceRoute || maintenanceStaffRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute || rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) {
         const mobileToken = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
@@ -639,6 +648,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         }
         user.role = normalizeRole(user.role);
         const queryOptions=Object.fromEntries(new URL(req.url,'http://localhost').searchParams);
+        if (terminalTestRoute && req.method === 'POST') return send(res, 201, await services.testTerminalPing(user, terminalTestRoute[1]));
         if (recordsRoute && req.method === 'GET') return send(res,200,await services.recordPage(recordsRoute[1],queryOptions));
         if (path === '/api/finance/summary' && req.method === 'GET') return send(res,200,await services.financeSummary(queryOptions));
         if (path === '/api/finance/ledger' && req.method === 'GET') return send(res,200,await services.ledgerPage(queryOptions));
@@ -656,7 +666,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (rentalFlowRoute && req.method === 'GET' && rentalFlowRoute[2] === 'payment-proof') return send(res, 200, await services.rentalPaymentProof(rentalFlowRoute[1]));
         if (rentalFlowRoute && req.method === 'POST') {
           const [, id, action] = rentalFlowRoute;
-          const operations = { 'release-verification': 'verifyReleaseCodes', release: 'releaseBooking', 'prepare-delivery': 'prepareRentalDelivery', 'payment-review': 'reviewRentalPaymentProof', receipt: 'recordRentalReceipt', 'complete-return': 'completeRentalReturn', assignment: 'changeAssignedUnit', settlement: 'settleRentalPayment',delivery:'updateLocalDelivery','extension-review':'reviewRentalExtension','extension':'requestRentalExtension','extension-quote':'quoteRentalExtension' };
+          const operations = { 'release-verification': 'verifyReleaseCodes', release: 'releaseBooking', 'prepare-delivery': 'prepareRentalDelivery', 'payment-review': 'reviewRentalPaymentProof', receipt: 'recordRentalReceipt', 'complete-return': 'completeRentalReturn', assignment: 'changeAssignedUnit', settlement: 'settleRentalPayment',delivery:'updateLocalDelivery','extension-review':'reviewRentalExtension','extension':'requestRentalExtension','extension-quote':'quoteRentalExtension','terminal-dispatch':'dispatchRentalToTerminal' };
           const result = await services[operations[action]](user, id, await body(req, 550000));
           if (['release-verification','extension-quote'].includes(action)) return send(res, 200, result);
           return sendRentalUpdate(res, 200, result, { rentalId: id });

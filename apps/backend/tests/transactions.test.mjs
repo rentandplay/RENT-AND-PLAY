@@ -2,8 +2,8 @@ import test from 'node:test';
 import { updateMaintenance } from '../src/maintenance.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { authenticateTerminal, createRentalRequest, createReturnRequest, createExpirySweep, expireVerificationRequests, finalCharges, publicTerminal, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending, validatePenalty } from '../src/transactions.mjs';
-import { createBooking } from '../src/rental-flow.mjs';
+import { authenticateTerminal, createRentalRequest, createReturnRequest, createExpirySweep, dispatchRentalToTerminal, expireVerificationRequests, finalCharges, publicTerminal, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending, validatePenalty } from '../src/transactions.mjs';
+import { createBooking, recordRentalReceipt } from '../src/rental-flow.mjs';
 import { DEFAULT_PRICING, savePricing } from '../src/pricing.mjs';
 import { itemAction } from '../src/inventory.mjs';
 import { localDateTime } from '../src/firebase.mjs';
@@ -214,4 +214,69 @@ test('whole-stay pricing freezes checkout and rejects timestamps without a timez
   const response = await createRentalRequest(db, actor, { ...input, resortCheckoutAt: '2026-10-03T15:00:00+08:00' }, requestTime);
   const fee = db.data('rentals', response.rental.id).fee_breakdown;
   assert.equal(fee.mode, 'WHOLE_STAY'); assert.equal(fee.billed_minutes, 360); assert.equal(fee.due_at.toISOString(), '2026-10-03T07:00:00.000Z');
+});
+
+test('dispatchRentalToTerminal bridges walk-in handover, resort shop dispatch, and return intake with ESP32 confirmation', async () => {
+  const db = fixture();
+  const terminal = await authenticateTerminal(db, 'terminal-1', deviceKey);
+
+  // 1. Walk-in APPROVED booking -> ESP32 HANDOVER -> starts timer & activates rental
+  const walkin = await createBooking(db, actor, {
+    itemId: 'item-1', customerId: 'customer-1', durationMinutes: 180,
+    fulfillmentMethod: 'SHOP_HANDOVER', requestKey: 'b'.repeat(32)
+  }, requestTime, { staff: true });
+  assert.equal(walkin.rental.status, 'APPROVED');
+
+  const handoverDispatch = await dispatchRentalToTerminal(db, actor, walkin.rental.id, {
+    terminalId: 'terminal-1', terminalMode: 'HANDOVER', inventoryCode: 'BIKE-001',
+    transactionCode: walkin.rental.booking_qr_token,
+    customerVerified: true, customerTermsAcknowledged: true, paymentVerified: true,
+    inspection: { ...inspection, accessoriesChecked: true }
+  }, requestTime);
+  assert.equal(handoverDispatch.request.terminal_mode, 'HANDOVER');
+
+  const pendingList = await terminalPending(db, terminal, requestTime);
+  assert.equal(pendingList.requests.length, 1);
+  assert.equal(pendingList.requests[0].terminal_mode, 'HANDOVER');
+  assert.equal(pendingList.requests[0].item_name, 'Bike');
+
+  const handoverTime = new Date(requestTime.getTime() + 10000);
+  await confirm(db, handoverDispatch.request, handoverTime);
+  const activeRental = db.data('rentals', walkin.rental.id);
+  assert.equal(activeRental.status, 'ACTIVE');
+  assert.equal(activeRental.start_at.toISOString(), handoverTime.toISOString());
+  assert.equal(db.data('items', 'item-1').status, 'RENTED');
+
+  // 2. Return Intake (RETURN_PENDING_INSPECTION) -> ESP32 RETURN -> completes rental & frees item
+  const returnReceiptTime = new Date(handoverTime.getTime() + 60 * 60000);
+  await recordRentalReceipt(db, actor, walkin.rental.id, { inventoryCode: 'BIKE-001', manualLookup: true, manualReason: 'Counter label check', physicalReceiptConfirmed: true, requestKey: 'd'.repeat(32) }, returnReceiptTime);
+  assert.equal(db.data('rentals', walkin.rental.id).status, 'RETURN_PENDING_INSPECTION');
+
+  const returnDispatch = await dispatchRentalToTerminal(db, actor, walkin.rental.id, {
+    terminalId: 'terminal-1', terminalMode: 'RETURN', penaltyAmount: 0, inspection
+  }, returnReceiptTime);
+  assert.equal(returnDispatch.request.transaction_type, 'RETURN');
+
+  await confirm(db, returnDispatch.request, new Date(returnReceiptTime.getTime() + 5000));
+  assert.equal(db.data('rentals', walkin.rental.id).status, 'COMPLETED');
+  assert.equal(db.data('items', 'item-1').status, 'AVAILABLE');
+
+  // 3. Resort Delivery APPROVED booking -> ESP32 SHOP_DISPATCH -> marks OUT_FOR_DELIVERY without starting timer
+  const deliveryTime = new Date(returnReceiptTime.getTime() + 120000);
+  const resortBooking = await createBooking(db, actor, {
+    itemId: 'item-1', customerId: 'customer-1', durationMinutes: 180,
+    fulfillmentMode: 'DELIVERY', deliveryLocation: 'Lakewoods Subdivision — Villa Soliven Resort, Los Baños, Laguna',
+    requestKey: 'c'.repeat(32)
+  }, deliveryTime, { staff: true });
+
+  const shopDispatch = await dispatchRentalToTerminal(db, actor, resortBooking.rental.id, {
+    terminalId: 'terminal-1', terminalMode: 'SHOP_DISPATCH', inventoryCode: 'BIKE-001'
+  }, deliveryTime);
+  assert.equal(shopDispatch.request.terminal_mode, 'SHOP_DISPATCH');
+
+  await confirm(db, shopDispatch.request, new Date(deliveryTime.getTime() + 5000));
+  const dispatchedRental = db.data('rentals', resortBooking.rental.id);
+  assert.equal(dispatchedRental.status, 'APPROVED');
+  assert.equal(dispatchedRental.delivery_status, 'OUT_FOR_DELIVERY');
+  assert.equal(dispatchedRental.start_at, null);
 });

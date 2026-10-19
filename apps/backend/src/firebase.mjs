@@ -2,6 +2,7 @@ import { applicationDefault, cert, getApps, initializeApp } from 'firebase-admin
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
+import { createSupabaseFirestore, isSupabaseConfigured } from './supabase.mjs';
 
 function serviceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -29,10 +30,15 @@ try {
   app = getApps()[0] || initializeApp({ projectId });
 }
 
-export const firestore = getFirestore(app);
+export const nativeFirestore = getFirestore(app);
+nativeFirestore.settings({ ignoreUndefinedProperties: true });
+
+export const supabaseFirestore = isSupabaseConfigured() ? createSupabaseFirestore() : null;
+export const firestore = supabaseFirestore && !process.env.FIRESTORE_EMULATOR_HOST
+  ? supabaseFirestore
+  : nativeFirestore;
 export const firebaseAuth = getAuth(app);
 export const firebaseMessaging = getMessaging(app);
-firestore.settings({ ignoreUndefinedProperties: true });
 
 export function requireFirebaseConfig() {
   if (!process.env.FIREBASE_PROJECT_ID) throw Object.assign(new Error('FIREBASE_PROJECT_ID is not configured.'), { code: 'FIREBASE_CONFIG' });

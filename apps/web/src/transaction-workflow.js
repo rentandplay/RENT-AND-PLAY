@@ -17,9 +17,9 @@ export function handoffChoices(model) {
 
 export function createTransactionWorkflow(h) {
   const { api, escape: e, showModal, modal, toast, formatDate, money, model: getModel, refresh, redraw, confirmSubmit } = h;
-  const desk = createRentalDesk(h);
+  const desk = createRentalDesk({ ...h, showHandoff: (request, rental) => showHandoff(request, rental) });
   const filters = { status: 'ALL', type: 'ALL', terminal: 'ALL' };
-  let handoff = null, handoffRefreshing = false;
+  let handoff = null, handoffRefreshing = false, handoffPollTimer = null;
   function handoffRental(request, rental = {}) {
     if (request.status !== 'PENDING' || String(request.transaction_type || request.type).toUpperCase() !== 'RETURN') return rental;
     return { ...rental, fee_breakdown: { ...rental.fee_breakdown, actual_return_at: request.actual_return_at || rental.fee_breakdown?.actual_return_at, penalty_amount: request.penalty_amount, penalty_reason: request.penalty_reason } };
@@ -28,7 +28,12 @@ export function createTransactionWorkflow(h) {
     const pending = request.status === 'PENDING', release = String(request.transaction_type || request.type).toUpperCase() === 'RENTAL';
     const message = pending ? 'Waiting for the physical counter terminal.' : request.status === 'CONFIRMED' ? `${release ? 'Rental' : 'Return'} confirmed at the counter.` : `This request is ${String(request.status).toLowerCase()}. Review the recorded reason below.`;
     const inspection = request.inspection;
-    return `<p class="info-box" role="status">${e(message)}</p>${pending ? `<div class="handoff-code"><small>Verification code</small><strong>${e(request.verification_code)}</strong><p>Terminal ${e(request.terminal_code || 'Not assigned')} · Expires ${e(formatDate(request.expires_at))}</p></div><div class="handoff-refresh"><p>Check confirmation to view the latest counter status.</p><button type="button" class="secondary" data-handoff-refresh>Check confirmation</button></div>` : ''}<p class="form-error" role="alert" data-handoff-error></p>${renderFeeBreakdown(rental, h)}${inspection ? `<section class="record-section"><h3>Recorded inspection</h3><dl class="record-fields"><div><dt>Condition</dt><dd>${e(inspection.condition || 'Not recorded')}</dd></div><div><dt>Inspection result</dt><dd>${e(inspection.result || 'Not recorded')}</dd></div><div><dt>Notes</dt><dd>${e(inspection.notes || 'Not recorded')}</dd></div></dl></section>` : ''}${renderRequestHistory([request], { ...h, requestLinks: false })}`;
+    const mode = String(request.terminal_mode || (release ? 'HANDOVER' : 'RETURN')).toUpperCase();
+    const modeLabel = mode === 'SHOP_DISPATCH' ? 'SHOP DISPATCH (RESORT DELIVERY)' : release ? 'RENTAL HANDOVER' : 'RETURN INTAKE';
+    const itemName = request.item_name || rental?.item_name || 'Equipment';
+    const rentalCode = request.rental_code || rental?.rental_code || request.rental_id || '';
+    const oledCard = `<div class="esp32-oled-preview ${pending ? 'is-pending' : request.status === 'CONFIRMED' ? 'is-confirmed' : ''}"><div class="esp32-oled-header"><span>SSD1306 OLED &middot; ${e(request.terminal_code || 'TERM-01')}</span><span>${pending ? '🔊 BUZZER ARMED' : request.status === 'CONFIRMED' ? '✓ CONFIRMED' : e(request.status)}</span></div><div class="esp32-oled-screen"><div class="oled-line oled-mode">${e(modeLabel)}</div><div class="oled-line oled-item">${e(itemName)}</div><div class="oled-line oled-code">ID: ${e(rentalCode)} &middot; PIN: ${e(request.verification_code || '------')}</div><div class="oled-line oled-cta">${pending ? '[ PRESS GPIO 35 BUTTON TO CONFIRM ]' : request.status === 'CONFIRMED' ? (mode === 'SHOP_DISPATCH' ? 'DISPATCHED FOR RESORT DELIVERY' : release ? 'HANDOVER CONFIRMED · TIMER STARTED' : 'RETURN COMPLETED') : 'TRANSACTION CLOSED'}</div></div></div>`;
+    return `<p class="info-box" role="status">${e(message)}</p>${oledCard}${pending ? `<div class="handoff-code"><small>Verification code</small><strong>${e(request.verification_code)}</strong><p>Terminal ${e(request.terminal_code || 'Not assigned')} · Expires ${e(formatDate(request.expires_at))}</p></div><div class="handoff-refresh"><p>Check confirmation to view the latest counter status.</p><button type="button" class="secondary" data-handoff-refresh>Check confirmation</button></div>` : ''}<p class="form-error" role="alert" data-handoff-error></p>${renderFeeBreakdown(rental, h)}${inspection ? `<section class="record-section"><h3>Recorded inspection</h3><dl class="record-fields"><div><dt>Condition</dt><dd>${e(inspection.condition || 'Not recorded')}</dd></div><div><dt>Inspection result</dt><dd>${e(inspection.result || 'Not recorded')}</dd></div><div><dt>Notes</dt><dd>${e(inspection.notes || 'Not recorded')}</dd></div></dl></section>` : ''}${renderRequestHistory([request], { ...h, requestLinks: false })}`;
   }
   function bindHandoff() {
     modal.querySelector('[data-handoff-refresh]')?.addEventListener('click', refreshPendingHandoff);
@@ -40,6 +45,17 @@ export function createTransactionWorkflow(h) {
     handoff = { request, rental, signature: JSON.stringify([request, rental]) };
     showModal('Awaiting terminal confirmation', `<section data-handoff-request="${e(request.id)}">${handoffBody(request, rental)}</section>`);
     bindHandoff();
+    if (typeof HTMLElement !== 'undefined' && modal instanceof HTMLElement && request.status === 'PENDING') {
+      if (modal._handoffTimer) clearInterval(modal._handoffTimer);
+      modal._handoffTimer = setInterval(() => {
+        if (!modal.open || !handoff || handoff.request.status !== 'PENDING') {
+          clearInterval(modal._handoffTimer);
+          modal._handoffTimer = null;
+          return;
+        }
+        refreshPendingHandoff();
+      }, 2500);
+    }
   }
   async function refreshPendingHandoff() {
     const panel = modal.querySelector('[data-handoff-request]');
@@ -150,7 +166,7 @@ export function createTransactionWorkflow(h) {
     const terminal = model.terminals.find(row => String(row.id) === String(id));
     if (!terminal && !attempts.length) { toast('This terminal record is no longer available. Refresh the page.'); return; }
     const latest = attempts[0], terminalCode = terminal?.terminal_code || (String(latest?.confirmed_terminal_id) === String(id) ? latest.confirmed_terminal_code : latest?.terminal_code) || 'Not assigned';
-    const online = terminal?.status === 'ONLINE' && terminal.is_active !== false && transactionTime(terminal.last_seen_at) && Date.now() - transactionTime(terminal.last_seen_at) < 90000;
+    const online = terminal?.status === 'ONLINE' && terminal.is_active !== false && transactionTime(terminal.last_seen_at) && Date.now() - transactionTime(terminal.last_seen_at) < 25000;
     const state = !terminal ? 'Unregistered' : terminal.is_active === false ? 'Inactive' : online ? 'Online' : 'Offline';
     showModal('Terminal details', `<section class="record-detail-modal"><div class="record-detail-heading"><h3>${e(terminal?.name || 'Unregistered terminal')}</h3><p>${e(terminalCode)}</p></div><dl class="record-fields"><div><dt>Terminal code</dt><dd>${e(terminalCode)}</dd></div><div><dt>Status</dt><dd>${e(state)}</dd></div><div><dt>Last seen</dt><dd>${e(formatDate(terminal?.last_seen_at))}</dd></div><div><dt>Device credential</dt><dd>${terminal ? terminal.credentials_configured ? 'Configured' : 'Not configured' : 'Not recorded'}</dd></div><div><dt>Recorded attempts</dt><dd>${attempts.length}</dd></div></dl><section class="record-section"><h3>Latest verification attempts</h3>${attempts.length ? `<div class="admin-table-scroll"><table class="admin-table"><thead><tr><th>REQUEST</th><th>TYPE</th><th>STATUS</th><th>REQUESTED</th></tr></thead><tbody>${attempts.slice(0, 5).map(request => `<tr ${recordAttrs('verification', request.id, recordCode(request, 'verification'))}><td><strong>${e(recordCode(request))}</strong><small>${e(recordCode(request, 'verification'))}</small></td><td>${e(request.transaction_type || request.type)}</td><td>${e(request.status)}</td><td>${e(formatDate(request.requested_at))}</td></tr>`).join('')}</tbody></table></div>${attempts.length > 5 ? `<p>Showing the latest 5 of ${attempts.length} attempts.</p>` : ''}` : '<p>No verification attempts recorded.</p>'}</section></section>`);
     bindInspections(modal);
@@ -162,14 +178,197 @@ export function createTransactionWorkflow(h) {
     const pending = all.filter(request => request.status === 'PENDING').sort((a, b) => (transactionTime(a.requested_at)?.getTime() || 0) - (transactionTime(b.requested_at)?.getTime() || 0)), queue = paged(pending, 'Verification queue');
     const history = all.filter(request => verificationMatches(request, { ...filters, search })), view = paged(history, 'Verification history');
     const select = (key, label, options) => `<label class="transaction-select"><span>${label}</span><select data-verification-filter="${key}" aria-label="Filter verification ${label.toLowerCase()}">${options.map(([value, caption]) => `<option value="${e(value)}" ${filters[key] === value ? 'selected' : ''}>${e(caption)}</option>`).join('')}</select></label>`;
-    const entries = records => records.map(request => `<tr ${recordAttrs('verification', request.id, recordCode(request, 'verification'))}><td><strong>${e(request.rental_code)}</strong><small>Request ${e(recordCode(request, 'verification'))}</small></td><td>${e(request.transaction_type || 'Type not recorded')}<small>Code ${e(request.verification_code || 'not recorded')}</small></td><td><strong>${e(request.terminal_code)}</strong><small>${request.confirmed_terminal_id ? `Confirmed by ${e(request.confirmed_terminal_code || 'Not assigned')}` : 'No confirming terminal recorded'}</small></td><td>${status(request.status)}</td><td><small>Requested ${e(formatDate(request.requested_at))}</small><small>Deadline ${e(formatDate(request.expires_at))}</small><small>Confirmed ${e(formatDate(request.confirmed_at))}</small><small>Expired ${e(formatDate(request.expired_at))}</small><small>Rejected ${e(formatDate(request.rejected_at))}</small></td><td>${e(request.rejection_reason || request.final_reason || (request.status === 'PENDING' ? request.inspection ? 'Inspection recorded' : 'Inspection needed' : 'No reason recorded'))}<div class="row-actions">${request.status === 'PENDING' ? `<button class="text-button" data-inspection="${e(request.id)}">${request.inspection ? 'Review inspection' : 'Record inspection'}</button>` : ''}<button class="text-button" data-transaction-detail="${e(request.rental_id)}">Rental details</button></div></td></tr>`).join('');
+    const entries = records => records.map(request => {
+      const times = [];
+      if (request.requested_at) times.push(`<span class="time-item"><strong>Requested:</strong> ${e(formatDate(request.requested_at))}</span>`);
+      if (request.status === 'PENDING' && request.expires_at) times.push(`<span class="time-item time-deadline"><strong>Expires:</strong> ${e(formatDate(request.expires_at))}</span>`);
+      if (request.confirmed_at) times.push(`<span class="time-item time-confirmed"><strong>Confirmed:</strong> ${e(formatDate(request.confirmed_at))}</span>`);
+      if (request.expired_at) times.push(`<span class="time-item time-expired"><strong>Expired:</strong> ${e(formatDate(request.expired_at))}</span>`);
+      if (request.rejected_at) times.push(`<span class="time-item time-rejected"><strong>Rejected:</strong> ${e(formatDate(request.rejected_at))}</span>`);
+      if (!times.length) times.push('<span class="time-item time-muted">No timestamps recorded</span>');
+
+      const terminalNotice = request.confirmed_terminal_id ? `Confirmed by ${e(request.confirmed_terminal_code || 'Not assigned')}` : 'No confirming terminal recorded';
+
+      return `<tr ${recordAttrs('verification', request.id, recordCode(request, 'verification'))}>
+        <td><strong class="row-highlight-code">${e(request.rental_code)}</strong><small class="record-sub">Request ${e(recordCode(request, 'verification'))}</small></td>
+        <td><span class="type-pill ${String(request.transaction_type || '').toLowerCase()}">${e(request.transaction_type || 'Type not recorded')}</span><small class="record-sub">Code ${e(request.verification_code || 'not recorded')}</small></td>
+        <td><strong>${e(request.terminal_code)}</strong><small class="record-sub">${terminalNotice}</small></td>
+        <td>${status(request.status)}</td>
+        <td class="times-column">${times.join('')}</td>
+        <td>
+          <div class="reason-note">${e(request.rejection_reason || request.final_reason || (request.status === 'PENDING' ? request.inspection ? 'Inspection recorded' : 'Inspection needed' : 'No reason recorded'))}</div>
+          <div class="row-actions">
+            ${request.status === 'PENDING' ? `<button type="button" class="btn-action-tag inspection" data-inspection="${e(request.id)}">${request.inspection ? 'Review inspection' : 'Record inspection'}</button>` : ''}
+            <button type="button" class="btn-action-tag details" data-transaction-detail="${e(request.rental_id)}">Rental details</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
     const heads = ['RENTAL / REQUEST', 'TYPE', 'TERMINAL', 'STATUS', 'TIMES', 'REASON / ACTIONS'];
-    return `<p class="info-box">ESP32 terminal is on standby. Rentals and returns are confirmed by the admin in the rental and return desk.</p><div class="module-stats">${['PENDING', 'CONFIRMED', 'REJECTED', 'EXPIRED'].map(value => `<article><span>${value.charAt(0) + value.slice(1).toLowerCase()}</span><strong>${all.filter(request => request.status === value).length}</strong></article>`).join('')}</div><section class="panel admin-module"><div class="panel-title"><div><h3>Verification queue</h3><p>Only pending requests appear here. Closed attempts remain in history.</p></div></div>${pending.length ? table(heads, entries(queue.rows)) + queue.footer : empty('No pending handoffs', 'All recorded attempts are available below.')}</section><section class="panel admin-module verification-history-panel"><div class="panel-title"><div><h3>Full verification history</h3><p>All attempts, including rejected and expired rental and return requests.</p></div></div><div class="transaction-filter-toolbar history-filter-toolbar"><label class="module-search"><input id="module-search" value="${e(search)}" placeholder="Search rental, request, code, terminal, or reason" aria-label="Search verification history"/></label><div class="transaction-selects">${select('status', 'Status', ['ALL', 'PENDING', 'CONFIRMED', 'REJECTED', 'EXPIRED'].map(value => [value, value === 'ALL' ? 'All statuses' : value]))}${select('type', 'Type', [['ALL', 'All types'], ['RENTAL', 'Rental'], ['RETURN', 'Return']])}${select('terminal', 'Terminal', [['ALL', 'All terminals'], ...model.terminals.map(terminal => [terminal.id, recordCode(terminal, 'terminal')]), ...[...new Set(all.map(request => request.terminal_id).filter(id => id && !model.terminals.some(terminal => terminal.id === id)))].map(id => [String(id), 'Unregistered terminal'])])}</div></div>${history.length ? table(heads, entries(view.rows)) + view.footer : empty('No matching attempts', 'Adjust the search or verification filters.')}</section><section class="panel admin-module"><div class="panel-title"><div><h3>Registered terminals</h3><p>Terminal configuration is retained for later hardware setup; polling is paused.</p></div></div>${model.terminals.length ? table(['TERMINAL', 'DEVICE', 'LAST SEEN'], model.terminals.map(terminal => `<tr ${recordAttrs('terminal', terminal.id, terminal.terminal_code || terminal.name || 'terminal')}><td><strong>${e(recordCode(terminal, 'terminal'))}</strong><small>${e(terminal.name || 'Counter terminal')}</small></td><td>${status(terminal.is_active === false ? 'Inactive' : terminal.status === 'ONLINE' && transactionTime(terminal.last_seen_at) && Date.now() - transactionTime(terminal.last_seen_at) < 90000 ? 'Online' : 'Offline')}<small>${terminal.credentials_configured ? 'Device credential configured' : 'Device credential not configured'}</small></td><td>${e(formatDate(terminal.last_seen_at))}</td></tr>`).join('')) : empty('No terminals registered', 'The terminal can be set up when hardware is ready. Current rentals use admin confirmation.')}</section>`;
+
+    const terminal = model.terminals?.[0];
+    const isOnline = terminal?.status === 'ONLINE' && terminal.is_active !== false && transactionTime(terminal.last_seen_at) && (Date.now() - transactionTime(terminal.last_seen_at) < 25000);
+    const lastSeenStr = terminal?.last_seen_at ? formatDate(terminal.last_seen_at) : 'Never';
+
+    const heroCard = `
+      <section class="panel terminal-station-hub">
+        <div class="terminal-station-top">
+          <div class="terminal-title-area">
+            <div class="terminal-badge-row">
+              <span class="terminal-pulse-dot ${isOnline ? 'online' : 'offline'}"></span>
+              <span class="terminal-status-badge ${isOnline ? 'online' : 'offline'}">${isOnline ? 'ONLINE &amp; POLLING' : 'OFFLINE'}</span>
+              <span class="terminal-chip">Station ${e(terminal?.terminal_code || 'TERM-01')}</span>
+            </div>
+            <h2>${e(terminal?.name || 'Counter Station 1')}</h2>
+            <p class="terminal-subtitle">Countertop IoT Verification Terminal &middot; <span class="gateway-tag">Gateway: 192.168.1.4:3000</span></p>
+          </div>
+          <div class="terminal-station-actions">
+            <button type="button" class="primary" id="rental-request-add">
+              ➕ Walk-In Rental
+            </button>
+            <button type="button" class="secondary" id="return-request-add">
+              🔄 Receive Return
+            </button>
+            <button type="button" class="secondary terminal-test-btn" id="btn-terminal-test-ping" title="Sends a test ping to the ESP32. Buzzer will beep and OLED will display confirmation.">
+              ⚡ Test Buzzer &amp; OLED
+            </button>
+          </div>
+        </div>
+        <div class="terminal-hardware-grid">
+          <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
+            <span class="spec-icon">🖥️</span>
+            <div>
+              <span class="spec-label">OLED Display</span>
+              <strong>${isOnline ? 'Active (128&times;64)' : 'Standby'}</strong>
+              <small class="spec-sub">SSD1306 Panel</small>
+            </div>
+          </div>
+          <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
+            <span class="spec-icon">🔘</span>
+            <div>
+              <span class="spec-label">Physical Button</span>
+              <strong>${isOnline ? 'Armed &amp; Ready' : 'Standby'}</strong>
+              <small class="spec-sub">Confirm trigger (GPIO 35)</small>
+            </div>
+          </div>
+          <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
+            <span class="spec-icon">🔊</span>
+            <div>
+              <span class="spec-label">Audible Buzzer</span>
+              <strong>${isOnline ? 'Alerts Enabled' : 'Muted'}</strong>
+              <small class="spec-sub">Counter alert (GPIO 23)</small>
+            </div>
+          </div>
+          <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
+            <span class="spec-icon">📡</span>
+            <div>
+              <span class="spec-label">Terminal Link</span>
+              <strong>${isOnline ? 'Online &amp; Polling' : 'Station Disconnected'}</strong>
+              <small class="spec-sub">${isOnline ? 'Real-time sync' : e(lastSeenStr)}</small>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+
+    const workflowGuide = `
+      <div class="terminal-guide-bar">
+        <div class="guide-lead">
+          <span class="guide-tag">WORKFLOW GUIDE</span>
+          <strong>3-Step Counter Verification Flow</strong>
+        </div>
+        <div class="guide-steps-list">
+          <div class="guide-step">
+            <div class="guide-num">1</div>
+            <div>
+              <strong>Dispatch Rental</strong>
+              <small>Create rental from admin desk or approve customer mobile app request.</small>
+            </div>
+          </div>
+          <div class="guide-divider">&rarr;</div>
+          <div class="guide-step">
+            <div class="guide-num">2</div>
+            <div>
+              <strong>ESP32 Sounds Alert</strong>
+              <small>OLED displays the rental code and buzzer beeps to alert counter staff.</small>
+            </div>
+          </div>
+          <div class="guide-divider">&rarr;</div>
+          <div class="guide-step">
+            <div class="guide-num">3</div>
+            <div>
+              <strong>Button Push Confirms</strong>
+              <small>Press physical button on ESP32 to finalize handover and start rental timer.</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const queueSection = `
+      <section class="panel admin-module verification-queue-panel">
+        <div class="panel-title">
+          <div>
+            <h3>Active Verification Queue ${pending.length ? `<span class="active-queue-badge">${pending.length} Waiting</span>` : ''}</h3>
+            <p>Handoffs awaiting physical confirmation on the ESP32 terminal.</p>
+          </div>
+        </div>
+        ${pending.length ? table(heads, entries(queue.rows)) + queue.footer : `
+          <div class="terminal-idle-box">
+            <div class="idle-icon-badge">&check;</div>
+            <div>
+              <h4>Terminal is Idle &amp; Ready</h4>
+              <p>No pending handoffs right now. Create a walk-in rental or receive a return to verify on the hardware.</p>
+            </div>
+          </div>
+        `}
+      </section>
+    `;
+
+    const historySection = `
+      <section class="panel admin-module verification-history-panel">
+        <div class="panel-title">
+          <div>
+            <h3>Full verification history</h3>
+            <p>Audit trail of all confirmed, rejected, and expired terminal handovers.</p>
+          </div>
+        </div>
+        <div class="transaction-filter-toolbar history-filter-toolbar">
+          <label class="module-search">
+            <input id="module-search" value="${e(search)}" placeholder="Search rental, request, code, terminal, or reason" aria-label="Search verification history"/>
+          </label>
+          <div class="transaction-selects">
+            ${select('status', 'Status', ['ALL', 'PENDING', 'CONFIRMED', 'REJECTED', 'EXPIRED'].map(value => [value, value === 'ALL' ? 'All statuses' : value]))}
+            ${select('type', 'Type', [['ALL', 'All types'], ['RENTAL', 'Rental'], ['RETURN', 'Return']])}
+            ${select('terminal', 'Terminal', [['ALL', 'All terminals'], ...model.terminals.map(t => [t.id, recordCode(t, 'terminal')]), ...[...new Set(all.map(r => r.terminal_id).filter(id => id && !model.terminals.some(t => t.id === id)))].map(id => [String(id), 'Unregistered terminal'])])}
+          </div>
+        </div>
+        ${history.length ? table(heads, entries(view.rows)) + view.footer : empty('No matching attempts', 'Adjust the search or verification filters.')}
+      </section>
+    `;
+
+    return heroCard + workflowGuide + queueSection + historySection;
   }
   function bind(page, rerender, pages) {
     bindInspections();
     document.querySelector('#rental-request-add')?.addEventListener('click', () => requestForm('RENTAL'));
     document.querySelector('#return-request-add')?.addEventListener('click', () => requestForm('RETURN'));
+    document.querySelector('#btn-terminal-test-ping')?.addEventListener('click', async event => {
+      const btn = event.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Dispatching to ESP32...';
+      try {
+        await api('/terminals/TERM-01/test-ping', { method: 'POST' });
+        toast('Test dispatched! Check your ESP32 OLED screen & buzzer, then press the push button to confirm!');
+        await refresh();
+        rerender();
+      } catch (err) {
+        toast('Test failed: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⚡ Test Buzzer & OLED';
+      }
+    });
     document.querySelectorAll('[data-verification-filter]').forEach(select => select.onchange = () => { filters[select.dataset.verificationFilter] = select.value; pages['Verification history'] = 0; rerender(); });
   }
   return { verificationPage, bind, bindInspections, requestForm, mobileReturnForm, verificationDetails, terminalDetails, refreshPendingHandoff, desk };

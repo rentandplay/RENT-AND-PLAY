@@ -8,6 +8,8 @@ import { firebaseFailure, isQuotaError } from './firebase-errors.mjs';
 import { isMobileRental } from './mobile.mjs';
 import { queueRentalNotification } from './notifications.mjs';
 import { scheduledStart, calendarConflict } from './rental-calendar.mjs';
+import { planLedgerEntry } from './payment-ledger.mjs';
+import { rentalPaymentSummary } from './rental-payment-state.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const rows = snapshot => snapshot.docs.map(docData);
@@ -268,6 +270,7 @@ function closeUnconfirmed(tx, db, requestDoc, rentalDoc, itemDoc, status, reason
       if (item.reserved_rental_id === rentalDoc.id || (item.status === 'RESERVED_PENDING' && !item.reserved_rental_id)) tx.update(itemDoc.ref, { reserved_rental_id: null, ...(item.status === 'RESERVED_PENDING' ? { status: 'AVAILABLE' } : {}), updated_at: now });
     }
   }
+  if (rental && rental.latest_terminal_request_id === requestDoc.id) tx.update(rentalDoc.ref, { latest_terminal_request_status: status, latest_terminal_request_reason: reason, updated_at: now });
   if (rental && requestType(request) === 'RETURN' && rental.latest_return_request_id === requestDoc.id) tx.update(rentalDoc.ref, { latest_return_request_status: status, latest_return_request_reason: reason, updated_at: now });
   audit(tx, db, terminal?.id || 'expiry-worker', `VERIFICATION_${status}`, requestDoc.id, now, { actor_type: terminal ? 'TERMINAL' : 'SYSTEM', rental_id: request.rental_id, reason });
 }
@@ -323,6 +326,17 @@ export async function resolveTerminalRequest(db, terminal, input, now = new Date
       if (request.status === targetStatus && String(request.confirmed_terminal_id || request.resolved_terminal_id) === terminal.id) return { id: requestId, status: request.status, duplicate: true };
       fail(409, 'This verification request is already closed.');
     }
+    if (request.is_test || request.rental_id === 'test_rental') {
+      tx.update(terminalDoc.ref, { last_seen_at: now, status: 'ONLINE' });
+      tx.update(requestDoc.ref, {
+        status: targetStatus,
+        confirmed_at: now,
+        confirmed_terminal_id: terminal.id,
+        confirmed_terminal_code: terminal.terminal_code || terminal.id,
+        final_reason: action === 'CONFIRM' ? 'Hardware test confirmed by physical button press.' : 'Hardware test rejected.'
+      });
+      return { id: requestId, status: targetStatus, is_test: true, duplicate: false };
+    }
     const rentalDoc = await tx.get(ref(db, 'rentals', request.rental_id));
     const rental = rentalDoc.exists ? rentalDoc.data() : null;
     const itemId = request.item_id || rental?.item_id, itemDoc = itemId ? await tx.get(ref(db, 'items', itemId)) : null;
@@ -342,32 +356,115 @@ export async function resolveTerminalRequest(db, terminal, input, now = new Date
     validateInspection(inspection, { id: inspection.inspected_by }, request.transaction_type, now);
     if (!inspection.inspected_by || !asDate(inspection.inspected_at)) fail(409, 'Inspection identity or timestamp is missing.');
     const conditionRef = db.collection('item_condition_records').doc();
-    const condition = { ...inspection, id: conditionRef.id, rental_id: rentalDoc.id, item_id: String(itemId), verification_request_id: requestId, phase: request.transaction_type === 'RENTAL' ? 'RELEASE' : 'RETURN', terminal_id: terminal.id, terminal_code: terminal.terminal_code || terminal.id, confirmed_at: now };
-    let changes, newStatus;
+    const condition = { ...inspection, id: conditionRef.id, rental_id: rentalDoc.id, item_id: String(itemId), verification_request_id: requestId, phase: request.transaction_type === 'RENTAL' ? (request.terminal_mode === 'SHOP_DISPATCH' ? 'SHOP_DISPATCH' : 'RELEASE') : 'RETURN', terminal_id: terminal.id, terminal_code: terminal.terminal_code || terminal.id, confirmed_at: now };
+    let changes, newStatus, itemChanges;
     if (request.transaction_type === 'RENTAL') {
-      if (rental.status !== 'PENDING_VERIFICATION' || item.is_active === false || String(item.status).toUpperCase() !== 'AVAILABLE' || (item.reserved_rental_id && item.reserved_rental_id !== rentalDoc.id)) fail(409, 'Equipment is no longer reserved for this rental.');
-      if (!rental.fee_breakdown?.snapshot_version || asDate(rental.due_at) <= now) fail(409, 'A saved quote with a future due time is required. Submit a new rental request.');
-      newStatus = 'RENTED'; changes = { status: 'ACTIVE', confirmed_rental_at: now, release_condition: condition, release_condition_record_id: conditionRef.id, confirmed_rental_terminal_id: terminal.id };
+      if (rental.status === 'APPROVED') {
+        if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(String(item.status).toUpperCase()) || (item.reserved_rental_id && item.reserved_rental_id !== rentalDoc.id)) fail(409, 'Equipment is no longer reserved for this rental.');
+        const fee = rental.fee_breakdown || {};
+        if (request.terminal_mode === 'SHOP_DISPATCH') {
+          newStatus = item.status || 'AVAILABLE';
+          changes = {
+            delivery_status: 'OUT_FOR_DELIVERY',
+            handoff_expires_at: rental.hold_expires_at || new Date(now.getTime() + 1800000),
+            hold_expires_at: null,
+            delivery_departure: {
+              at: now,
+              operator_id: request.requested_by || terminal.id,
+              operator_name: inspection.inspected_by_name || terminal.id,
+              terminal_id: terminal.id,
+              terminal_code: terminal.terminal_code || terminal.id
+            },
+            shop_dispatch_condition: condition,
+            shop_dispatch_terminal_id: terminal.id,
+            latest_terminal_request_status: 'CONFIRMED'
+          };
+          itemChanges = { status: newStatus, condition_status: inspection.condition, reserved_rental_id: rentalDoc.id, updated_at: now };
+          queueRentalNotification(tx, db, { id: rentalDoc.id, ...rental, ...changes }, 'DELIVERY_DEPART', now, { revision: requestId });
+        } else {
+          const due = fee.mode === 'WHOLE_STAY' ? asDate(fee.due_at || rental.estimated_due_at) : new Date(now.getTime() + Number(fee.billed_minutes || 60) * 60000);
+          if (!due || due <= now) fail(409, 'The selected checkout deadline has passed. Cancel this rental request and prepare a new one.');
+          const baseFee = Number(rental.rental_fee ?? fee.rental_fee ?? 0);
+          const paidBefore = Number(rental.rental_paid_amount || 0);
+          const paidAfter = request.payment_verified ? Math.max(paidBefore, baseFee) : paidBefore;
+          if (paidAfter > paidBefore) {
+            const savePayment = await planLedgerEntry(tx, db, { id: request.requested_by || terminal.id, full_name: inspection.inspected_by_name || terminal.id }, { id: rentalDoc.id, ...rental }, { key: `terminal-handoff:${rentalDoc.id}:${requestId}`, amount: round(paidAfter - paidBefore), method: rental.payment_method || 'CASH', source: 'IN_PERSON_HANDOFF' }, now);
+            savePayment();
+          }
+          const verification = request.handoff_verification || { verification_method: 'TERMINAL', manual_reason: null };
+          newStatus = 'RENTED';
+          changes = {
+            status: 'ACTIVE',
+            delivery_status: 'HANDED_OFF',
+            delivery_handoff: { handed_off_at: now, handed_off_by: request.requested_by || terminal.id, verification_method: verification.verification_method, manual_reason: verification.manual_reason, terminal_id: terminal.id },
+            handoff_verification: verification,
+            rental_paid_amount: paidAfter,
+            rental_refunded_amount: Number(rental.rental_refunded_amount || 0),
+            payment_confirmed_by_admin: true,
+            start_at: now,
+            due_at: due,
+            confirmed_rental_at: now,
+            confirmed_rental_by: request.requested_by || terminal.id,
+            confirmed_rental_terminal_id: terminal.id,
+            fee_breakdown: { ...fee, start_at: now, due_at: due },
+            release_condition: condition,
+            release_condition_record_id: conditionRef.id,
+            latest_terminal_request_status: 'CONFIRMED'
+          };
+          Object.assign(changes, rentalPaymentSummary(rental, changes));
+          itemChanges = { status: 'RENTED', condition_status: inspection.condition, reserved_rental_id: null, current_rental_id: rentalDoc.id, updated_at: now };
+          queueRentalNotification(tx, db, { id: rentalDoc.id, ...rental, ...changes }, 'RENTAL_RELEASED', now);
+        }
+      } else {
+        if (rental.status !== 'PENDING_VERIFICATION' || item.is_active === false || String(item.status).toUpperCase() !== 'AVAILABLE' || (item.reserved_rental_id && item.reserved_rental_id !== rentalDoc.id)) fail(409, 'Equipment is no longer reserved for this rental.');
+        if (!rental.fee_breakdown?.snapshot_version || asDate(rental.due_at) <= now) fail(409, 'A saved quote with a future due time is required. Submit a new rental request.');
+        newStatus = 'RENTED';
+        changes = { status: 'ACTIVE', confirmed_rental_at: now, release_condition: condition, release_condition_record_id: conditionRef.id, confirmed_rental_terminal_id: terminal.id };
+        itemChanges = { status: newStatus, condition_status: inspection.condition, reserved_rental_id: null, updated_at: now };
+      }
     } else {
-      if (rental.status !== 'ACTIVE' || item.status !== 'RENTED') fail(409, 'This rental has already been returned or is not active.');
+      const validActiveReturn = rental.status === 'ACTIVE' && item.status === 'RENTED';
+      const validReceivedReturn = rental.status === 'RETURN_PENDING_INSPECTION' && item.status === 'UNDER_INSPECTION';
+      if (!validActiveReturn && !validReceivedReturn) fail(409, 'This rental has already been returned or is not active.');
       if (!amount(request.penalty_amount)) fail(409, 'Record the penalty amount, including an explicit zero when no penalty applies.');
       newStatus = inspection.result;
-      const fee = { ...finalCharges(rental, request), finalized_at: now };
-      changes = { status: 'COMPLETED', confirmed_return_at: now, actual_return_at: request.actual_return_at, return_condition: condition, return_condition_record_id: conditionRef.id, confirmed_return_terminal_id: terminal.id, fee_breakdown: fee, overtime_fee: fee.overtime_fee, penalty_amount: fee.penalty_amount, final_rental_charges: fee.final_rental_charges, latest_return_request_status: 'CONFIRMED' };
+      const actualReturn = asDate(rental.received_at || request.actual_return_at || now);
+      const fee = { ...finalCharges({ ...rental, rental_fee: rental.rental_fee ?? rental.rateFee, due_at: rental.due_at ?? rental.dueDate }, { ...request, actual_return_at: actualReturn }), finalized_at: now };
+      changes = {
+        status: 'COMPLETED',
+        confirmed_return_at: now,
+        ...(validReceivedReturn ? { confirmed_return_by: request.requested_by || terminal.id, returned_at: rental.received_at, returnedDate: rental.received_at } : {}),
+        actual_return_at: actualReturn,
+        return_condition: condition,
+        return_condition_record_id: conditionRef.id,
+        confirmed_return_terminal_id: terminal.id,
+        fee_breakdown: fee,
+        overtime_fee: fee.overtime_fee,
+        penalty_amount: fee.penalty_amount,
+        final_rental_charges: fee.final_rental_charges,
+        latest_return_request_status: 'CONFIRMED',
+        ...(rental.mobile_return_request ? { mobile_return_request: { ...rental.mobile_return_request, status: 'APPROVED', reviewed_at: now, reviewed_by: request.requested_by || terminal.id } } : {})
+      };
+      if (Object.hasOwn(rental, 'rental_paid_amount')) Object.assign(changes, rentalPaymentSummary(rental, changes));
       if (newStatus === 'UNDER_MAINTENANCE') {
         const [maintenanceCode] = await allocateRecordCodes(tx, db, ['maintenance_records'], now);
         const maintenanceRef = db.collection('maintenance_records').doc();
         tx.create(maintenanceRef, { ...returnMaintenanceRecord({ id: String(itemId), ...item }, rentalDoc.id, condition, { id: terminal.id, name: 'Terminal' }, maintenanceCode, now), verification_request_id: requestId, inspected_by: inspection.inspected_by });
         changes.maintenance_record_id = maintenanceRef.id;
       }
+      itemChanges = { status: newStatus, condition_status: inspection.condition, reserved_rental_id: null, ...(item.current_rental_id !== undefined ? { current_rental_id: null } : {}), updated_at: now };
+      if (Object.hasOwn(rental, 'rental_paid_amount')) {
+        queueRentalNotification(tx, db, { id: rentalDoc.id, ...rental, ...changes }, 'RETURN_COMPLETED', now, { condition: condition.condition, maintenance: newStatus === 'UNDER_MAINTENANCE' });
+      }
     }
     tx.create(conditionRef, condition);
     tx.update(rentalDoc.ref, { ...changes, updated_at: now });
-    tx.update(itemDoc.ref, { status: newStatus, condition_status: inspection.condition, reserved_rental_id: null, updated_at: now });
+    tx.update(itemDoc.ref, itemChanges);
+    tx.update(terminalDoc.ref, { last_seen_at: now, status: 'ONLINE' });
     tx.update(requestDoc.ref, { status: 'CONFIRMED', confirmed_at: now, confirmed_terminal_id: terminal.id, confirmed_terminal_code: terminal.terminal_code || terminal.id, condition_record_id: conditionRef.id, final_reason: null });
     tx.create(db.collection('item_status_history').doc(), { item_id: String(itemId), old_status: item.status, new_status: newStatus, changed_at: now, changed_by: terminal.id, source: 'TERMINAL', reference_type: request.transaction_type, rental_id: rentalDoc.id, verification_request_id: requestId });
     audit(tx, db, terminal.id, 'VERIFICATION_CONFIRMED', requestId, now, { actor_type: 'TERMINAL', rental_id: rentalDoc.id, transaction_type: request.transaction_type });
-    return { id: requestId, status: 'CONFIRMED', rental_id: rentalDoc.id, item_status: newStatus, duplicate: false };
+    return { id: requestId, status: 'CONFIRMED', rental_id: rentalDoc.id, item_status: newStatus, rental: { id: rentalDoc.id, ...rental, ...changes }, duplicate: false };
   });
   if (result.error) fail(result.statusCode, result.error);
   return result;
@@ -380,10 +477,24 @@ export async function terminalPending(db, terminal, now = new Date(), { expire =
   for (const request of rows(snapshot).filter(row => row.status === 'PENDING').map(row => ({ ...row, transaction_type: requestType(row) })).sort((a, b) => asDate(a.requested_at) - asDate(b.requested_at))) {
     const rentalDoc = await ref(db, 'rentals', request.rental_id).get();
     const rental = rentalDoc.exists ? docData(rentalDoc) : null;
-    pending.push({ ...request, rental_code: rental?.rental_code || request.rental_id, due_at: rental?.due_at || null, fee_breakdown: rental ? request.transaction_type === 'RETURN' ? finalCharges(rental, request) : rental.fee_breakdown || null : null });
+    const feeBreakdown = rental ? request.transaction_type === 'RETURN' ? finalCharges(rental, request) : rental.fee_breakdown || null : null;
+    pending.push({
+      ...request,
+      rental_code: rental?.rental_code || request.rental_code || request.rental_id,
+      item_name: request.item_name || rental?.item_name || rental?.fee_breakdown?.product_name || 'Equipment',
+      item_code: request.item_code || rental?.item_code || '',
+      customer_name: request.customer_name || rental?.customer_name || '',
+      fulfillment_mode: request.fulfillment_mode || rental?.fulfillment_mode || 'SHOP_HANDOVER',
+      terminal_mode: request.terminal_mode || (request.transaction_type === 'RETURN' ? 'RETURN' : 'HANDOVER'),
+      rental_fee: request.transaction_type === 'RETURN'
+        ? (feeBreakdown?.final_rental_charges ?? rental?.rental_fee ?? 0)
+        : (rental?.rental_fee ?? feeBreakdown?.rental_fee ?? 0),
+      due_at: rental?.due_at || rental?.estimated_due_at || null,
+      fee_breakdown: feeBreakdown
+    });
   }
   const lastSeen = asDate(terminal.last_seen_at);
-  if (terminal.status !== 'ONLINE' || !lastSeen || now - lastSeen >= 30000) await ref(db, 'terminals', terminal.id).update({ last_seen_at: now, status: 'ONLINE' });
+  if (terminal.status !== 'ONLINE' || !lastSeen || now - lastSeen >= 10000) await ref(db, 'terminals', terminal.id).update({ last_seen_at: now, status: 'ONLINE' });
   return serializeTransaction({ terminal_id: terminal.id, requests: pending });
 }
 
@@ -454,3 +565,184 @@ export function startExpiryWorker(db, { intervalMs = 60000, now = Date.now, swee
   void tick();
   return () => { stopped = true; clearInterval(timer); };
 }
+
+export async function testTerminalPing(db, actor, terminalId, now = new Date()) {
+  const terminalDoc = await ref(db, 'terminals', terminalId).get();
+  if (!terminalDoc.exists) fail(404, 'Terminal not found.');
+  const terminal = terminalDoc.data();
+  if (terminal.is_active === false) fail(409, 'Terminal is inactive.');
+
+  const oldTests = await db.collection('verification_requests')
+    .where('terminal_id', '==', terminalId)
+    .where('status', '==', 'PENDING')
+    .get();
+  for (const doc of oldTests.docs) {
+    if (doc.data().is_test) {
+      await doc.ref.update({ status: 'EXPIRED', expired_at: now, final_reason: 'Superseded by fresh test.' });
+    }
+  }
+
+  const requestRef = db.collection('verification_requests').doc();
+  const testRequest = {
+    id: requestRef.id,
+    request_code: 'V-9999',
+    rental_id: 'test_rental',
+    terminal_id: terminalId,
+    terminal_code: terminal.terminal_code || terminalId,
+    transaction_type: 'RENTAL',
+    terminal_mode: 'HANDOVER',
+    status: 'PENDING',
+    rental_code: 'R-9999',
+    item_name: 'Hardware Test Ping',
+    item_code: 'TEST-01',
+    customer_name: 'Admin Verification',
+    rental_fee: 0,
+    verification_code: 'TEST',
+    requested_at: now,
+    expires_at: new Date(now.getTime() + 180000),
+    inspection: { condition: 'GOOD', result: 'AVAILABLE', inspected_by: actorId(actor) },
+    inspection_revision: 0,
+    is_test: true,
+    requested_by: actorId(actor)
+  };
+  await requestRef.set(testRequest);
+  return { success: true, message: 'Test verification sent to terminal!', request: testRequest };
+}
+
+export async function dispatchRentalToTerminal(db, actor, rentalId, input = {}, now = new Date(), ttlSeconds = 600) {
+  if (!input || typeof input !== 'object') fail(400, 'Terminal dispatch details are required.');
+  const id = idValue(rentalId);
+  const requestRef = db.collection('verification_requests').doc();
+  const result = await db.runTransaction(async tx => {
+    const rentalDoc = await tx.get(ref(db, 'rentals', id));
+    if (!rentalDoc.exists) fail(404, 'Rental not found.');
+    const rental = docData(rentalDoc);
+    const itemId = idValue(rental.item_id || rental.itemId);
+    const itemDoc = await tx.get(ref(db, 'items', itemId));
+    if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
+    const item = docData(itemDoc);
+
+    let terminal = null;
+    if (input.terminalId) {
+      const tDoc = await tx.get(ref(db, 'terminals', idValue(input.terminalId)));
+      if (tDoc.exists) terminal = docData(tDoc);
+    } else {
+      const tSnap = await tx.get(db.collection('terminals'));
+      const activeTerminals = rows(tSnap).filter(row => row.is_active !== false);
+      terminal = activeTerminals.find(row => row.id === 'TERM-01' || row.terminal_code === 'TERM-01') || activeTerminals[0] || null;
+    }
+    if (!terminal || terminal.is_active === false) fail(409, 'Select an active ESP32 terminal.');
+    if (!/^[a-f0-9]{64}$/.test(terminal.auth_token_hash || '')) fail(409, 'Configure the terminal device credential before requesting a handoff.');
+
+    const existingSnap = await tx.get(db.collection('verification_requests').where('rental_id', '==', id));
+    for (const oldDoc of existingSnap.docs) {
+      if (oldDoc.data().status === 'PENDING') {
+        tx.update(oldDoc.ref, { status: 'EXPIRED', expired_at: now, final_reason: 'Superseded by a new terminal dispatch.' });
+      }
+    }
+
+    const rentalStatus = String(rental.status || '').toUpperCase();
+    const requestedMode = String(input.mode || input.terminalMode || (['RETURN_PENDING_INSPECTION', 'ACTIVE'].includes(rentalStatus) ? 'RETURN' : rental.fulfillment_mode === 'DELIVERY' && input.dispatchOnly ? 'SHOP_DISPATCH' : 'HANDOVER')).toUpperCase();
+    if (!['HANDOVER', 'SHOP_DISPATCH', 'RETURN'].includes(requestedMode)) fail(400, 'Choose a valid terminal verification mode.');
+
+    const [requestCode] = await allocateRecordCodes(tx, db, ['verification_requests'], now);
+    const rentalUpdates = { updated_at: now, latest_terminal_request_id: requestRef.id, latest_terminal_request_status: 'PENDING' };
+
+    if (requestedMode === 'RETURN') {
+      if (!['ACTIVE', 'RETURN_PENDING_INSPECTION'].includes(rentalStatus)) fail(409, 'Only an active or received rental can be verified for return on the terminal.');
+      const penalty = validatePenalty({ penaltyAmount: input.penaltyAmount ?? 0, penaltyReason: input.penaltyReason });
+      if (penalty.penalty_amount === null) fail(400, 'Enter a penalty amount, including 0 when none applies.');
+      const inspectionInput = input.inspection || { condition: 'GOOD', notes: 'Inspected at counter terminal.', result: 'AVAILABLE' };
+      const inspection = validateInspection(inspectionInput, actor, 'RETURN', now);
+      const actualReturn = asDate(rental.received_at || (input.returnedAt ? dateValue(input.returnedAt, 'Actual return time') : now));
+      const request = {
+        ...requestRecord(id, String(itemId), terminal, 'RETURN', now, ttlSeconds),
+        request_code: requestCode,
+        terminal_mode: 'RETURN',
+        rental_code: rental.rental_code || id,
+        item_name: item.name || rental.item_name || 'Equipment',
+        item_code: item.item_code || rental.item_code || '',
+        customer_name: rental.customer_name || '',
+        fulfillment_mode: rental.fulfillment_mode || 'SHOP_HANDOVER',
+        rental_fee: rental.rental_fee ?? 0,
+        requested_by: actorId(actor),
+        inspection,
+        inspection_revision: 1,
+        actual_return_at: actualReturn,
+        ...penalty
+      };
+      rentalUpdates.latest_return_request_id = requestRef.id;
+      rentalUpdates.latest_return_request_status = 'PENDING';
+      tx.create(requestRef, request);
+      tx.update(rentalDoc.ref, rentalUpdates);
+      audit(tx, db, actorId(actor), 'RETURN_REQUESTED', requestRef.id, now, { rental_id: id, terminal_mode: 'RETURN' });
+      return { rental: { ...rental, ...rentalUpdates }, request: { id: requestRef.id, ...request }, fee_preview: finalCharges(rental, request) };
+    }
+
+    if (rentalStatus !== 'APPROVED') fail(409, 'Approve this rental request before sending it to the ESP32 terminal.');
+    const manual = input.manualLookup === true || Boolean(typeof input.manualReason === 'string' && input.manualReason.trim());
+    const manualReason = optionalText(input.manualReason, 1000, 'Manual lookup reason');
+
+    if (!['PREPARED', 'OUT_FOR_DELIVERY'].includes(rental.delivery_status)) {
+      const invCode = text(input.inventoryCode, 256, 'Equipment QR');
+      if (![item.qr_token, item.item_code, item.qrCode, item.legacy_item_code, item.id].filter(Boolean).includes(invCode)) {
+        fail(409, `Equipment mismatch. Scan the QR sticker on ${item.name || 'the assigned equipment'} (${item.item_code || item.id}).`);
+      }
+      const prepRevision = (Number(rental.delivery_preparation_revision) || 0) + 1;
+      rentalUpdates.delivery_status = 'PREPARED';
+      rentalUpdates.delivery_preparation_revision = prepRevision;
+      rentalUpdates.delivery_preparation = {
+        status: 'PREPARED',
+        prepared_at: now,
+        prepared_by: actorId(actor),
+        item_id: String(itemId),
+        item_code: item.item_code || item.qrCode || '',
+        verification_method: manual ? 'MANUAL' : 'QR',
+        manual_reason: manualReason || null,
+        revision: prepRevision
+      };
+      tx.update(itemDoc.ref, { reserved_rental_id: id, updated_at: now });
+    }
+
+    if (requestedMode === 'HANDOVER') {
+      const txCode = text(input.transactionCode, 256, 'Customer transaction QR');
+      if (!(txCode === rental.booking_qr_token || manual && [rental.id, rental.rental_code, rental.legacy_rental_code].filter(Boolean).includes(txCode))) {
+        fail(409, 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.');
+      }
+      if (input.customerVerified !== true) fail(400, 'Verify that the person receiving the equipment matches the rental customer.');
+      if (rental.request_source === 'WALK_IN' && input.customerTermsAcknowledged !== true) fail(400, 'Confirm that the customer agreed to the duration, total, late fees, and return terms before handover.');
+      const baseFee = Number(rental.rental_fee ?? 0);
+      const paid = Number(rental.rental_paid_amount || 0);
+      if (paid < baseFee && input.paymentVerified !== true) fail(400, 'Confirm receipt of the rental payment before release.');
+      if (input.inspection?.accessoriesChecked !== true) fail(400, 'Confirm that the equipment and included accessories were checked.');
+    }
+
+    const inspectionInput = input.inspection || { condition: item.condition_status === 'FAIR' ? 'FAIR' : 'GOOD', notes: requestedMode === 'SHOP_DISPATCH' ? 'Prepared at shop and verified on ESP32 terminal for resort delivery.' : 'Verified at counter terminal.', result: 'AVAILABLE' };
+    const inspection = validateInspection(inspectionInput, actor, 'RENTAL', now);
+    const request = {
+      ...requestRecord(id, String(itemId), terminal, 'RENTAL', now, ttlSeconds),
+      request_code: requestCode,
+      terminal_mode: requestedMode,
+      rental_code: rental.rental_code || id,
+      item_name: item.name || rental.item_name || 'Equipment',
+      item_code: item.item_code || rental.item_code || '',
+      customer_name: rental.customer_name || '',
+      fulfillment_mode: rental.fulfillment_mode || 'SHOP_HANDOVER',
+      rental_fee: rental.rental_fee ?? 0,
+      payment_verified: input.paymentVerified === true || Number(rental.rental_paid_amount || 0) >= Number(rental.rental_fee || 0),
+      customer_verified: input.customerVerified === true,
+      customer_terms_acknowledged: input.customerTermsAcknowledged === true,
+      handoff_verification: { verification_method: manual ? 'MANUAL' : 'QR', manual_reason: manualReason || null },
+      requested_by: actorId(actor),
+      inspection,
+      inspection_revision: 1
+    };
+    tx.create(requestRef, request);
+    tx.update(rentalDoc.ref, rentalUpdates);
+    audit(tx, db, actorId(actor), requestedMode === 'SHOP_DISPATCH' ? 'SHOP_DISPATCH_TERMINAL_REQUESTED' : 'RENTAL_REQUESTED', requestRef.id, now, { rental_id: id, terminal_mode: requestedMode });
+    return { rental: { ...rental, ...rentalUpdates }, request: { id: requestRef.id, ...request } };
+  });
+  return serializeTransaction(result);
+}
+
+

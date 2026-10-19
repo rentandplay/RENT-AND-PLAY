@@ -31,7 +31,7 @@ export const pageInfo = Object.freeze({
   Returns: ['Ready for the next rental', 'Record return inspections and review completed equipment handoffs.', 'box'],
   'Transaction History': ['Every rental, one record', 'Find past transactions, saved charges, and their complete verification history.', 'clock'],
   Maintenance: ['Keep your collection ready', 'Track inspections and repairs, and return serviced equipment to the collection.', 'settings'],
-  'ESP32 terminal': ['Hardware on standby', '', 'chip'],
+  'ESP32 terminal': ['Counter hardware station', 'Monitor real-time terminal status, pending handoffs, and verification history.', 'chip'],
   Reports: ['See how your business is doing', 'Explore rental performance, equipment use, forecasts, and practical next steps.', 'chart'],
   Payments: ['Payments & expenses', 'Follow cash and QR receipts, refunds, expenses and daily cash totals.', 'money'],
   Settings: ['Make this workspace yours', 'Manage business details, appearance, and your workspace preferences.', 'settings'],

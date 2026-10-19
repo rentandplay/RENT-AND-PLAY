@@ -100,16 +100,24 @@ export function createRentalDesk(h) {
     const items = (model.items || []).filter(item => item.is_active !== false && ['AVAILABLE','RENTED','RESERVED_PENDING'].includes(item.status));
     const customers = (model.customers || []).filter(row => row.is_active !== false);
     if (!items.length) { showModal('Walk-in rental', '<p>No equipment is available. Check stock and maintenance before creating a rental.</p>'); return; }
+    const resortOptions = pickupLocations.filter(loc => loc !== 'Shop pickup').map(loc => `<option value="${e(loc)}">${e(loc)}</option>`).join('');
+    const durationChips = [[60, '1 hr'], [120, '2 hrs'], [180, '3 hrs'], [300, '5 hrs'], [720, '12 hrs'], [1440, '24 hrs']].map(([mins, label]) => `<button type="button" class="secondary duration-chip" data-duration-chip="${mins}">${label}</button>`).join('');
     showModal('Create walk-in rental', `<form class="admin-form rental-desk-form">
-      <p>Process a customer at the Rent & Play establishment in Lakewoods, Los Baños. No customer app is required. The timer starts at actual handover.</p>
+      <div class="rental-flow-banner"><strong>Walk-In &amp; Resort Guest Desk</strong><span>Counter handover starts timer at shop &middot; Resort delivery starts timer only upon resort QR handoff.</span></div>
       <label>Search existing customer<input type="search" data-customer-search placeholder="Beginning of name or customer reference"/></label>
       <label>Customer<select name="customerId" required><option value="">Select an existing customer</option>${options(customers, row => `${row.full_name} · ${row.customer_code} · ${row.phone || 'No contact'}`)}<option value="__new">+ New walk-in customer</option></select></label>
       <section data-new-customer hidden><h3>New customer profile</h3><p>Check the existing directory first. App login can be added later without changing their customer code.</p><label>Full name<input name="newFullName" maxlength="150" disabled/></label><label>Philippine mobile number<input name="newPhone" type="tel" maxlength="40" placeholder="0917 123 4567" disabled/></label><label>Email (optional)<input name="newEmail" type="email" maxlength="254" disabled/></label><label>Address (optional)<textarea name="newAddress" maxlength="500" disabled></textarea></label></section>
       <label>Available equipment<select name="itemId" required>${options(items, row => `${row.name} · ${row.item_code}`)}</select></label>
-      <label>Handover method<select name="fulfillmentMode"><option value="SHOP_HANDOVER">Hand over at Rent & Play · Lakewoods</option><option value="DELIVERY">Deliver to the customer's resort</option></select></label>
-      <label data-delivery-location hidden>Resort / delivery address<input name="deliveryLocation" maxlength="255" placeholder="Resort name, address, and room or gate instructions" disabled/></label>
+      <label>Handover method<select name="fulfillmentMode"><option value="SHOP_HANDOVER">Hand over at Rent &amp; Play · Lakewoods (Counter Walk-In)</option><option value="DELIVERY">Deliver to the customer's resort (Lakewoods Subdivision)</option></select></label>
+      <div data-delivery-location hidden>
+        <label>Lakewoods Subdivision resort<select data-resort-preset disabled><option value="">Select a resort in Lakewoods or type below</option>${resortOptions}</select></label>
+        <label>Resort / delivery address &amp; room/villa instructions<input name="deliveryLocation" maxlength="255" placeholder="Resort name, villa/room number, or gate instructions" disabled/></label>
+      </div>
       <label>Pricing option<select name="mode"><option value="TIMED">Timed rental</option><option value="WHOLE_STAY" disabled>Whole stay until resort checkout</option></select></label>
-      <label data-duration>Requested duration (minutes)<input name="durationMinutes" type="number" value="60" min="1" max="10080" required/></label>
+      <div data-duration>
+        <label>Requested duration (minutes)<input name="durationMinutes" type="number" value="60" min="1" max="10080" required/></label>
+        <div class="duration-chip-row" role="group" aria-label="Quick duration presets">${durationChips}</div>
+      </div>
       <label data-checkout hidden>Resort checkout time<input name="resortCheckoutAt" type="datetime-local" disabled/><small>Philippine time.</small></label>
       <label>Scheduled start (optional)<input type="datetime-local" name="scheduledStartAt"/><small>Philippine time. Leave blank to rent now.</small></label><label>Payment method<select name="paymentMethod"><option value="CASH">Cash</option><option value="QR">InstaPay QR</option></select></label>
       <p class="rental-payment-note">Explain the price, late fees and return terms. Verify the actual payment and the assigned physical unit at handover.</p><div data-quote-preview role="status"></div><button type="button" class="secondary" data-quote>Review price</button>${actions('Save walk-in rental')}</form>`);
@@ -119,6 +127,27 @@ export function createRentalDesk(h) {
     const profile = () => ({ fullName: form.elements.newFullName.value.trim(), phone: form.elements.newPhone.value.trim(), email: form.elements.newEmail.value.trim(), address: form.elements.newAddress.value.trim() });
     const payload = () => ({ itemId: form.elements.itemId.value, customerId: form.elements.customerId.value, rentalChannel: 'WALK_IN', fulfillmentMode: form.elements.fulfillmentMode.value, mode: form.elements.mode.value, durationMinutes: Number(form.elements.durationMinutes.value), deliveryLocation: form.elements.fulfillmentMode.value === 'SHOP_HANDOVER' ? 'Rent & Play · Lakewoods, Los Baños' : form.elements.deliveryLocation.value.trim(), paymentMethod: form.elements.paymentMethod.value, ...(form.elements.scheduledStartAt.value?{scheduledStartAt:manilaDateTimeIso(form.elements.scheduledStartAt.value)}:{}), ...(form.elements.mode.value === 'WHOLE_STAY' ? { resortCheckoutAt: manilaDateTimeIso(form.elements.resortCheckoutAt.value) } : {}) });
     const invalidate = () => { revision++; quote = null; saveButton.disabled = true; previewButton.disabled = false; previewButton.textContent = 'Review price'; price.innerHTML = ''; };
+    const resortPreset = form.querySelector('[data-resort-preset]');
+    if (resortPreset) {
+      resortPreset.onchange = () => {
+        const chosen = resortPreset.value;
+        if (chosen && chosen !== 'Other / Custom Resort') {
+          form.elements.deliveryLocation.value = `${chosen}, Lakewoods Subdivision`;
+          invalidate();
+        } else if (chosen === 'Other / Custom Resort') {
+          form.elements.deliveryLocation.value = '';
+          form.elements.deliveryLocation.focus();
+          invalidate();
+        }
+      };
+    }
+    form.querySelectorAll('[data-duration-chip]').forEach(chip => {
+      chip.onclick = () => {
+        form.elements.durationMinutes.value = chip.dataset.durationChip;
+        form.querySelectorAll('[data-duration-chip]').forEach(btn => btn.classList.toggle('active', btn === chip));
+        invalidate();
+      };
+    });
     let customerSearchVersion=0,customerSearchTimer;
     form.querySelector('[data-customer-search]').oninput=event=>{
       const query=event.target.value.trim(),version=++customerSearchVersion;clearTimeout(customerSearchTimer);
@@ -138,6 +167,7 @@ export function createRentalDesk(h) {
       form.querySelector('[data-new-customer]').hidden = !isNew;
       for (const name of ['newFullName', 'newPhone', 'newEmail', 'newAddress']) { form.elements[name].disabled = !isNew; form.elements[name].required = isNew && ['newFullName', 'newPhone'].includes(name); }
       form.querySelector('[data-delivery-location]').hidden = !delivery;
+      if (resortPreset) resortPreset.disabled = !delivery;
       form.elements.deliveryLocation.disabled = !delivery; form.elements.deliveryLocation.required = delivery;
       form.elements.mode.querySelector('[value="WHOLE_STAY"]').disabled = !delivery;
       if (!delivery) form.elements.mode.value = 'TIMED';
@@ -175,7 +205,9 @@ export function createRentalDesk(h) {
           input.customerId = createdCustomer.id;
         }
         const response = await api('/rental-bookings', { method: 'POST', body: JSON.stringify({ ...input, requestKey: key, expectedQuote }) });
-        await saved(response, 'Walk-in rental saved. Verify the assigned unit, then confirm the physical handover.');
+        await saved(response, 'Walk-in rental saved. Verify the assigned unit, then confirm the physical handover.', nextRental => {
+          if (nextRental && form.ownerDocument) prepareForm(nextRental);
+        });
       } finally { form.inert = false; }
     });
     syncFields();
@@ -217,12 +249,42 @@ export function createRentalDesk(h) {
   }
   function prepareForm(row) {
     if (!row || row.status !== 'APPROVED') { toast('Approve the rental request before preparing the equipment.'); return; }
-    showModal(row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Prepare walk-in equipment' : 'Prepare equipment for delivery', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Scan the assigned unit’s printed QR at the shop. This verifies the exact unit before handover and keeps the rental timer stopped.</p>${scanField('inventoryCode','Assigned equipment QR')}${manualControls}${actions(row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Mark ready for handover' : 'Mark ready for delivery')}</form>`);
+    const isDelivery = row.fulfillment_mode !== 'SHOP_HANDOVER';
+    const prepareActions = `<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button>${isDelivery ? `<button type="button" class="secondary" data-prepare-esp32 title="Scan equipment QR and confirm shop departure on the ESP32 counter terminal. Timer stays stopped until resort handoff.">📡 Dispatch via ESP32 Terminal</button>` : ''}<button type="submit" class="primary">${row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Mark ready for handover' : 'Mark ready for delivery'}</button></div>`;
+    showModal(row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Prepare walk-in equipment' : 'Prepare equipment for delivery', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Scan the assigned unit’s printed QR at the shop. This verifies the exact unit before handover and keeps the rental timer stopped.</p>${scanField('inventoryCode','Assigned equipment QR')}${manualControls}${prepareActions}</form>`);
     const form = modal.querySelector('form'); bindManual(form, row, false);
-    submit(form, 'Prepare this equipment?', `${row.item_name} (${row.item_code}) will be marked ready for delivery to ${row.delivery_location || 'the customer'}. The rental timer stays stopped.`, async fields => saved(await api(`/rentals/${encodeURIComponent(row.id)}/prepare-delivery`, { method: 'POST', body: JSON.stringify({ inventoryCode: fields.inventoryCode, ...(fields.manualLookup === 'on' ? { manualLookup: true, manualReason: fields.manualReason } : {}) }) }), row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Equipment verified and ready for shop handover.' : 'Equipment verified and ready for delivery.'), { confirm: false });
+    const espBtn = form.querySelector('[data-prepare-esp32]');
+    if (espBtn) {
+      espBtn.onclick = async () => {
+        if (!form.reportValidity()) return;
+        const fields = Object.fromEntries(new FormData(form));
+        const error = form.querySelector('.form-error');
+        espBtn.disabled = true; error.textContent = '';
+        try {
+          const res = await api(`/rentals/${encodeURIComponent(row.id)}/terminal-dispatch`, {
+            method: 'POST',
+            body: JSON.stringify({
+              mode: 'SHOP_DISPATCH',
+              inventoryCode: fields.inventoryCode,
+              ...(fields.manualLookup === 'on' ? { manualLookup: true, manualReason: fields.manualReason } : {})
+            })
+          });
+          modal.close();
+          try { await refresh(); } catch {}
+          redraw();
+          toast('Dispatched to ESP32 Counter Terminal! Press the physical button on the terminal to confirm shop departure.');
+          if (h.showHandoff && res?.request) h.showHandoff(res.request, res.rental || row);
+        } catch (problem) {
+          if (form.isConnected) { error.textContent = problem.message; espBtn.disabled = false; }
+        }
+      };
+    }
+    submit(form, 'Prepare this equipment?', `${row.item_name} (${row.item_code}) will be marked ready for delivery to ${row.delivery_location || 'the customer'}. The rental timer stays stopped.`, async fields => saved(await api(`/rentals/${encodeURIComponent(row.id)}/prepare-delivery`, { method: 'POST', body: JSON.stringify({ inventoryCode: fields.inventoryCode, ...(fields.manualLookup === 'on' ? { manualLookup: true, manualReason: fields.manualReason } : {}) }) }), row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Equipment verified and ready for shop handover.' : 'Equipment verified and ready for delivery.', updated => {
+      if (updated && form.ownerDocument && updated.fulfillment_mode === 'SHOP_HANDOVER') releaseForm(updated);
+    }), { confirm: false });
   }
   function releaseForm(row) {
-    if (!row || row.status !== 'APPROVED' || row.delivery_status !== 'PREPARED') { toast('Prepare the assigned equipment at the shop before confirming delivery.'); return; }
+    if (!row || row.status !== 'APPROVED' || !['PREPARED', 'OUT_FOR_DELIVERY'].includes(row.delivery_status)) { toast('Prepare the assigned equipment at the shop before confirming delivery.'); return; }
     const walkIn = row.request_source === 'WALK_IN';
     const amount = value => e(h.money(Number(value || 0)));
     showModal('Deliver / Hand over equipment', `<form class="admin-form rental-desk-form rental-release-form">
@@ -233,9 +295,10 @@ export function createRentalDesk(h) {
         <section data-release-panel="2" hidden><div class="rental-verified-notice"><span>✓</span><div><strong>Rental and prepared unit verified</strong><small>${e(row.item_name)} · ${e(row.customer_name)}</small></div></div><fieldset class="rental-release-checks" data-release-checks disabled><div class="rental-section-heading"><h3>Confirm the physical handoff</h3><p>Check the customer and equipment together before confirming delivery.</p></div><label class="pricing-check"><input name="customerVerified" type="checkbox" required/><span>Customer identity verified<small>The person receiving the item matches ${e(row.customer_name)}.</small></span></label><div class="rental-payment-checks"><label class="pricing-check"><input name="paymentVerified" type="checkbox" required ${Number(row.rental_paid_amount || 0) >= Number(row.rental_fee) ? 'checked' : ''}/><span>Rental payment received<strong>${amount(row.rental_fee)}</strong><small>${Number(row.rental_paid_amount || 0) >= Number(row.rental_fee) ? 'QR payment verified' : 'Collect the rental fee now'}</small></span></label></div>${walkIn ? `<label class="pricing-check"><input name="customerTermsAcknowledged" type="checkbox" required/><span>Customer agreed to the rental terms<small>Explain the ${e(row.fee_breakdown?.billed_minutes)} minute duration, ${amount(row.rental_fee)} total, late fee of ${amount(row.fee_breakdown?.overtime_rate)} per started ${e(row.fee_breakdown?.overtime_unit_minutes || 60)} minutes after ${e(row.fee_breakdown?.grace_minutes || 0)} minutes of grace, and physical return inspection.</small></span></label>` : ''}${inspectionControls(true)}</fieldset></section>
         <p class="form-error rental-release-error" role="alert"></p>
       </div>
-      <div class="rental-release-footer"><p data-release-hint>Scan the customer rental QR at the selected handoff location.</p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button><button type="button" class="primary" data-verify-booking>Verify customer rental</button><button type="submit" class="primary" data-release-confirm hidden disabled>Confirm handoff and start timer</button></div></div>
+      <div class="rental-release-footer"><p data-release-hint>Scan the customer rental QR at the selected handoff location.</p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button><button type="button" class="primary" data-verify-booking>Verify customer rental</button><button type="button" class="secondary" data-release-esp32 hidden disabled title="Send to ESP32 Counter Terminal and press the physical button to start the rental timer.">📡 Confirm on ESP32 Terminal</button><button type="submit" class="primary" data-release-confirm hidden disabled>Confirm handoff and start timer</button></div></div>
     </form>`);
     const form = modal.querySelector('form'), photos = bindInspectionPhotos(form);
+    const espReleaseBtn = form.querySelector('[data-release-esp32]');
     const sync = state => {
       form.querySelectorAll('[data-release-panel]').forEach(panel => { panel.hidden = Number(panel.dataset.releasePanel) !== state.step; });
       form.querySelectorAll('[data-release-step]').forEach(step => {
@@ -250,6 +313,7 @@ export function createRentalDesk(h) {
       scan.disabled = verify.disabled = state.busy; verify.hidden = state.step !== 1;
       verify.textContent = state.busy ? 'Verifying…' : 'Verify customer rental';
       confirm.hidden = state.step !== 2; confirm.disabled = state.busy || !state.bookingVerified;
+      if (espReleaseBtn) { espReleaseBtn.hidden = state.step !== 2; espReleaseBtn.disabled = state.busy || !state.bookingVerified; }
       form.querySelector('.form-error').textContent = state.error;
       if (state.error) form.querySelector('.form-error').scrollIntoView({ block: 'nearest' });
       form.querySelector('[data-release-hint]').textContent = state.step === 1 ? (walkIn ? 'Verify the saved rental reference. No customer app is required.' : 'Scan the customer rental QR at the selected handoff location.') : 'Confirming the physical handoff starts the rental timer.';
@@ -277,6 +341,35 @@ export function createRentalDesk(h) {
     sync(verification.snapshot());
     const previouslyScanned = scannedBookings.get(row.id);
     if (previouslyScanned) { form.elements.transactionCode.value = previouslyScanned; verification.update('transactionCode', previouslyScanned); verifyRental(); }
+    if (espReleaseBtn) {
+      espReleaseBtn.onclick = async () => {
+        if (!form.reportValidity()) return;
+        const fields = Object.fromEntries(new FormData(form));
+        const notes = (fields.inspectionNotes || '').trim() || 'No additional inspection notes.';
+        const error = form.querySelector('.form-error');
+        espReleaseBtn.disabled = true; error.textContent = '';
+        try {
+          const res = await api(`/rentals/${encodeURIComponent(row.id)}/terminal-dispatch`, {
+            method: 'POST',
+            body: JSON.stringify({
+              mode: 'HANDOVER',
+              ...verification.releaseCodes(),
+              customerVerified: fields.customerVerified === 'on',
+              paymentVerified: fields.paymentVerified === 'on',
+              customerTermsAcknowledged: fields.customerTermsAcknowledged === 'on',
+              inspection: { condition: fields.condition, result: 'AVAILABLE', notes, accessoriesChecked: fields.accessoriesChecked === 'on', photos: photos() }
+            })
+          });
+          modal.close();
+          try { await refresh(); } catch {}
+          redraw();
+          toast('Sent to ESP32 Counter Terminal! Press the physical button on the terminal to start the rental timer.');
+          if (h.showHandoff && res?.request) h.showHandoff(res.request, res.rental || row);
+        } catch (problem) {
+          if (form.isConnected) { error.textContent = problem.message; espReleaseBtn.disabled = false; }
+        }
+      };
+    }
     submit(form, 'Confirm physical handoff?', `${row.item_name} will be delivered to ${row.customer_name} at ${row.delivery_location || 'the selected location'}. The rental timer starts now.`, async (fields, key) => {
       const notes = fields.inspectionNotes.trim() || 'No additional inspection notes.';
       return saved(await api(`/rentals/${encodeURIComponent(row.id)}/release`, { method: 'POST', body: JSON.stringify({ requestKey: key, ...verification.releaseCodes(), customerVerified: fields.customerVerified === 'on', paymentVerified: fields.paymentVerified === 'on', customerTermsAcknowledged: fields.customerTermsAcknowledged === 'on', inspection: { condition: fields.condition, result: 'AVAILABLE', notes, accessoriesChecked: fields.accessoriesChecked === 'on', photos: photos() } }) }), 'Handoff confirmed. Rental timer started.');
@@ -295,10 +388,38 @@ export function createRentalDesk(h) {
     submit(form,'Receive equipment?','The rental timer stops at receipt. The unit stays unavailable during inspection.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(id)}/receipt`,{method:'POST',body:JSON.stringify({requestKey:key,inventoryCode:fields.inventoryCode,physicalReceiptConfirmed:fields.physicalReceiptConfirmed === 'on',...(fields.manualLookup === 'on' ? {manualLookup:true,manualReason:fields.manualReason}: {})})}),'Equipment received.',completeReturnForm));
   }
   function completeReturnForm(row) {
-    showModal('Inspect and confirm return', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Received ${e(h.formatDate(row.received_at))}. Fees use this receipt time and the original saved rates.</p>${inspectionControls(false)}<label>Damage / missing-part penalty (₱)<input name="penaltyAmount" type="number" min="0" max="9999999999.99" step="0.01" value="0" required/><small>Overtime is calculated separately.</small></label><label>Penalty reason<textarea name="penaltyReason" maxlength="1000"></textarea></label>${actions('Confirm Return')}</form>`);
+    const returnActions = `<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button><button type="button" class="secondary" data-return-esp32 title="Send return inspection to ESP32 Counter Terminal for physical button confirmation.">📡 Verify on ESP32 Terminal</button><button type="submit" class="primary">Confirm Return</button></div>`;
+    showModal('Inspect and confirm return', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Received ${e(h.formatDate(row.received_at))}. Fees use this receipt time and the original saved rates.</p>${inspectionControls(false)}<label>Damage / missing-part penalty (₱)<input name="penaltyAmount" type="number" min="0" max="9999999999.99" step="0.01" value="0" required/><small>Overtime is calculated separately.</small></label><label>Penalty reason<textarea name="penaltyReason" maxlength="1000"></textarea></label>${returnActions}</form>`);
     const form=modal.querySelector('form'),photos=bindInspectionPhotos(form);
     form.elements.condition.onchange=()=>{const damaged=['DAMAGED','NEEDS_INSPECTION'].includes(form.elements.condition.value);if(damaged)form.elements.result.value='UNDER_MAINTENANCE';form.elements.result.querySelector('[value="AVAILABLE"]').disabled=damaged;const notes=form.elements.inspectionNotes;if(notes){notes.required=damaged;notes.placeholder=damaged?'Describe the damage or issue. Required for damaged items.':'Optional — add any notes about the condition or accessories.';const label=typeof notes.closest==='function'?notes.closest('label'):null;if(label){const small=label.querySelector('small')||label.appendChild(document.createElement('small'));small.textContent=damaged?'Required for damaged or flagged items.':'Optional';}}};form.elements.condition.onchange();
     form.elements.penaltyAmount.oninput=()=>{form.elements.penaltyReason.required=Number(form.elements.penaltyAmount.value)>0;};
+    const espReturnBtn = form.querySelector('[data-return-esp32]');
+    if (espReturnBtn) {
+      espReturnBtn.onclick = async () => {
+        if (typeof form.reportValidity === 'function' && !form.reportValidity()) return;
+        const fields = Object.fromEntries(new FormData(form));
+        const error = form.querySelector('.form-error');
+        espReturnBtn.disabled = true; error.textContent = '';
+        try {
+          const res = await api(`/rentals/${encodeURIComponent(row.id)}/terminal-dispatch`, {
+            method: 'POST',
+            body: JSON.stringify({
+              mode: 'RETURN',
+              penaltyAmount: Number(fields.penaltyAmount),
+              penaltyReason: fields.penaltyReason,
+              inspection: { condition: fields.condition, result: fields.result, notes: fields.inspectionNotes, accessoriesChecked: fields.accessoriesChecked === 'on', photos: photos() }
+            })
+          });
+          modal.close();
+          try { await refresh(); } catch {}
+          redraw();
+          toast('Return dispatched to ESP32 Counter Terminal! Press the physical button on the terminal to finalize return.');
+          if (h.showHandoff && res?.request) h.showHandoff(res.request, res.rental || row);
+        } catch (problem) {
+          if (form.isConnected) { error.textContent = problem.message; espReturnBtn.disabled = false; }
+        }
+      };
+    }
     submit(form,'Complete this return?','The unit becomes available only if the inspection clears it. Payment balances remain separate.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/complete-return`,{method:'POST',body:JSON.stringify({requestKey:key,penaltyAmount:Number(fields.penaltyAmount),penaltyReason:fields.penaltyReason,inspection:{condition:fields.condition,result:fields.result,notes:fields.inspectionNotes,accessoriesChecked:fields.accessoriesChecked==='on',photos:photos()}})}),'Return confirmed. Review any outstanding rental balance.',updated=>h.transactionDetails?.({...row,...updated})));
   }
   function chooseReturn() { lookupForm('INVENTORY'); }

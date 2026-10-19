@@ -64,14 +64,14 @@ export function createRecordCodeService(db, { now = () => new Date(), onWrite = 
         const batch = [...new Map(missing.slice(start, start + 50).map(row => [String(row.id), row])).values()];
         const changed = await db.runTransaction(async tx => {
           const docs = await Promise.all(batch.map(row => tx.get(db.collection(collection).doc(String(row.id)))));
-          const pending = docs.filter(doc => doc.exists && !usable(doc.data()[type.field], type));
+          const pending = docs.filter(doc => doc.exists && doc.data() && !usable(doc.data()[type.field], type));
           const codes = pending.length ? await allocateRecordCodes(tx, db, pending.map(() => collection), now()) : [];
           const updates = new Map();
           pending.forEach((doc, index) => {
-            const saved = doc.data(), patch = { [type.field]: codes[index], ...(saved[type.field] && !saved[`legacy_${type.field}`] ? { [`legacy_${type.field}`]: saved[type.field] } : {}) };
+            const saved = doc.data() || {}, patch = { [type.field]: codes[index], ...(saved[type.field] && !saved[`legacy_${type.field}`] ? { [`legacy_${type.field}`]: saved[type.field] } : {}) };
             tx.update(doc.ref, patch); updates.set(doc.id, patch);
           });
-          for (const doc of docs.filter(doc => doc.exists && usable(doc.data()[type.field], type))) updates.set(doc.id, { [type.field]: doc.data()[type.field] });
+          for (const doc of docs.filter(doc => doc.exists && doc.data() && usable(doc.data()[type.field], type))) updates.set(doc.id, { [type.field]: doc.data()[type.field] });
           return { updates, writes: pending.length };
         });
         for (const [id, patch] of changed.updates) patches.set(id, patch);
@@ -96,7 +96,7 @@ export function createRecordCodeService(db, { now = () => new Date(), onWrite = 
     const reference = async (type, id) => {
       if (!id) return null;
       const key = `${type}/${id}`;
-      if (!related.has(key)) related.set(key, db.collection(type).doc(String(id)).get().then(doc => doc.exists ? ensure(type, { id: doc.id, ...doc.data() }) : null));
+      if (!related.has(key)) related.set(key, db.collection(type).doc(String(id)).get().then(doc => doc.exists && doc.data() ? ensure(type, { id: doc.id, ...doc.data() }) : null));
       return related.get(key);
     };
     for (const [key, type] of Object.entries(kinds)) if (result[key]) result[key] = await enrich(result[key], type, related);

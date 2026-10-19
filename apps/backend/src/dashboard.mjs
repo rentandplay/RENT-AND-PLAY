@@ -72,7 +72,7 @@ export async function loadDashboard(db,now=new Date()) {
     const terminal=terminalsById.get(String(request.terminal_id))||{};
     return {...request,terminal_code:terminal.terminal_code||'',item_code:item.item_code||'',item_name:item.name||'Unknown equipment',customer:customer.full_name||'Unknown customer'};
   }).sort((a,b)=>asDate(a.requested_at)-asDate(b.requested_at));
-  const terminals=source.terminals.filter(terminal=>terminal.is_active!==false).map(terminal=>({...publicTerminal(terminal),online:terminal.status==='ONLINE'&&!!terminal.last_seen_at&&now-asDate(terminal.last_seen_at)<90000}));
+  const terminals=source.terminals.filter(terminal=>terminal.is_active!==false).map(terminal=>({...publicTerminal(terminal),online:terminal.status==='ONLINE'&&!!terminal.last_seen_at&&now-asDate(terminal.last_seen_at)<25000}));
   const active=rentals.filter(rental=>rental.status==='ACTIVE');
   const categories=source.item_categories.map(category=>({name:category.name,count:items.filter(item=>String(item.category_id)===category.id).length})).sort((a,b)=>a.name.localeCompare(b.name));
   const serialize=serializeTransaction;

@@ -201,8 +201,13 @@ function scheduleRentalEventSync() {
       const synced = await syncLiveRentalUpdate({
         notifications: rentalNotifications, isDialogOpen: () => modal.open,
         refreshView: async () => {
-          if (page === 'Dashboard' || page === 'ESP32 terminal') await refresh();
-          else if (liveRentalPages.has(page)) {
+          if (page === 'Dashboard') await refresh();
+          else if (page === 'ESP32 terminal') {
+            const refreshedPage = page;
+            await refresh();
+            await workspaceUI.refresh();
+            if (!modal.open && page === refreshedPage && user) render();
+          } else if (liveRentalPages.has(page)) {
             const refreshedPage = page;
             const changed = await workspaceUI.refresh();
             if (!modal.open && changed && page === refreshedPage && user) render();
@@ -501,8 +506,6 @@ function syncLiveWorkspaceChrome() {
   } else banner?.remove();
   const updated = content.querySelector('.content-footer span:last-child');
   if (updated) updated.textContent = data ? `Updated ${new Intl.DateTimeFormat('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(data.refreshedAt))}` : 'Waiting for database';
-  const status = document.querySelector('.demo-status');
-  if (status) { status.querySelector('strong').textContent = connectionError ? 'Connection interrupted' : 'Connected workspace'; status.querySelector('small').textContent = data ? 'Cloud Firestore records' : 'Waiting for database'; }
   const rentalCount = document.querySelector('.nav-count');
   if (rentalCount) rentalCount.textContent = data?.rentals?.length ?? '–';
   const notifications = document.querySelector('#notifications'), seen = (() => { try { return localStorage.getItem('rent-play-notifications-seen') || ''; } catch { return ''; } })();
@@ -577,7 +580,7 @@ function render() {
   document.title = `${displayPage} · Rent & Play`;
   let notificationsSeen = ''; try { notificationsSeen = localStorage.getItem('rent-play-notifications-seen') || ''; } catch { }
   const showNotificationDot = !!notificationFingerprint() && notificationFingerprint() !== notificationsSeen;
-  app.innerHTML = `<a class="skip-link" href="#workspace-content">Skip to main content</a><div class="workspace"><aside class="sidebar"><a class="brand" href="/" data-page="Dashboard" aria-label="Rent & Play home">${brand}</a><div class="store"><span class="store-icon">${icon('box')}</span><div><strong>Rent & Play</strong><small>Los Baños, Laguna</small></div></div><nav><button data-page="Dashboard" class="nav-root ${page === 'Dashboard' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">🏠</span><span class="sidebar-label">Dashboard</span></button>${groupedNav}</nav><div class="sidebar-bottom"><button data-page="Settings"><span class="nav-emoji" aria-hidden="true">⚙️</span> Settings</button><button id="logout"><span class="nav-emoji" aria-hidden="true">🚪</span> Logout</button><div class="demo-status"><span></span><div><strong>${connectionError ? 'Connection interrupted' : 'Connected workspace'}</strong><small>${data ? 'Cloud Firestore records' : 'Waiting for database'}</small></div></div><div class="operator"><span class="avatar">${escape(initials(user.name))}</span><div><strong>${escape(user.name)}</strong><small>${escape(user.role)}</small></div></div></div></aside><div class="workspace-body"><header class="topbar"><button class="icon-button menu-toggle" id="mobile-menu" aria-label="Toggle navigation">${icon('menu')}</button><div class="top-actions"><button class="text-button" id="refresh" ${manualRefreshPending ? 'disabled aria-busy="true"' : ''}>${manualRefreshPending ? 'Refreshing…' : 'Refresh'}</button>${notificationsMenu(showNotificationDot)}<div class="profile-menu"><button class="profile-menu-toggle" id="profile-menu-toggle" type="button" aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false"><span class="avatar small">${escape(initials(user.name))}</span><span class="profile-menu-chevron" aria-hidden="true">▾</span></button><div class="profile-dropdown" id="profile-dropdown" role="menu" hidden><div class="profile-dropdown-user"><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></div><button data-page="Profile" role="menuitem">${icon('users')} View profile</button><button data-page="Settings" role="menuitem">${icon('settings')} Settings</button><button data-action="logout" class="profile-dropdown-logout" role="menuitem">${icon('out')} Logout</button></div></div></div></header><main class="content" id="workspace-content" tabindex="-1">${pageHeading()}${connectionError ? `<div class="connection-banner dashboard-connection-banner" role="alert">${escape(connectionError)}${data ? ' Showing the last successfully loaded records.' : ''}</div>` : ''}${body}<footer class="content-footer"><span>© ${new Date().getFullYear()} Rent & Play</span><span>${data ? `Updated ${new Intl.DateTimeFormat('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(data.refreshedAt))}` : 'Waiting for database'}</span></footer></main></div></div>`;
+  app.innerHTML = `<a class="skip-link" href="#workspace-content">Skip to main content</a><div class="workspace"><aside class="sidebar"><a class="brand" href="/" data-page="Dashboard" aria-label="Rent & Play home">${brand}</a><div class="store"><span class="store-icon">${icon('box')}</span><div><strong>Rent & Play</strong><small>Los Baños, Laguna</small></div></div><nav><button data-page="Dashboard" class="nav-root ${page === 'Dashboard' ? 'active' : ''}"><span class="nav-emoji" aria-hidden="true">🏠</span><span class="sidebar-label">Dashboard</span></button>${groupedNav}</nav><div class="sidebar-bottom"><button data-page="Settings"><span class="nav-emoji" aria-hidden="true">⚙️</span> Settings</button><button id="logout"><span class="nav-emoji" aria-hidden="true">🚪</span> Logout</button><div class="operator"><span class="avatar">${escape(initials(user.name))}</span><div><strong>${escape(user.name)}</strong><small>${escape(user.role)}</small></div></div></div></aside><div class="workspace-body"><header class="topbar"><button class="icon-button menu-toggle" id="mobile-menu" aria-label="Toggle navigation">${icon('menu')}</button><div class="top-actions"><button class="text-button" id="refresh" ${manualRefreshPending ? 'disabled aria-busy="true"' : ''}>${manualRefreshPending ? 'Refreshing…' : 'Refresh'}</button>${notificationsMenu(showNotificationDot)}<div class="profile-menu"><button class="profile-menu-toggle" id="profile-menu-toggle" type="button" aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false"><span class="avatar small">${escape(initials(user.name))}</span><span class="profile-menu-chevron" aria-hidden="true">▾</span></button><div class="profile-dropdown" id="profile-dropdown" role="menu" hidden><div class="profile-dropdown-user"><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></div><button data-page="Profile" role="menuitem">${icon('users')} View profile</button><button data-page="Settings" role="menuitem">${icon('settings')} Settings</button><button data-action="logout" class="profile-dropdown-logout" role="menuitem">${icon('out')} Logout</button></div></div></div></header><main class="content" id="workspace-content" tabindex="-1">${pageHeading()}${connectionError ? `<div class="connection-banner dashboard-connection-banner" role="alert">${escape(connectionError)}${data ? ' Showing the last successfully loaded records.' : ''}</div>` : ''}${body}<footer class="content-footer"><span>© ${new Date().getFullYear()} Rent & Play</span><span>${data ? `Updated ${new Intl.DateTimeFormat('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(new Date(data.refreshedAt))}` : 'Waiting for database'}</span></footer></main></div></div>`;
   if (existingInventory) document.querySelector('#inventory-root')?.replaceWith(existingInventory);
   const business = workspaceUI.business();
   if (business.business_name) document.querySelector('.store strong').textContent = business.business_name;
@@ -738,6 +741,15 @@ setInterval(() => {
   const content = document.querySelector('.content');
   if (content) content.scrollTop = scrollTop;
 }, 60000);
+setInterval(async () => {
+  if (confirmation.isOpen() || logoutPending) return;
+  if (!user || user.mustChangePassword || page !== 'ESP32 terminal' || modal.open || document.visibilityState !== 'visible' || !apiClient.canRefresh()) return;
+  if (document.querySelector('#module-search:focus,.admin-form input:focus,.admin-form textarea:focus,.admin-form select:focus,.sidebar.open,#profile-dropdown:not([hidden]),#notification-dropdown:not([hidden])')) return;
+  try {
+    await workspaceUI.refresh();
+    if (user && page === 'ESP32 terminal' && !modal.open) render();
+  } catch { }
+}, 8000);
 setInterval(async () => {
   if (confirmation.isOpen() || logoutPending) return;
   if (!user || user.mustChangePassword || !apiClient.canRefresh() || !workspaceUI.autoRefreshEnabled() || page === 'Settings' || liveRentalPages.has(page) || document.visibilityState !== 'visible') return;

@@ -11,6 +11,8 @@
     "start": "node --env-file-if-exists=.env src/server.mjs",
     "firebase:check": "node --env-file-if-exists=.env scripts/check-db.mjs",
     "db:check": "npm run firebase:check",
+    "supabase:check": "node --env-file-if-exists=.env scripts/check-db.mjs",
+    "supabase:migrate": "node --env-file-if-exists=.env scripts/migrate-to-supabase.mjs",
     "catalog:replace-mobile": "node --env-file-if-exists=.env scripts/replace-inventory-with-mobile-catalog.mjs",
     "item-codes:migrate": "node --env-file-if-exists=.env scripts/migrate-equipment-codes.mjs",
     "record-codes:migrate": "node --env-file-if-exists=.env scripts/normalize-record-codes.mjs",

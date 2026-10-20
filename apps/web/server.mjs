@@ -19,8 +19,11 @@ const server = http.createServer(async (req, res) => {
     });
     upstream.setTimeout(req.url.startsWith('/api/users') || req.url.includes('/registration/email-code') ? 30000 : 10000, () => upstream.destroy());
     upstream.on('error', () => {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`[Proxy] Cannot reach backend on 127.0.0.1:${process.env.API_PORT || 3000}. Make sure apps/backend is running.`);
+      }
       if (!res.headersSent) res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ error: 'Backend is not running. Start apps/backend with npm run dev.' }));
+      res.end(JSON.stringify({ error: 'Unable to connect to the server. Please try again later.' }));
     });
     req.pipe(upstream); return;
   }

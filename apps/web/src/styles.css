@@ -1558,14 +1558,38 @@ input::placeholder {
   color: #a2acb8
 }
 
-#login-error,
+#login-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #b94a38;
+  background: #fdf3f0;
+  border: 1px solid #f2c8bc;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-top: 14px
+}
+
+#login-error:empty {
+  display: none !important
+}
+
+#login-error:not(:empty)::before {
+  content: "⚠️";
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0
+}
+
 #request-error {
   font-size: 11px;
   color: #c56853;
   margin-top: 12px
 }
 
-#login-error:empty {
+#request-error:empty {
   display: none
 }
 
@@ -2874,7 +2898,9 @@ dd {
 }
 
 [data-theme="dark"] #login-error {
-  color: #f0ac98
+  color: #fca595;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.28)
 }
 
 [data-theme="dark"] .info-box {

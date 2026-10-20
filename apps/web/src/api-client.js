@@ -7,7 +7,7 @@ export function createApiClient({ fetcher = fetch, now = Date.now } = {}) {
       if (now() < retryAt && !independent.has(path)) throw quotaError;
       let response;
       try { response = await fetcher(`/api${path}`, { credentials: 'same-origin', ...options, headers: { 'Content-Type': 'application/json', ...options.headers } }); }
-      catch { throw new Error('Cannot reach the server. Check that the web and backend servers are running.'); }
+      catch { throw new Error('Unable to connect to the server. Please check your internet connection or try again later.'); }
       const result = await response.json().catch(() => ({ error: 'The server returned an invalid response.' }));
       const error = Object.assign(new Error(result.error || result.warning || 'Request failed.'), { status: response.status, code: result.code });
       if (result.code === 'FIRESTORE_QUOTA_EXCEEDED') {

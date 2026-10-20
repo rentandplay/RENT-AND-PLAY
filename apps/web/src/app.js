@@ -322,9 +322,19 @@ modal.addEventListener('click', e => {
   const r = modal.getBoundingClientRect();
   if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) modal.close();
 });
+function cleanErrorMessage(msg) {
+  if (!msg) return '';
+  const str = String(msg);
+  const lower = str.toLowerCase();
+  if (lower.includes('npm run dev') || lower.includes('backend is not running') || lower.includes('apps/backend') || lower.includes('failed to fetch') || lower.includes('econnrefused') || lower.includes('cannot reach the server')) {
+    return 'Unable to connect to the server. Please check your connection or try again later.';
+  }
+  return str;
+}
 function login(message = '') {
+  const displayError = cleanErrorMessage(message);
   document.title = 'Sign in · Rent & Play';
-  app.innerHTML = `<main class="login"><section class="login-story"><a class="brand" href="#">${brand}</a><div class="story-body"><span class="eyebrow">LESS PAPERWORK. MORE PLAY.</span><h1>Good times.<br/>Greatly managed<span class="orange">.</span></h1><p>Your equipment, rentals, and returns.<br/>All together in one happy place.</p><div class="login-art">${sportArt}</div><div class="story-features"><span>${icon('box')} Know what’s available</span><span>${icon('clock')} Stay ahead of due dates</span><span>${icon('chip')} Verify every handoff</span></div></div><footer>Made for Rent & Play <span>Los Baños, Laguna</span></footer></section><section class="login-form-side"><span class="workspace-label">OWNER / OPERATOR WORKSPACE</span><div class="login-form-wrap"><div class="welcome-icon">${icon('grid')}</div><h2>Welcome back!</h2><p>Sign in to manage your rentals.</p><form id="login-form"><label for="email">Email address</label><input id="email" type="email" autocomplete="username" maxlength="254" required/><div class="label-line"><label for="password">Password</label><button class="text-button" type="button" id="forgot">Forgot password?</button></div><div class="password-field"><input id="password" type="password" autocomplete="current-password" placeholder="Enter your password" maxlength="1024" required/><button type="button" id="show-password" aria-label="Show password">${icon('eye')}</button></div><label class="checkbox"><input id="remember" type="checkbox"/> Remember me on this device</label><p id="login-error" role="alert">${escape(message)}</p><button class="primary login-submit" type="submit">Sign in</button></form><p class="login-foot">Your account. Your equipment. Your workspace.</p></div><footer>© ${new Date().getFullYear()} Rent & Play <span>Built for more play.</span></footer></section></main>`;
+  app.innerHTML = `<main class="login"><section class="login-story"><a class="brand" href="#">${brand}</a><div class="story-body"><span class="eyebrow">LESS PAPERWORK. MORE PLAY.</span><h1>Good times.<br/>Greatly managed<span class="orange">.</span></h1><p>Your equipment, rentals, and returns.<br/>All together in one happy place.</p><div class="login-art">${sportArt}</div><div class="story-features"><span>${icon('box')} Know what’s available</span><span>${icon('clock')} Stay ahead of due dates</span><span>${icon('chip')} Verify every handoff</span></div></div><footer>Made for Rent & Play <span>Los Baños, Laguna</span></footer></section><section class="login-form-side"><span class="workspace-label">OWNER / OPERATOR WORKSPACE</span><div class="login-form-wrap"><div class="welcome-icon">${icon('grid')}</div><h2>Welcome back!</h2><p>Sign in to manage your rentals.</p><form id="login-form"><label for="email">Email address</label><input id="email" type="email" autocomplete="username" maxlength="254" required/><div class="label-line"><label for="password">Password</label><button class="text-button" type="button" id="forgot">Forgot password?</button></div><div class="password-field"><input id="password" type="password" autocomplete="current-password" placeholder="Enter your password" maxlength="1024" required/><button type="button" id="show-password" aria-label="Show password">${icon('eye')}</button></div><label class="checkbox"><input id="remember" type="checkbox"/> Remember me on this device</label><p id="login-error" role="alert">${escape(displayError)}</p><button class="primary login-submit" type="submit">Sign in</button></form><p class="login-foot">Your account. Your equipment. Your workspace.</p></div><footer>© ${new Date().getFullYear()} Rent & Play <span>Built for more play.</span></footer></section></main>`;
   const loginHeader = document.createElement('div'); loginHeader.className = 'login-header';
   const workspaceLabel = document.querySelector('.workspace-label'); workspaceLabel.textContent = 'OWNER / OPERATOR WORKSPACE'; workspaceLabel.before(loginHeader);
   loginHeader.append(workspaceLabel);
@@ -425,7 +435,7 @@ function login(message = '') {
       const result = await api('/auth/login', { method: 'POST', body: JSON.stringify(body) });
       user = result.user; page = pageForPath(location.pathname); if (page === 'Reports') workspaceUI.setReportSection(reportSectionForPath(location.pathname)); history.replaceState({ page }, '', page === 'Reports' ? reportPathForSection(workspaceUI.reportSection()) : pageRoutes[page]); await refresh();
     } catch (error) {
-      const el = document.querySelector('#login-error'); if (el) el.textContent = error.message;
+      const el = document.querySelector('#login-error'); if (el) el.textContent = cleanErrorMessage(error.message);
     } finally {
       // Brief responses still give visible feedback; longer requests add no delay.
       const remaining = 500 - (performance.now() - loginStarted);
@@ -711,11 +721,11 @@ async function boot() {
   sessionLoading();
   try { const result = await api('/auth/me'); user = result.user; await refresh(); }
   catch (error) {
-    if (error.status !== 401) login(error.message);
+    if (error.status !== 401) login(cleanErrorMessage(error.message));
     else {
       login();
       try { const health = await api('/health'); if (health.database === false) { const el = document.querySelector('#login-error'); if (el) el.textContent = health.warning || 'The database is temporarily unavailable.'; } }
-      catch (healthError) { const el = document.querySelector('#login-error'); if (el) el.textContent = healthError.message; }
+      catch (healthError) { const el = document.querySelector('#login-error'); if (el) el.textContent = cleanErrorMessage(healthError.message); }
     }
   }
 }

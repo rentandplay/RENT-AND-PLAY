@@ -10842,13 +10842,14 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
   display: grid;
   place-items: center;
   width: 100%;
-  height: clamp(176px, 26vh, 238px);
+  height: clamp(180px, 28vh, 250px);
   margin-top: 10px;
   overflow: hidden;
   isolation: isolate;
-  border: 1px solid #182236;
-  border-radius: 13px;
-  background: #0c1422;
+  border: 1.5px solid #22324e;
+  border-radius: 14px;
+  background: #07111c;
+  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.6);
 }
 
 :root .qr-camera-preview {
@@ -10859,7 +10860,7 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
   max-height: none;
   object-fit: cover;
   border-radius: 0;
-  background: #0c1422;
+  background: #07111c;
 }
 
 .qr-scanner-target {
@@ -10867,47 +10868,87 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
   width: min(56%, 210px);
   aspect-ratio: 1;
   z-index: 1;
-  border: 2px solid #fff;
-  border-radius: 14px;
-  box-shadow: 0 0 0 999px #07111c38;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-radius: 18px;
+  box-shadow: 0 0 0 9999px rgba(7, 17, 28, 0.72);
   pointer-events: none;
+  background:
+    linear-gradient(to right, #ff963e 4px, transparent 4px) 0 0,
+    linear-gradient(to bottom, #ff963e 4px, transparent 4px) 0 0,
+    linear-gradient(to left, #ff963e 4px, transparent 4px) 100% 0,
+    linear-gradient(to bottom, #ff963e 4px, transparent 4px) 100% 0,
+    linear-gradient(to right, #ff963e 4px, transparent 4px) 0 100%,
+    linear-gradient(to top, #ff963e 4px, transparent 4px) 0 100%,
+    linear-gradient(to left, #ff963e 4px, transparent 4px) 100% 100%,
+    linear-gradient(to top, #ff963e 4px, transparent 4px) 100% 100%;
+  background-repeat: no-repeat;
+  background-size: 26px 26px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.qr-scanner-target.is-captured {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 9999px rgba(7, 17, 28, 0.8), 0 0 24px #22c55e88;
+  background:
+    linear-gradient(to right, #22c55e 4px, transparent 4px) 0 0,
+    linear-gradient(to bottom, #22c55e 4px, transparent 4px) 0 0,
+    linear-gradient(to left, #22c55e 4px, transparent 4px) 100% 0,
+    linear-gradient(to bottom, #22c55e 4px, transparent 4px) 100% 0,
+    linear-gradient(to right, #22c55e 4px, transparent 4px) 0 100%,
+    linear-gradient(to top, #22c55e 4px, transparent 4px) 0 100%,
+    linear-gradient(to left, #22c55e 4px, transparent 4px) 100% 100%,
+    linear-gradient(to top, #22c55e 4px, transparent 4px) 100% 100%;
+  background-repeat: no-repeat;
+  background-size: 26px 26px;
 }
 
 .qr-scanner-target::after {
   position: absolute;
   top: 50%;
-  left: 9%;
-  right: 9%;
-  height: 2px;
-  border-radius: 2px;
-  background: #ff963e;
-  box-shadow: 0 0 12px #ff963eaa;
+  left: 6%;
+  right: 6%;
+  height: 3px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, #ff963e 20%, #ffbb77 50%, #ff963e 80%, transparent);
+  box-shadow: 0 0 14px #ff963eee, 0 0 4px #fff;
   content: '';
-  animation: qr-scan-line 2.4s ease-in-out infinite alternate;
+  animation: qr-scan-line 2.2s ease-in-out infinite alternate;
+}
+
+.qr-scanner-target.is-captured::after {
+  background: linear-gradient(90deg, transparent, #22c55e 20%, #86efac 50%, #22c55e 80%, transparent);
+  box-shadow: 0 0 14px #22c55eee, 0 0 4px #fff;
+  animation: none;
+  transform: translateY(0);
 }
 
 .qr-scanner-label {
   position: absolute;
   z-index: 2;
   left: 50%;
-  bottom: 10px;
+  bottom: 12px;
   max-width: calc(100% - 24px);
   transform: translateX(-50%);
-  padding: 6px 10px;
-  border: 1px solid #ffffff28;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 150, 62, 0.35);
   border-radius: 20px;
-  background: #07111cba;
+  background: rgba(8, 16, 28, 0.88);
+  backdrop-filter: blur(8px);
   color: #fff;
-  font-size: 10px;
-  line-height: 1.3;
-  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
   white-space: nowrap;
   pointer-events: none;
 }
 
 @keyframes qr-scan-line {
-  from { transform: translateY(-42px); }
-  to { transform: translateY(42px); }
+  from { transform: translateY(-46px); }
+  to { transform: translateY(46px); }
 }
 
 .rental-release-inspection {

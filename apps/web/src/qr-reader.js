@@ -57,10 +57,52 @@ export function bindQrReaders(form, modal, { onCapture } = {}) {
         if (attempt !== generation) return;
         if (!running || !form.isConnected || !modal.open || document.hidden) { stop(); return; }
         if (video.readyState >= 2) {
-          canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-          context.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const found = decode(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'attemptBoth' });
-          if (found?.data) { field.value = found.data; field.dispatchEvent(new Event('input', { bubbles: true })); output.textContent = 'QR captured. Review the details before confirming.'; stop(); onCapture?.(button.dataset.scanField); return; }
+          const vw = video.videoWidth, vh = video.videoHeight;
+          if (vw > 0 && vh > 0) {
+            let sx = 0, sy = 0, sw = vw, sh = vh;
+            const frameRect = frame.getBoundingClientRect?.();
+            const targetRect = target.getBoundingClientRect?.();
+
+            if (frameRect && targetRect && frameRect.width > 0 && frameRect.height > 0 && targetRect.width > 0 && targetRect.height > 0) {
+              const frameW = frameRect.width, frameH = frameRect.height;
+              const targetW = targetRect.width, targetH = targetRect.height;
+              const targetX = targetRect.left - frameRect.left, targetY = targetRect.top - frameRect.top;
+              const scale = Math.max(frameW / vw, frameH / vh);
+              const renderedW = vw * scale, renderedH = vh * scale;
+              const offsetX = (frameW - renderedW) / 2, offsetY = (frameH - renderedH) / 2;
+
+              sx = Math.max(0, Math.floor((targetX - offsetX) / scale));
+              sy = Math.max(0, Math.floor((targetY - offsetY) / scale));
+              sw = Math.min(vw - sx, Math.ceil(targetW / scale));
+              sh = Math.min(vh - sy, Math.ceil(targetH / scale));
+            } else if (frame && target && (frame.clientWidth || target.offsetWidth)) {
+              const frameW = frame.clientWidth || 300, frameH = frame.clientHeight || 200;
+              const targetW = target.offsetWidth || (frameW * 0.56), targetH = target.offsetHeight || targetW;
+              const targetX = target.offsetLeft || ((frameW - targetW) / 2), targetY = target.offsetTop || ((frameH - targetH) / 2);
+              const scale = Math.max(frameW / vw, frameH / vh);
+              const renderedW = vw * scale, renderedH = vh * scale;
+              const offsetX = (frameW - renderedW) / 2, offsetY = (frameH - renderedH) / 2;
+
+              sx = Math.max(0, Math.floor((targetX - offsetX) / scale));
+              sy = Math.max(0, Math.floor((targetY - offsetY) / scale));
+              sw = Math.min(vw - sx, Math.ceil(targetW / scale));
+              sh = Math.min(vh - sy, Math.ceil(targetH / scale));
+            }
+
+            canvas.width = Math.max(1, sw);
+            canvas.height = Math.max(1, sh);
+            context.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+            const found = decode(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'attemptBoth' });
+            if (found?.data) {
+              target.classList?.add?.('is-captured');
+              field.value = found.data;
+              field.dispatchEvent(new Event('input', { bubbles: true }));
+              output.textContent = 'QR captured. Review the details before confirming.';
+              stop();
+              onCapture?.(button.dataset.scanField);
+              return;
+            }
+          }
         }
         timer = setTimeout(scan, 180);
       };

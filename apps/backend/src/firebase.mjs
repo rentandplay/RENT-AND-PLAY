@@ -40,6 +40,12 @@ export const firestore = supabaseFirestore && !process.env.FIRESTORE_EMULATOR_HO
 export const firebaseAuth = getAuth(app);
 export const firebaseMessaging = getMessaging(app);
 
+export function setFirestoreWriteListener(callback) {
+  if (supabaseFirestore?.setOnWrite) {
+    supabaseFirestore.setOnWrite(callback);
+  }
+}
+
 export function requireFirebaseConfig() {
   if (!process.env.FIREBASE_PROJECT_ID) throw Object.assign(new Error('FIREBASE_PROJECT_ID is not configured.'), { code: 'FIREBASE_CONFIG' });
   if (!process.env.FIREBASE_WEB_API_KEY) throw Object.assign(new Error('FIREBASE_WEB_API_KEY is not configured.'), { code: 'FIREBASE_CONFIG' });

@@ -143,11 +143,13 @@ export function createSupabaseFirestore({
   url = process.env.SUPABASE_URL,
   serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
   bucket = process.env.SUPABASE_STORAGE_BUCKET || 'rental-media',
-  fetcher = fetch
+  fetcher = fetch,
+  onWrite = null
 } = {}) {
   const baseUrl = normalizeSupabaseUrl(url);
   const apiKey = (serviceRoleKey || '').trim();
   const mediaDataUrlCache = new Map();
+  let writeListener = onWrite;
 
   function headers(extra = {}) {
     return {
@@ -312,6 +314,9 @@ export function createSupabaseFirestore({
       p_writes: enrichedWrites,
       p_preconditions: normalizedPreconditions
     });
+    if (writeListener && normalizedWrites.length) {
+      try { writeListener(normalizedWrites); } catch {}
+    }
   }
 
   function makeDocSnapshot(docRef, row) {
@@ -585,6 +590,7 @@ export function createSupabaseFirestore({
       }
     },
     settings() {},
+    setOnWrite(callback) { writeListener = callback; },
     async terminate() {}
   };
 }

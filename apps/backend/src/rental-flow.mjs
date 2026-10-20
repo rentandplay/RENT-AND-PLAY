@@ -181,9 +181,9 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
     }
     const fee = selected.fee;
     if (input.expectedQuote && (input.expectedQuote.rentalFee !== fee.rental_fee || input.expectedQuote.billedMinutes !== fee.billed_minutes || input.expectedQuote.overtimeRate !== undefined && input.expectedQuote.overtimeRate !== fee.overtime_rate)) fail(409, 'The rates changed. Refresh the quote and review the new total and late fee.');
-    const acceptedTerms = !staff && input.acceptedRentalTerms === true && input.rentalTermsVersion === MOBILE_RENTAL_TERMS_VERSION
+    const acceptedTerms = !staff && input.acceptedRentalTerms === true && (input.rentalTermsVersion === MOBILE_RENTAL_TERMS_VERSION || (typeof input.rentalTermsVersion === 'string' && input.rentalTermsVersion.trim().length > 0))
       ? {
-          version: MOBILE_RENTAL_TERMS_VERSION,
+          version: input.rentalTermsVersion || MOBILE_RENTAL_TERMS_VERSION,
           accepted_at: now,
           accepted_by: customerId,
           item_id: itemId,

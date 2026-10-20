@@ -6,6 +6,7 @@ import { isStaffRole, normalizeRole } from './roles.mjs';
 import { allocateCustomerCode } from './customer-codes.mjs';
 import { validateInstapayQr } from './payment-proof.mjs';
 import { randomBytes, createHash } from 'node:crypto';
+import { DEFAULT_TERMS_AND_CONDITIONS, DEFAULT_RENTAL_TERMS, DEFAULT_TERMS_VERSION } from './terms-constants.mjs';
 import { emailError, nameError, passwordError, passwordMatchError, phoneError, validationFailure, validateEmailFormat } from './account-validation.mjs';
 import { createAccountMailer } from './account-mail.mjs';
 import { recordPage } from './record-pages.mjs';
@@ -112,6 +113,9 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
     mobile ? Promise.resolve({}) : loadPricing(db, { allowInvalidFallback: true })
   ]);
   const settings = settingsDoc.exists ? settingsDoc.data() : { business_name: 'Rent & Play', location: 'Los Baños, Laguna', currency: 'PHP', timezone: 'Asia/Manila', default_late_grace_hours: 0 };
+  if (!settings.terms_and_conditions) settings.terms_and_conditions = DEFAULT_TERMS_AND_CONDITIONS;
+  if (!settings.rental_terms) settings.rental_terms = DEFAULT_RENTAL_TERMS;
+  if (!settings.terms_version) settings.terms_version = DEFAULT_TERMS_VERSION;
   let users = [];
   const userProfiles = new Map();
   if (role === 'OWNER' && !mobile && (!view || view==='Settings')) {
@@ -464,6 +468,31 @@ export async function savePaymentSettings(db, actor, input, now = new Date()) {
   stageAudit(batch, db, actor, 'PAYMENT_INSTRUCTIONS_UPDATED', 'SETTINGS', 'business', { before: safeAudit(before), after: safeAudit(value), now });
   await batch.commit();
   return { ...value };
+}
+
+export async function saveTermsSettings(db, actor, input, now = new Date()) {
+  const terms_and_conditions = typeof input?.termsAndConditions === 'string' ? input.termsAndConditions.trim().slice(0, 15000) : '';
+  const rental_terms = typeof input?.rentalTerms === 'string' ? input.rentalTerms.trim().slice(0, 10000) : '';
+  if (!terms_and_conditions) fail(400, 'Enter valid Terms & Conditions.');
+  const ref = db.collection('settings').doc('business'), current = await ref.get();
+  const before = current.exists ? current.data() : {};
+  const terms_version = 'v-' + now.toISOString().slice(0, 10).replace(/-/g, '') + '-' + Math.floor(now.getTime() / 1000);
+  const value = {
+    terms_and_conditions,
+    rental_terms: rental_terms || DEFAULT_RENTAL_TERMS,
+    terms_version,
+    terms_updated_at: now,
+    terms_updated_by: String(actor)
+  };
+  const batch = db.batch();
+  batch.set(ref, value, { merge: true });
+  stageAudit(batch, db, actor, 'TERMS_AND_CONDITIONS_UPDATED', 'SETTINGS', 'business', {
+    before: { terms_version: before.terms_version || null },
+    after: { terms_version, length: terms_and_conditions.length },
+    now
+  });
+  await batch.commit();
+  return serial(value);
 }
 
 export async function createWorkspaceUser(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailFormat, sendCredentials = sendAccountCredentials } = {}) {

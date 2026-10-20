@@ -4,14 +4,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
 import { FirebaseSessions, publicUser, changeWorkspacePassword } from './auth.mjs';
 import { validateEmailFormat } from './account-validation.mjs';
-import { firebaseAuth as defaultFirebaseAuth, firebaseMessaging as defaultMessaging, firestore as defaultFirestore, requireFirebaseConfig } from './firebase.mjs';
+import { firebaseAuth as defaultFirebaseAuth, firebaseMessaging as defaultMessaging, firestore as defaultFirestore, requireFirebaseConfig, setFirestoreWriteListener } from './firebase.mjs';
 import { loadDashboard, loadAnalyticsSummary } from './dashboard.mjs';
 import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, setItemQuantity, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
 import { updateProfile } from './profile.mjs';
-import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
+import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, saveTermsSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
 import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, terminalPending, testTerminalPing, dispatchRentalToTerminal } from './transactions.mjs';
-import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions } from './mobile.mjs';
+import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions, mobileTerms } from './mobile.mjs';
 import { createReadCache } from './read-cache.mjs';
 import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-errors.mjs';
 import { createBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt, completeRentalReturn, lookupRental, rentalTicket, changeAssignedUnit, settleRentalPayment, inspectionPhoto, submitRentalPaymentProof, rentalPaymentProof, reviewRentalPaymentProof, prepareRentalDelivery, MOBILE_RENTAL_TERMS_VERSION } from './rental-flow.mjs';
@@ -198,6 +198,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     rentalPaymentProof: id => rentalPaymentProof(firestore, id),
     reviewRentalPaymentProof: (actor, id, input) => reviewRentalPaymentProof(firestore, actor, id, input, now()),
     savePaymentSettings: (actor, input) => savePaymentSettings(firestore, actor, input, now()),
+    saveTermsSettings: (actor, input) => saveTermsSettings(firestore, actor, input, now()),
     recordRentalReceipt: (actor, id, input) => recordRentalReceipt(firestore, actor, id, input, now()),
     completeRentalReturn: (actor, id, input) => completeRentalReturn(firestore, actor, id, input, now()),
     changeAssignedUnit: (actor, id, input) => changeAssignedUnit(firestore, actor, id, input, now()),
@@ -228,6 +229,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     resolveMobileItem: input => resolveMobileItem(readDatabase, input),
     mobileRentalList: async (actor, id, options={}) => { await verificationSweep.run(); return mobileRentalList(readDatabase, actor, id,options); },
     mobilePaymentInstructions: () => mobilePaymentInstructions(readDatabase),
+    mobileTerms: () => mobileTerms(readDatabase),
     submitRentalPaymentProof: (actor, id, input) => submitRentalPaymentProof(firestore, actor, id, input, now()),
     mobileQuote: input => quoteEquipmentRental(firestore, { ...input, mode: 'TIMED' }, now()),
     requestMobileReturn: (actor, id, input) => requestMobileReturn(firestore, actor, id, input, now()),
@@ -262,6 +264,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     reviewRentalPaymentProof: ['rentals', 'rental_payment_proofs', 'audit_logs', 'notification_inboxes'],
     submitRentalPaymentProof: ['rentals', 'rental_payment_proofs', 'audit_logs', 'notification_inboxes'],
     savePaymentSettings: ['settings', 'audit_logs'],
+    saveTermsSettings: ['settings', 'audit_logs'],
     recordRentalReceipt: ['rentals', 'items', 'audit_logs', 'item_status_history', 'notification_inboxes'],
     completeRentalReturn: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records', 'notification_inboxes'],
     changeAssignedUnit: ['rentals', 'items', 'audit_logs', 'item_status_history'],
@@ -399,15 +402,42 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
   function sendRentalUpdate(res, status, value, { rentalId = '', customerId = '' } = {}) {
     if (value?.duplicate !== true) {
       const rental = value?.rental || value?.data?.rental || value?.request?.rental || {};
+      const rId = rental.id || rental.rental_id || rentalId;
+      const cId = rental.customer_id || rental.customerId || customerId;
       rentalEvents.publishRental({
-        rentalId: rental.id || rental.rental_id || rentalId,
-        customerId: rental.customer_id || rental.customerId || customerId
+        rentalId: rId,
+        customerId: cId
       });
+      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger']);
       pushWorker?.wake();
       holdWorker?.wake();
     }
     return send(res, status, value);
   }
+  setFirestoreWriteListener?.(writes => {
+    const collections = new Set(writes.map(w => w.collection));
+    if (collections.has('items') || collections.has('item_categories') || collections.has('item_rates')) {
+      services.invalidateReadCache?.(['items', 'item_categories', 'item_rates']);
+      rentalEvents.publishInventory();
+    }
+    if (collections.has('rentals') || collections.has('rental_payment_proofs')) {
+      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger']);
+      rentalEvents.publishRental({ allCustomers: true });
+    }
+    if (collections.has('maintenance_records') || collections.has('maintenance_photos')) {
+      services.invalidateReadCache?.(['maintenance_records', 'items']);
+      rentalEvents.publishMaintenance();
+    }
+    if (collections.has('customers') || collections.has('users')) {
+      services.invalidateReadCache?.(['customers', 'users']);
+      rentalEvents.publishCustomer();
+    }
+    if (collections.has('payment_ledger')) {
+      services.invalidateReadCache?.(['payment_ledger', 'financial_daily']);
+      rentalEvents.publishFinance();
+    }
+    rentalEvents.publishDataChange('data.changed', { collections: [...collections] });
+  });
   function limitRegistrationRequests(req, action, max) {
     const key = `${action}:${req.socket.remoteAddress || 'unknown'}`;
     const at = Date.now();
@@ -454,7 +484,14 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         quotaBackoff.assertAvailable();
         const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = bearer ? await services.verifyMobileToken?.(bearer) : await sessions.verify(token);
-        if (!claims) return stopRentalEventStream(res);
+        const isEventStreamRequest = (req.headers.accept || '').includes('text/event-stream');
+        if (!claims) {
+          if (isEventStreamRequest) {
+            rentalEvents.subscribe(res, { guest: true });
+            return;
+          }
+          return stopRentalEventStream(res);
+        }
         const profile = await services.getUser(claims.uid);
         if (!profile?.is_active || profile.must_change_password === true) return stopRentalEventStream(res);
         const role = normalizeRole(profile.role);
@@ -553,6 +590,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
       if (path === '/api/mobile/catalog' && req.method === 'GET') return send(res, 200, { ...await services.mobileCatalog(), firebaseProjectId: services.firebaseProjectId });
       if (path === '/api/mobile/catalog/resolve' && req.method === 'POST') return send(res, 200, { ...await services.resolveMobileItem(await body(req)), firebaseProjectId: services.firebaseProjectId });
+      if ((path === '/api/terms' || path === '/api/mobile/terms') && req.method === 'GET') return send(res, 200, await services.mobileTerms());
       if (path === '/api/mobile/profile') {
         const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = bearer ? await services.verifyMobileToken?.(bearer) : null;
@@ -582,7 +620,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (mobileRentalRoute && req.method === 'POST') {
           if (!id) {
             const input = await body(req, 550000);
-            if (input?.acceptedRentalTerms !== true || input?.rentalTermsVersion !== MOBILE_RENTAL_TERMS_VERSION) fail(400, 'Review and accept the current rental terms before submitting your request.');
+            if (input?.acceptedRentalTerms !== true || (input?.rentalTermsVersion !== MOBILE_RENTAL_TERMS_VERSION && (typeof input?.rentalTermsVersion !== 'string' || !input?.rentalTermsVersion.trim()))) fail(400, 'Review and accept the current rental terms before submitting your request.');
             return sendRentalUpdate(res, 201, await services.createMobileRentalRequest(actor, input), { customerId: actor.id });
           }
           if (action === 'cancel') return sendRentalUpdate(res, 200, await services.cancelMobileRentalRequest(actor, id), { rentalId: id, customerId: actor.id });
@@ -633,7 +671,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       const historicalReceiptRoute=path.match(/^\/api\/finance\/rentals\/([A-Za-z0-9_-]{1,128})\/receipt-history$/);
       const financeRoute=historicalReceiptRoute || ['/api/finance/summary','/api/finance/ledger','/api/finance/rentals','/api/finance/expenses','/api/reports/daily'].includes(path);
       const terminalTestRoute = path.match(/^\/api\/terminals\/([A-Za-z0-9_-]{1,128})\/test-ping$/);
-      const workspaceRoute = recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
+      const workspaceRoute = recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || path === '/api/settings/terms' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || maintenanceRoute || maintenanceStaffRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute || rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) {
         const mobileToken = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
@@ -655,7 +693,11 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (path === '/api/finance/rentals' && req.method === 'GET') return send(res,200,await services.financeRentalPage(queryOptions));
         if (historicalReceiptRoute && req.method === 'POST') return sendRentalUpdate(res,200,await services.confirmHistoricalReceipt(user,historicalReceiptRoute[1],await body(req)),{rentalId:historicalReceiptRoute[1]});
         if (path === '/api/reports/daily' && req.method === 'GET') return send(res,200,await services.rentalDailySummary(queryOptions));
-        if (path === '/api/finance/expenses' && req.method === 'POST') return send(res,201,await services.createExpense(user,await body(req)));
+        if (path === '/api/finance/expenses' && req.method === 'POST') {
+          const expense = await services.createExpense(user, await body(req));
+          rentalEvents.publishFinance({ expenseId: expense?.id });
+          return send(res, 201, expense);
+        }
         if (recordsRoute || financeRoute) return send(res,405,{error:'Method not allowed.'});
         if (counterBookingRoute && req.method === 'POST') {
           const input = await body(req);
@@ -678,10 +720,18 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (maintenanceStaffRoute) return req.method === 'GET' ? send(res, 200, await services.maintenanceStaff()) : send(res, 405, { error: 'Method not allowed.' });
         if (maintenanceRoute) {
           const [, id, photoId] = maintenanceRoute;
-          if (!id && req.method === 'POST') return send(res, 201, await services.createMaintenance(user.id, await body(req, 700000)));
+          if (!id && req.method === 'POST') {
+            const record = await services.createMaintenance(user.id, await body(req, 700000));
+            rentalEvents.publishMaintenance({ recordId: record?.id, itemId: record?.item_id });
+            return send(res, 201, record);
+          }
           if (id && photoId && req.method === 'GET') return send(res, 200, await services.maintenancePhoto(id, photoId));
           if (id && !photoId && req.method === 'GET') return send(res, 200, await services.maintenanceDetail(id));
-          if (id && !photoId && req.method === 'PATCH') return send(res, 200, await services.updateMaintenance(user.id, id, await body(req, 700000)));
+          if (id && !photoId && req.method === 'PATCH') {
+            const record = await services.updateMaintenance(user.id, id, await body(req, 700000));
+            rentalEvents.publishMaintenance({ recordId: id, itemId: record?.item_id });
+            return send(res, 200, record);
+          }
           return send(res, 405, { error: 'Method not allowed.' });
         }
         if (path === '/api/mobile/admin-workspace' && req.method === 'GET') return send(res, 200, await services.mobileAdminWorkspace(user.role));
@@ -700,28 +750,114 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (mobileReturnReviewRoute && req.method === 'POST') return sendRentalUpdate(res, 200, await services.reviewMobileReturn({ id: user.id, full_name: user.full_name || user.name }, mobileReturnReviewRoute[1], await body(req)), { rentalId: mobileReturnReviewRoute[1] });
         if (inspectionRoute && req.method === 'PUT') return sendRentalUpdate(res, 200, { request: await services.saveRequestInspection(user, inspectionRoute[1], await body(req)) });
         if (transactionRoute) return send(res, 405, { error: 'Method not allowed.' });
-        if (itemCategoriesRoute) { const [, id] = itemCategoriesRoute; if (req.method === 'POST' && !id) return send(res, 201, { category: await services.createItemCategory(user.id, await body(req)) }); if (req.method === 'DELETE' && id) return send(res, 200, { category: await services.deleteItemCategory(user.id, id) }); return send(res, 405, { error: 'Method not allowed.' }); }
+        if (itemCategoriesRoute) {
+          const [, id] = itemCategoriesRoute;
+          if (req.method === 'POST' && !id) {
+            const category = await services.createItemCategory(user.id, await body(req));
+            rentalEvents.publishInventory({ categoryId: category?.id, collections: ['item_categories'] });
+            return send(res, 201, { category });
+          }
+          if (req.method === 'DELETE' && id) {
+            const category = await services.deleteItemCategory(user.id, id);
+            rentalEvents.publishInventory({ categoryId: id, collections: ['item_categories'] });
+            return send(res, 200, { category });
+          }
+          return send(res, 405, { error: 'Method not allowed.' });
+        }
         if (inventoryQrLabelsRoute && req.method === 'GET') return send(res, 200, await services.inventoryQrLabels());
         if (path === '/api/pricing' && req.method === 'GET') return send(res, 200, await services.pricing());
         if (path === '/api/pricing' && req.method === 'PUT') return send(res, 200, { pricing: await services.savePricing(user.id, await body(req)) });
         if (path === '/api/pricing/quote' && req.method === 'POST') return send(res, 200, { quote: await services.pricingQuote(await body(req)) });
-        if (customerPasswordRoute) { if (req.method === 'PATCH') return send(res, 200, { customer: await services.changeCustomerPassword(user.id, customerPasswordRoute[1], await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
-        if (customerAccountRoute) { if (req.method === 'POST') return send(res, 201, { customer: await services.createMobileCustomerAccount(user.id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
-        if (customerRoute) { const [, id] = customerRoute; if (req.method === 'POST' && !id) return send(res, 201, { customer: await services.createCustomer(user.id, await body(req)) }); if (req.method === 'PATCH' && id) return send(res, 200, { customer: await services.updateCustomer(user.id, id, await body(req)) }); if (req.method === 'DELETE' && id) return send(res, 200, { customer: await services.deleteArchivedCustomer(user.id, id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
-        if (path === '/api/rates' && req.method === 'POST') return send(res, 201, { rate: await services.saveRate(user.id, await body(req)) });
-        if (path === '/api/settings' && req.method === 'PATCH') { if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the super admin owner can change business settings.' }); return send(res, 200, { settings: await services.saveSettings(user.id, await body(req)) }); }
-        if (path === '/api/settings/payment' && req.method === 'PATCH') { if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the workspace owner can change InstaPay payment instructions.' }); return send(res, 200, { settings: await services.savePaymentSettings(user.id, await body(req, 350000)) }); }
+        if (customerPasswordRoute) {
+          if (req.method === 'PATCH') {
+            const customer = await services.changeCustomerPassword(user.id, customerPasswordRoute[1], await body(req));
+            rentalEvents.publishCustomer({ customerId: customerPasswordRoute[1] });
+            return send(res, 200, { customer });
+          }
+          return send(res, 405, { error: 'Method not allowed.' });
+        }
+        if (customerAccountRoute) {
+          if (req.method === 'POST') {
+            const customer = await services.createMobileCustomerAccount(user.id, await body(req));
+            rentalEvents.publishCustomer({ customerId: customer?.id });
+            return send(res, 201, { customer });
+          }
+          return send(res, 405, { error: 'Method not allowed.' });
+        }
+        if (customerRoute) {
+          const [, id] = customerRoute;
+          if (req.method === 'POST' && !id) {
+            const customer = await services.createCustomer(user.id, await body(req));
+            rentalEvents.publishCustomer({ customerId: customer?.id });
+            return send(res, 201, { customer });
+          }
+          if (req.method === 'PATCH' && id) {
+            const customer = await services.updateCustomer(user.id, id, await body(req));
+            rentalEvents.publishCustomer({ customerId: id });
+            return send(res, 200, { customer });
+          }
+          if (req.method === 'DELETE' && id) {
+            const customer = await services.deleteArchivedCustomer(user.id, id, await body(req));
+            rentalEvents.publishCustomer({ customerId: id });
+            return send(res, 200, { customer });
+          }
+          return send(res, 405, { error: 'Method not allowed.' });
+        }
+        if (path === '/api/rates' && req.method === 'POST') {
+          const rate = await services.saveRate(user.id, await body(req));
+          rentalEvents.publishInventory({ collections: ['item_rates'] });
+          return send(res, 201, { rate });
+        }
+        if (path === '/api/settings' && req.method === 'PATCH') {
+          if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the super admin owner can change business settings.' });
+          const settings = await services.saveSettings(user.id, await body(req));
+          rentalEvents.publishDataChange('settings.changed', { collections: ['settings'] });
+          return send(res, 200, { settings });
+        }
+        if (path === '/api/settings/payment' && req.method === 'PATCH') {
+          if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the workspace owner can change InstaPay payment instructions.' });
+          const settings = await services.savePaymentSettings(user.id, await body(req, 700000));
+          rentalEvents.publishDataChange('settings.changed', { collections: ['settings'] });
+          return send(res, 200, { settings });
+        }
+        if (path === '/api/settings/terms' && req.method === 'PATCH') {
+          if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the workspace owner can change Terms & Conditions.' });
+          const settings = await services.saveTermsSettings(user.id, await body(req, 100000));
+          rentalEvents.publishDataChange('settings.changed', { collections: ['settings'] });
+          return send(res, 200, { settings });
+        }
         if (userRoute) { if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only an Owner can manage staff accounts.' }); const [, id] = userRoute; if (req.method === 'POST' && !id) return send(res, 201, { user: await services.createUser(user.id, await body(req)) }); if (req.method === 'PATCH' && id) return send(res, 200, { user: await services.updateUser(user.id, id, await body(req)) }); return send(res, 405, { error: 'Method not allowed.' }); }
         if (inventoryRoute) {
           const [, id, action] = inventoryRoute;
           if (req.method === 'GET' && !id) return send(res, 200, await services.inventoryList());
           if (req.method === 'GET' && id && action === 'qr') return send(res, 200, await services.inventoryQr(id));
           if (req.method === 'GET' && id && !action) return send(res, 200, await services.inventoryDetail(id));
-          if (req.method === 'POST' && !id) return send(res, 201, await services.createItem(user.id, await body(req, 300000)));
-          if (req.method === 'PATCH' && id && !action) return send(res, 200, await services.updateItem(user.id, id, await body(req, 300000)));
-          if (req.method === 'DELETE' && id && !action) return send(res, 200, await services.deleteArchivedItem(user.id, id, await body(req)));
-          if (req.method === 'POST' && id && action === 'actions') return send(res, 200, await services.itemAction(user.id, id, await body(req)));
-          if (req.method === 'POST' && id && action === 'quantity') return send(res, 200, await services.setItemQuantity(user.id, id, await body(req)));
+          if (req.method === 'POST' && !id) {
+            const item = await services.createItem(user.id, await body(req, 300000));
+            rentalEvents.publishInventory({ itemId: item?.id });
+            return send(res, 201, item);
+          }
+          if (req.method === 'PATCH' && id && !action) {
+            const item = await services.updateItem(user.id, id, await body(req, 300000));
+            rentalEvents.publishInventory({ itemId: id });
+            return send(res, 200, item);
+          }
+          if (req.method === 'DELETE' && id && !action) {
+            const item = await services.deleteArchivedItem(user.id, id, await body(req));
+            rentalEvents.publishInventory({ itemId: id });
+            return send(res, 200, item);
+          }
+          if (req.method === 'POST' && id && action === 'actions') {
+            const item = await services.itemAction(user.id, id, await body(req));
+            rentalEvents.publishInventory({ itemId: id });
+            rentalEvents.publishMaintenance();
+            return send(res, 200, item);
+          }
+          if (req.method === 'POST' && id && action === 'quantity') {
+            const item = await services.setItemQuantity(user.id, id, await body(req));
+            rentalEvents.publishInventory({ itemId: id });
+            return send(res, 200, item);
+          }
           return send(res, 405, { error: 'Method not allowed.' });
         }
         return send(res, 200, await services.dashboard());

@@ -2,7 +2,7 @@ import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
 import { calculateDetailedAnalytics, forecastScenario } from './analytics-insights.js';
 import { renderAnalyticsReport } from './analytics-report.js';
-import { renderSettings, settingsTabs } from './settings-ui.js';
+import { renderSettings, settingsTabs, defaultTermsAndConditions, defaultRentalTerms } from './settings-ui.js';
 import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
 import { actualReturnTime, chargeCell, enrichVerification, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderAdminHandoff, renderRequestHistory, savedCharges } from './transaction-records.js';
@@ -517,17 +517,47 @@ export function createWorkspaceUI(h) {
       syncRemoveButton();
       fileInput?.addEventListener('change', () => {
         const file = fileInput.files?.[0]; if (!file) return;
-        if (file.size > 250000) { fileInput.value = ''; error.textContent = 'The QR image must be 250 KB or smaller.'; return; }
+        if (file.size > 500000) { fileInput.value = ''; error.textContent = 'The QR image must be 500 KB or smaller.'; return; }
         const reader = new FileReader();
-        reader.onload = () => { imageInput.value = String(reader.result || ''); syncRemoveButton(); error.textContent = ''; const image = new Image(); image.className = 'rental-payment-qr-preview'; image.alt = 'New owner InstaPay QR'; image.src = imageInput.value; preview.replaceChildren(image); };
+        reader.onload = () => { imageInput.value = String(reader.result || ''); syncRemoveButton(); error.textContent = ''; const image = new Image(); image.className = 'rental-payment-qr-preview'; image.alt = 'New owner InstaPay / GCash QR'; image.src = imageInput.value; preview.replaceChildren(image); };
         reader.onerror = () => { error.textContent = 'Could not read this QR image. Choose another file.'; };
         reader.readAsDataURL(file);
       });
       removeButton?.addEventListener('click', () => { imageInput.value = ''; if (fileInput) fileInput.value = ''; syncRemoveButton(); preview.innerHTML = '<p class="settings-draft-note">No owner QR configured. Customers can choose cash until one is saved.</p>'; });
-      confirmSubmit(paymentForm, { title: 'Save InstaPay payment details?', description: 'Customers will use this QR for transfers and see the account details in rental checkout.', confirmLabel: 'Save payment details' }, async () => {
+      confirmSubmit(paymentForm, { title: 'Save InstaPay / GCash payment details?', description: 'Customers will use this QR for transfers and see the account details in rental checkout.', confirmLabel: 'Save payment details' }, async () => {
         const button = paymentForm.querySelector('[type="submit"]'); button.disabled = true; button.textContent = 'Saving…'; error.textContent = '';
         try { const result = await api('/settings/payment', { method: 'PATCH', body: JSON.stringify(Object.fromEntries(new FormData(paymentForm))) }); model.settings = { ...model.settings, ...(result.settings || {}) }; toast('Owner payment instructions saved.'); rerender(); }
         catch (problem) { if (paymentForm.isConnected) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save payment instructions'; } else { rerender(); toast(problem.message); } }
+      });
+    }
+    const termsForm = document.querySelector('#terms-settings-form');
+    if (termsForm) {
+      const resetButton = document.querySelector('#terms-restore-default');
+      resetButton?.addEventListener('click', async event => {
+        const button = event.currentTarget;
+        if (button.disabled) return;
+        button.disabled = true;
+        try {
+          if (await confirmAction({ title: 'Restore default Terms & Conditions?', description: 'This will replace your current text with the standard rental agreement defaults. Select Save Terms & Conditions to apply.', confirmLabel: 'Yes, restore defaults' }) && button.isConnected) {
+            termsForm.elements.termsAndConditions.value = defaultTermsAndConditions;
+            termsForm.elements.rentalTerms.value = defaultRentalTerms;
+            toast('Default terms restored. Select Save Terms & Conditions to apply.');
+          }
+        } finally { button.disabled = false; }
+      });
+      confirmSubmit(termsForm, { title: 'Save Terms & Conditions?', description: 'The updated terms and rental agreement policies will apply to customer sign-ups and rental checkout.', confirmLabel: 'Yes, save terms' }, async () => {
+        const button = termsForm.querySelector('[type="submit"]'), error = termsForm.querySelector('.form-error');
+        button.disabled = true; button.textContent = 'Saving…'; error.textContent = '';
+        try {
+          const values = Object.fromEntries(new FormData(termsForm));
+          const result = await api('/settings/terms', { method: 'PATCH', body: JSON.stringify(values) });
+          model.settings = { ...model.settings, ...(result.settings || {}) };
+          toast('Terms & Conditions saved.');
+          rerender();
+        } catch (problem) {
+          if (termsForm.isConnected) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save Terms & Conditions'; }
+          else { rerender(); toast(problem.message); }
+        }
       });
     }
     const preferencesForm = document.querySelector('#preferences-form');

@@ -4,6 +4,7 @@ import { equipmentRateOptions, loadPricing } from './pricing.mjs';
 import { normalizeRole } from './roles.mjs';
 import { nameError, phoneError, validationFailure } from './account-validation.mjs';
 import { pageLimit } from './query-validation.mjs';
+import { DEFAULT_TERMS_AND_CONDITIONS, DEFAULT_RENTAL_TERMS, DEFAULT_TERMS_VERSION, DEFAULT_RENTAL_TERMS_VERSION } from './terms-constants.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const money = amount => `₱${Number(amount).toFixed(2)}`;
@@ -129,11 +130,26 @@ export async function mobileCatalog(db) {
 export async function mobilePaymentInstructions(db) {
   const snapshot = await db.collection('settings').doc('business').get();
   const settings = snapshot.exists ? snapshot.data() : {};
+  const qrUrl = settings.instapay_qr_data_url || settings.gcash_qr_data_url || null;
   return {
-    instapay_qr_data_url: settings.instapay_qr_data_url || null,
-    account_name: settings.instapay_account_name || null,
-    account_number: settings.instapay_account_number || null,
-    instructions: settings.instapay_instructions || 'Pay the exact amount shown and upload a screenshot of the successful transfer.'
+    instapay_qr_data_url: qrUrl,
+    gcash_qr_data_url: qrUrl,
+    account_name: settings.instapay_account_name || settings.gcash_account_name || null,
+    account_number: settings.instapay_account_number || settings.gcash_account_number || null,
+    instructions: settings.instapay_instructions || settings.payment_instructions || 'Pay the exact amount shown and upload a screenshot of the successful transfer.',
+    payment_method_label: 'InstaPay / GCash'
+  };
+}
+
+export async function mobileTerms(db) {
+  const snapshot = await db.collection('settings').doc('business').get();
+  const settings = snapshot.exists ? snapshot.data() : {};
+  return {
+    terms_and_conditions: settings.terms_and_conditions || DEFAULT_TERMS_AND_CONDITIONS,
+    rental_terms: settings.rental_terms || DEFAULT_RENTAL_TERMS,
+    terms_version: settings.terms_version || DEFAULT_TERMS_VERSION,
+    rental_terms_version: settings.terms_version || DEFAULT_RENTAL_TERMS_VERSION,
+    updated_at: settings.terms_updated_at || null
   };
 }
 

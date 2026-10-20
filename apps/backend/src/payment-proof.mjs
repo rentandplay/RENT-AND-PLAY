@@ -22,11 +22,17 @@ export function validatePaymentProof(input = {}) {
 export function validateInstapayQr(input = {}) {
   const image_data_url = input.imageDataUrl == null || input.imageDataUrl === ''
     ? null
-    : validatePaymentImage(input.imageDataUrl, 'InstaPay QR', 250_000);
+    : validatePaymentImage(input.imageDataUrl, 'InstaPay / GCash QR', 500_000);
   const account_name = typeof input.accountName === 'string' ? input.accountName.trim().slice(0, 120) : '';
   const account_number = typeof input.accountNumber === 'string' ? input.accountNumber.trim().slice(0, 80) : '';
   const instructions = typeof input.instructions === 'string' ? input.instructions.trim().slice(0, 500) : '';
-  if (input.imageDataUrl && !account_name) fail(400, 'Enter the account name shown on the InstaPay QR.');
-  if (input.imageDataUrl && !account_number) fail(400, 'Enter the account number shown on the InstaPay QR.');
-  return { instapay_qr_data_url: image_data_url, instapay_account_name: account_name, instapay_account_number: account_number, instapay_instructions: instructions };
+  if (input.imageDataUrl && !account_name) fail(400, 'Enter the account name shown on the InstaPay / GCash QR.');
+  if (input.imageDataUrl && !account_number) fail(400, 'Enter the account number shown on the InstaPay / GCash QR.');
+  return {
+    instapay_qr_data_url: image_data_url,
+    gcash_qr_data_url: image_data_url,
+    instapay_account_name: account_name,
+    instapay_account_number: account_number,
+    instapay_instructions: instructions
+  };
 }

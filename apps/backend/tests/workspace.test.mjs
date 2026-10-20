@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateCustomer, loadWorkspace, createWorkspaceUser, updateCustomer } from '../src/workspace.mjs';
+import { validateCustomer, loadWorkspace, createWorkspaceUser, updateCustomer, saveTermsSettings } from '../src/workspace.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
 test('customer validation normalizes safe directory fields', () => {
@@ -100,3 +100,31 @@ test('customer archive and restore update the linked app profile and Firebase lo
   assert.equal(db.data('users', 'customer-uid').is_active, true);
   assert.equal(db.data('customers', 'customer-uid').is_active, true);
 });
+
+test('saveTermsSettings saves dynamic terms and records audit trail', async () => {
+  const db = memoryFirestore();
+  const input = {
+    termsAndConditions: 'Custom Terms: Play responsibly and return on time.',
+    rentalTerms: 'Custom Rental Policy: Check accessories at handover.'
+  };
+  const result = await saveTermsSettings(db, 'owner-uid', input, new Date('2026-10-20T10:00:00Z'));
+  assert.equal(result.terms_and_conditions, input.termsAndConditions);
+  assert.equal(result.rental_terms, input.rentalTerms);
+  assert.ok(result.terms_version.startsWith('v-20261020-'));
+
+  const saved = db.data('settings', 'business');
+  assert.equal(saved.terms_and_conditions, input.termsAndConditions);
+  assert.equal(saved.rental_terms, input.rentalTerms);
+  assert.equal(saved.terms_version, result.terms_version);
+
+  // Load workspace should reflect saved terms
+  const workspace = await loadWorkspace(db, 'OWNER', new Date('2026-10-20T10:05:00Z'));
+  assert.equal(workspace.settings.terms_and_conditions, input.termsAndConditions);
+  assert.equal(workspace.settings.rental_terms, input.rentalTerms);
+});
+
+test('saveTermsSettings rejects empty terms', async () => {
+  const db = memoryFirestore();
+  await assert.rejects(() => saveTermsSettings(db, 'owner-uid', { termsAndConditions: '' }), error => error.status === 400);
+});
+

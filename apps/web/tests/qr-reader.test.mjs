@@ -79,3 +79,92 @@ test('a camera capture updates the QR field and calls its verification hook afte
     for (const key of keys) { const descriptor = originals[key]; if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
   }
 });
+
+test('scan reading area crops strictly to the viewfinder target box before decoding', async () => {
+  const keys = ['navigator', 'isSecureContext', 'jsQR', 'document', 'requestAnimationFrame'];
+  const originals = Object.fromEntries(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  let stopped = 0, drawSlice = null, decodeDimensions = null;
+  const captured = [], value = 'rp-restricted-viewfinder-qr';
+  const field = { value: '', dispatchEvent() {} };
+  const button = { dataset: { scanField: 'transactionCode' }, innerHTML: 'Scan', classList: { add() {}, remove() {} }, setAttribute() {}, removeAttribute() {} };
+  let scannerFrame, targetElement;
+  const output = { textContent: '', classList: { add() {}, remove() {} }, after(frame) { scannerFrame = frame; } };
+  const video = { readyState: 2, videoWidth: 1200, videoHeight: 600, play: async () => {} };
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ({
+      drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh) {
+        drawSlice = { sx, sy, sw, sh, dw, dh };
+      },
+      getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) })
+    })
+  };
+  let divCount = 0;
+  const frameEl = {
+    className: '',
+    setAttribute() {},
+    append() {},
+    scrollIntoView() {},
+    remove() { stopped++; scannerFrame = null; },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 200 })
+  };
+  const targetEl = {
+    className: '',
+    setAttribute() {},
+    classList: { add() {}, remove() {} },
+    getBoundingClientRect: () => ({ left: 100, top: 25, width: 200, height: 150 })
+  };
+  const labelEl = {
+    className: '',
+    textContent: '',
+    setAttribute() {}
+  };
+
+  const values = {
+    navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() { stopped++; } }], getVideoTracks: () => [] }) } },
+    isSecureContext: true,
+    jsQR: (data, w, h) => {
+      decodeDimensions = { w, h };
+      return { data: value };
+    },
+    requestAnimationFrame: callback => callback(),
+    document: {
+      hidden: false,
+      createElement: tag => {
+        if (tag === 'video') return video;
+        if (tag === 'canvas') return canvas;
+        if (tag === 'div') {
+          divCount++;
+          return divCount === 1 ? frameEl : targetEl;
+        }
+        return labelEl;
+      }
+    },
+  };
+  for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: values[key] });
+  try {
+    const form = {
+      isConnected: true,
+      elements: { transactionCode: field },
+      querySelectorAll: () => [button],
+      querySelector: selector => selector === '.qr-scanner-frame' ? scannerFrame : output,
+    };
+    bindQrReaders(form, { open: true }, { onCapture: name => captured.push({ name, value: field.value }) });
+    await button.onclick();
+
+    assert.ok(drawSlice, 'drawImage should have been called with sliced coordinates');
+    // Frame is 400x200, video is 1200x600 (aspect ratio 2:1 for both, scale = 400/1200 = 0.3333).
+    // Target is left: 100, top: 25, width: 200, height: 150.
+    // In video coordinates: sx = 100 / (1/3) = 300, sy = 25 / (1/3) = 75, sw = 200 / (1/3) = 600, sh = 150 / (1/3) = 450.
+    assert.equal(drawSlice.sx, 300);
+    assert.equal(drawSlice.sy, 75);
+    assert.equal(drawSlice.sw, 600);
+    assert.equal(drawSlice.sh, 450);
+    assert.equal(decodeDimensions.w, 600);
+    assert.equal(decodeDimensions.h, 450);
+    assert.equal(field.value, value);
+  } finally {
+    for (const key of keys) { const descriptor = originals[key]; if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
+  }
+});

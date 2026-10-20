@@ -52,3 +52,48 @@ test('preferences validate saved data and survive a storage roundtrip', () => {
   assert.deepEqual(readPreferences(), preferenceDefaults);
   assert.throws(() => writePreferences({ setItem: () => { throw Error('Storage blocked'); } }, value), /Storage blocked/);
 });
+
+test('owner can view and edit Terms & Conditions and InstaPay / GCash QR settings', () => {
+  const html = render({
+    model: {
+      settings: {
+        business_name: 'Rent & Play',
+        instapay_qr_data_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        instapay_account_name: 'Rent and Play Shop',
+        instapay_account_number: '09171234567',
+        terms_and_conditions: 'Custom Rental Agreement 2026',
+        rental_terms: 'Custom Checkout Policy 2026'
+      }
+    },
+    user: { role: 'OWNER' },
+    tab: 'business'
+  });
+  assert.ok(html.includes('id="payment-settings-form"'));
+  assert.ok(html.includes('InstaPay / GCash QR'));
+  assert.ok(html.includes('Rent and Play Shop'));
+  assert.ok(html.includes('09171234567'));
+  assert.ok(html.includes('id="terms-settings-form"'));
+  assert.ok(html.includes('Custom Rental Agreement 2026'));
+  assert.ok(html.includes('Custom Checkout Policy 2026'));
+  assert.ok(html.includes('terms-restore-default'));
+});
+
+test('non-owners see read-only Terms & Conditions and cannot edit them', () => {
+  const html = render({
+    model: {
+      settings: {
+        business_name: 'Rent & Play',
+        terms_and_conditions: 'ReadOnly Terms',
+        rental_terms: 'ReadOnly Rental Policy'
+      }
+    },
+    user: { role: 'OPERATOR' },
+    tab: 'business'
+  });
+  assert.ok(!html.includes('id="terms-settings-form"'));
+  assert.ok(!html.includes('id="payment-settings-form"'));
+  assert.ok(html.includes('Only owners can edit Terms & Conditions'));
+  assert.ok(html.includes('ReadOnly Terms'));
+  assert.ok(html.includes('ReadOnly Rental Policy'));
+});
+

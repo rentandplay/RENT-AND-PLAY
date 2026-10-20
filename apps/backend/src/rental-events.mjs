@@ -36,9 +36,58 @@ export function createRentalEventHub({ heartbeatMs = 25000, maxConnectionMs = 50
   }, heartbeatMs);
   heartbeat.unref?.();
 
+  function publishEvent(eventType, {
+    collections = [],
+    entityId = '',
+    rentalId = '',
+    customerId = '',
+    allCustomers = false,
+    payload = {}
+  } = {}) {
+    const revision = ++sequence;
+    const finalRentalId = String(rentalId || (collections.includes('rentals') ? entityId : '') || '');
+    const data = {
+      revision,
+      event: eventType,
+      collections: Array.isArray(collections) ? collections : [collections].filter(Boolean),
+      entityId: String(entityId || rentalId || ''),
+      rentalId: finalRentalId,
+      occurredAt: new Date().toISOString(),
+      ...payload
+    };
+
+    const targetCustomer = String(customerId || '');
+    for (const client of clients) {
+      if (client.staff) {
+        write(client, eventType, data);
+        continue;
+      }
+      if (client.guest) {
+        if (allCustomers || ['inventory.changed', 'category.changed', 'catalog.changed', 'data.changed'].includes(eventType)) {
+          write(client, eventType, data);
+        }
+        continue;
+      }
+      // Authenticated customer
+      const isPublicEvent = ['inventory.changed', 'category.changed', 'catalog.changed'].includes(eventType);
+      const isTargetCustomer = targetCustomer && client.uid === targetCustomer;
+      if (allCustomers || isTargetCustomer || isPublicEvent) {
+        write(client, eventType, data);
+      }
+    }
+    return revision;
+  }
+
   return {
-    subscribe(response, { uid, staff }) {
-      const client = { response, uid: String(uid), staff: staff === true };
+    subscribe(response, { uid = null, staff = false, guest = false } = {}) {
+      const isStaff = staff === true;
+      const isGuest = Boolean(guest || (!uid && !isStaff));
+      const client = {
+        response,
+        uid: uid ? String(uid) : null,
+        staff: isStaff,
+        guest: isGuest
+      };
       client.onClose = () => remove(client);
       client.onError = () => remove(client);
       client.expirationTimer = setTimeout(() => {
@@ -60,19 +109,42 @@ export function createRentalEventHub({ heartbeatMs = 25000, maxConnectionMs = 50
       return () => remove(client);
     },
     publishRental({ rentalId = '', customerId = '', allCustomers = false } = {}) {
-      const revision = ++sequence;
-      const data = {
-        revision,
-        rentalId: String(rentalId || ''),
-        occurredAt: new Date().toISOString()
-      };
-      const targetCustomer = String(customerId || '');
-      for (const client of clients) {
-        if (client.staff || allCustomers && !client.staff || targetCustomer && client.uid === targetCustomer) {
-          write(client, 'rental.changed', data);
-        }
-      }
-      return revision;
+      return publishEvent('rental.changed', {
+        rentalId,
+        customerId,
+        allCustomers,
+        collections: ['rentals']
+      });
+    },
+    publishInventory({ itemId = '', categoryId = '', collections = ['items'] } = {}) {
+      return publishEvent('inventory.changed', {
+        entityId: itemId || categoryId,
+        allCustomers: true,
+        collections
+      });
+    },
+    publishMaintenance({ recordId = '', itemId = '' } = {}) {
+      return publishEvent('maintenance.changed', {
+        entityId: recordId,
+        payload: { itemId: String(itemId || '') },
+        collections: ['maintenance_records']
+      });
+    },
+    publishCustomer({ customerId = '' } = {}) {
+      return publishEvent('customer.changed', {
+        customerId,
+        entityId: customerId,
+        collections: ['customers']
+      });
+    },
+    publishFinance({ expenseId = '', rentalId = '' } = {}) {
+      return publishEvent('finance.changed', {
+        entityId: expenseId || rentalId,
+        collections: ['payment_ledger']
+      });
+    },
+    publishDataChange(type, options) {
+      return publishEvent(type, options);
     },
     close() {
       clearInterval(heartbeat);

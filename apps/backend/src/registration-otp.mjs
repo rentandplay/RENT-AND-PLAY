@@ -183,7 +183,7 @@ export function createRegistrationOtpService({ db, auth, now = () => new Date() 
     const proof = typeof input?.verificationToken === 'string' ? input.verificationToken : '';
     const name = typeof input?.name === 'string' ? input.name.trim().replace(/\s+/g, ' ') : '';
     const phone = typeof input?.phone === 'string' ? input.phone.trim() : '';
-    if (input?.hasAcceptedTerms !== true || input?.termsVersion !== RENTAL_TERMS_VERSION) {
+    if (input?.hasAcceptedTerms !== true || (input?.termsVersion !== RENTAL_TERMS_VERSION && (typeof input?.termsVersion !== 'string' || !input?.termsVersion.trim()))) {
       fail(400, 'Accept the current Terms & Conditions before creating your account.');
     }
     if (!uid || email !== claimEmail) fail(403, 'The verified email must match your account.');
@@ -243,7 +243,7 @@ export function createRegistrationOtpService({ db, auth, now = () => new Date() 
       name,
       phone,
       hasAcceptedTerms: true,
-      termsVersion: RENTAL_TERMS_VERSION
+      termsVersion: input?.termsVersion || RENTAL_TERMS_VERSION
     });
   }
 

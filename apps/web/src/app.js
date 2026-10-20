@@ -201,16 +201,23 @@ function scheduleRentalEventSync() {
       const synced = await syncLiveRentalUpdate({
         notifications: rentalNotifications, isDialogOpen: () => modal.open,
         refreshView: async () => {
-          if (page === 'Dashboard') await refresh();
-          else if (page === 'ESP32 terminal') {
+          if (page === 'Dashboard') {
+            await refresh({ force: true });
+            if (!modal.open && page === 'Dashboard' && user) render();
+          } else if (page === 'ESP32 terminal') {
             const refreshedPage = page;
-            await refresh();
+            await refresh({ force: true });
             await workspaceUI.refresh();
             if (!modal.open && page === refreshedPage && user) render();
-          } else if (liveRentalPages.has(page)) {
+          } else if (page === 'Inventory') {
+            await inventoryController.refresh({ force: true });
+            await refresh({ force: true });
+          } else if (workspacePages.has(page)) {
             const refreshedPage = page;
+            workspaceUI.invalidate();
             const changed = await workspaceUI.refresh();
-            if (!modal.open && changed && page === refreshedPage && user) render();
+            await refresh({ force: true });
+            if (!modal.open && page === refreshedPage && user) render();
           }
         }
       });
@@ -248,10 +255,19 @@ function syncRentalEventStream(accountId) {
     receivedReady = true;
   });
   source.addEventListener('rental.changed', scheduleRentalEventSync);
+  source.addEventListener('inventory.changed', scheduleRentalEventSync);
+  source.addEventListener('maintenance.changed', scheduleRentalEventSync);
+  source.addEventListener('customer.changed', scheduleRentalEventSync);
+  source.addEventListener('finance.changed', scheduleRentalEventSync);
+  source.addEventListener('data.changed', scheduleRentalEventSync);
+  source.addEventListener('category.changed', scheduleRentalEventSync);
+  source.addEventListener('settings.changed', scheduleRentalEventSync);
   source.onerror = () => {
     if (rentalEventSource === source && source.readyState === EventSource.CLOSED) {
-      rentalEventsDisabled = true;
       rentalEventSource = null;
+      setTimeout(() => {
+        if (user && !rentalEventsDisabled) syncRentalEventStream(user.id);
+      }, 5000);
     }
   };
 }
@@ -736,9 +752,17 @@ const rentalNotifications = createRentalNotifications({ api, onChange: syncNotif
   onAlert: (notification, count) => toast(count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`) });
 document.addEventListener('visibilitychange', () => {
   if (user && !user.mustChangePassword && document.visibilityState === 'visible') {
+    rentalEventsDisabled = false;
     rentalNotifications.refresh();
     syncRentalEventStream(user.id);
     if (rentalEventSyncPending) scheduleRentalEventSync();
+  }
+});
+window.addEventListener('online', () => {
+  if (user && !user.mustChangePassword) {
+    rentalEventsDisabled = false;
+    syncRentalEventStream(user.id);
+    scheduleRentalEventSync();
   }
 });
 invalidateWorkspace = () => workspaceUI.invalidate();

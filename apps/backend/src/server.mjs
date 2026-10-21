@@ -386,6 +386,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
   const quotaBackoff = createQuotaBackoff();
   const origins = new Set([
     process.env.WEB_ORIGIN || 'http://127.0.0.1:5173',
+    ...(process.env.RENDER_EXTERNAL_URL ? [process.env.RENDER_EXTERNAL_URL] : []),
+    'https://rent-and-play-5vgl.onrender.com',
     'http://localhost:5173',
     ...String(process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean)
   ]);

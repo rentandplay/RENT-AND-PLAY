@@ -2,6 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import esbuild from 'esbuild';
 
 const appRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)));
 const root = process.env.NODE_ENV === 'production' ? path.join(appRoot, 'dist') : appRoot;
@@ -10,6 +11,33 @@ const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 const appRoutes = new Set(['/', '/equipment', '/customers', '/rates', '/rentals', '/returns', '/transactions', '/maintenance', '/verification', '/reports', '/reports/equipment', '/reports/operations', '/reports/forecast', '/reports/recommendations', '/reports/audit', '/settings', '/payments', '/profile']);
 const browserHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host;
+
+async function buildReactUiDev() {
+  await esbuild.build({
+    entryPoints: [path.join(appRoot, 'src/react/index.jsx')],
+    outfile: path.join(appRoot, 'src/react-ui.js'),
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    target: ['es2022'],
+    jsx: 'transform',
+    jsxFactory: 'React.createElement',
+    jsxFragment: 'React.Fragment',
+    plugins: [
+      {
+        name: 'externalize-src-modules',
+        setup(build) {
+          build.onResolve({ filter: /^\.\.\/[A-Za-z0-9_-]+\.js$/ }, args => ({
+            path: './' + path.basename(args.path),
+            external: true
+          }));
+        }
+      }
+    ],
+    logLevel: 'silent'
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.url.startsWith('/api/')) {
     const headers = { ...req.headers };
@@ -29,6 +57,9 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+    if (process.env.NODE_ENV !== 'production' && pathname === '/src/react-ui.js') {
+      await buildReactUiDev().catch(() => {});
+    }
     const target = path.resolve(root, '.' + (appRoutes.has(pathname) ? '/index.html' : pathname));
     if (!target.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
     const browserModule = /^\/src\/[A-Za-z0-9_-]+\.js$/.test(pathname);

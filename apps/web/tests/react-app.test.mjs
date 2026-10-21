@@ -1,0 +1,157 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React, { renderToStaticMarkup } from '../src/react-vendor.js';
+import {
+  SessionLoadingView,
+  LoginView,
+  PasswordChangeView,
+  DashboardView,
+  ProfileView,
+  PageHeading
+} from '../src/react-ui.js';
+
+test('React SessionLoadingView and LoginView render accessible markup and theme controls', () => {
+  const loadingHtml = renderToStaticMarkup(React.createElement(SessionLoadingView));
+  assert.match(loadingHtml, /class="session-loading"/);
+  assert.match(loadingHtml, /Opening your workspace…/);
+
+  const loginHtml = renderToStaticMarkup(
+    React.createElement(LoginView, {
+      initialError: 'ECONNREFUSED 127.0.0.1:3000',
+      theme: 'dark',
+      onToggleTheme() {},
+      api: async () => ({}),
+      modal: {},
+      showModal() {},
+      onLoginSuccess: async () => {},
+      setPasswordResetCountdown() {}
+    })
+  );
+  assert.match(loginHtml, /class="login"/);
+  assert.match(loginHtml, /OWNER \/ OPERATOR WORKSPACE/);
+  assert.match(loginHtml, /id="login-theme"/);
+  assert.match(loginHtml, /Switch to light mode/);
+  assert.match(loginHtml, /Unable to connect to the server/);
+});
+
+test('React PasswordChangeView and ProfileView render user account details and edit mode', () => {
+  const user = {
+    id: 'u-1',
+    name: 'Juan Dela Cruz',
+    email: 'juan@rentplay.ph',
+    role: 'OWNER',
+    account_code: 'ACC-001',
+    mustChangePassword: true
+  };
+
+  const pwHtml = renderToStaticMarkup(
+    React.createElement(PasswordChangeView, {
+      user,
+      rememberSession: true,
+      api: async () => ({}),
+      onPasswordUpdated: async () => {},
+      onSignOutAgain() {},
+      onSignOut() {}
+    })
+  );
+  assert.match(pwHtml, /Secure your account/);
+  assert.match(pwHtml, /Owner workspace/);
+  assert.match(pwHtml, /id="required-password-form"/);
+
+  const profileOverviewHtml = renderToStaticMarkup(
+    React.createElement(ProfileView, {
+      user,
+      profileEditing: false,
+      onSetProfileEditing() {},
+      confirmSubmit() {},
+      api: async () => ({}),
+      onUserUpdated() {},
+      toast() {}
+    })
+  );
+  assert.match(profileOverviewHtml, /Juan Dela Cruz/);
+  assert.match(profileOverviewHtml, /juan@rentplay\.ph/);
+  assert.match(profileOverviewHtml, /ACC-001/);
+  assert.match(profileOverviewHtml, /id="profile-edit"/);
+
+  const profileEditHtml = renderToStaticMarkup(
+    React.createElement(ProfileView, {
+      user,
+      profileEditing: true,
+      onSetProfileEditing() {},
+      confirmSubmit() {},
+      api: async () => ({}),
+      onUserUpdated() {},
+      toast() {}
+    })
+  );
+  assert.match(profileEditHtml, /id="profile-form"/);
+  assert.match(profileEditHtml, /Update your details/);
+});
+
+test('React DashboardView and PageHeading render live stats, rental rows, revenue chart, and ESP32 terminal card', () => {
+  const headingHtml = renderToStaticMarkup(
+    React.createElement(PageHeading, { page: 'Reports', reportSection: 'forecast' })
+  );
+  assert.match(headingHtml, /PLANNING ANALYTICS/);
+  assert.match(headingHtml, /Forecasting/);
+
+  const dashboardData = {
+    stats: { active: 3, available: 42, dueToday: 1, overdue: 2, fees: 1250 },
+    rentals: [
+      {
+        id: 'rent-1',
+        rental_code: 'RNT-101',
+        item_id: 'item-1',
+        item_name: 'Nintendo Switch',
+        customer: 'Maria Clara',
+        due_at: '2026-10-20T08:00:00Z',
+        confirmed_rental_at: '2026-10-20T04:00:00Z',
+        displayStatus: 'Overdue',
+        rental_fee: 350
+      }
+    ],
+    items: [{ id: 'item-1', category: 'Gaming Console' }],
+    revenue: {
+      'This week': [100, 250, 0, 400, 500, 0, 0],
+      'Last week': [0, 0, 0, 0, 0, 0, 0]
+    },
+    terminals: [{ terminal_code: 'TERM-01', name: 'Front Desk Terminal' }],
+    pending: [{ terminal_code: 'TERM-01' }],
+    categories: [{ name: 'Sports Equipment', count: 12 }]
+  };
+
+  const dashHtml = renderToStaticMarkup(
+    React.createElement(DashboardView, {
+      data: dashboardData,
+      filter: 'All rentals',
+      onFilterChange() {},
+      query: '',
+      onQueryChange() {},
+      rentalPage: 0,
+      onRentalPageChange() {},
+      period: 'This week',
+      onPeriodChange() {},
+      onNavigate() {},
+      showModal() {}
+    })
+  );
+
+  assert.match(dashHtml, /Active rentals/);
+  assert.match(dashHtml, /Nintendo Switch/);
+  assert.match(dashHtml, /RNT-101/);
+  assert.match(dashHtml, /Maria Clara/);
+  assert.match(dashHtml, /TERM-01/);
+  assert.match(dashHtml, /Front Desk Terminal/);
+  assert.match(dashHtml, /Sports Equipment/);
+  assert.match(dashHtml, /12 items in inventory/);
+});
+
+test.after(() => {
+  for (const handle of process._getActiveHandles?.() ?? []) {
+    if (typeof handle?.unref === 'function') {
+      handle.unref();
+    }
+  }
+});
+

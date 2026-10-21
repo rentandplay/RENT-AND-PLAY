@@ -1,6 +1,6 @@
 # Rent & Play web workspace
 
-Responsive admin login and dashboard using the supplied logo. Built with HTML, CSS, and JavaScript, connected to the Firebase-backed REST API in `apps/backend`. Existing TypeScript API scaffolds are retained.
+Responsive admin login and dashboard using the supplied logo. Built with React (JSX + ES Modules), HTML, and CSS, connected to the Supabase/Firebase-backed REST API in `apps/backend`. Existing TypeScript API scaffolds are retained.
 
 ## Run
 

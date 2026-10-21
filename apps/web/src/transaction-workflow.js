@@ -16,7 +16,8 @@ export function handoffChoices(model) {
 }
 
 export function createTransactionWorkflow(h) {
-  const { api, escape: e, showModal, modal, toast, formatDate, money, model: getModel, refresh, redraw, confirmSubmit } = h;
+  const { api, escape: e, showModal, modal, toast, formatDate, money, model: getModel, refresh, redraw, confirmSubmit, icon } = h;
+  const getIcon = name => typeof icon === 'function' ? icon(name) : '';
   const desk = createRentalDesk({ ...h, showHandoff: (request, rental) => showHandoff(request, rental) });
   const filters = { status: 'ALL', type: 'ALL', terminal: 'ALL' };
   let handoff = null, handoffRefreshing = false, handoffPollTimer = null;
@@ -32,7 +33,7 @@ export function createTransactionWorkflow(h) {
     const modeLabel = mode === 'SHOP_DISPATCH' ? 'SHOP DISPATCH (RESORT DELIVERY)' : release ? 'RENTAL HANDOVER' : 'RETURN INTAKE';
     const itemName = request.item_name || rental?.item_name || 'Equipment';
     const rentalCode = request.rental_code || rental?.rental_code || request.rental_id || '';
-    const oledCard = `<div class="esp32-oled-preview ${pending ? 'is-pending' : request.status === 'CONFIRMED' ? 'is-confirmed' : ''}"><div class="esp32-oled-header"><span>SSD1306 OLED &middot; ${e(request.terminal_code || 'TERM-01')}</span><span>${pending ? '🔊 BUZZER ARMED' : request.status === 'CONFIRMED' ? '✓ CONFIRMED' : e(request.status)}</span></div><div class="esp32-oled-screen"><div class="oled-line oled-mode">${e(modeLabel)}</div><div class="oled-line oled-item">${e(itemName)}</div><div class="oled-line oled-code">ID: ${e(rentalCode)} &middot; PIN: ${e(request.verification_code || '------')}</div><div class="oled-line oled-cta">${pending ? '[ PRESS GPIO 35 BUTTON TO CONFIRM ]' : request.status === 'CONFIRMED' ? (mode === 'SHOP_DISPATCH' ? 'DISPATCHED FOR RESORT DELIVERY' : release ? 'HANDOVER CONFIRMED · TIMER STARTED' : 'RETURN COMPLETED') : 'TRANSACTION CLOSED'}</div></div></div>`;
+    const oledCard = `<div class="esp32-oled-preview ${pending ? 'is-pending' : request.status === 'CONFIRMED' ? 'is-confirmed' : ''}"><div class="esp32-oled-header"><span>SSD1306 OLED &middot; ${e(request.terminal_code || 'TERM-01')}</span><span>${pending ? getIcon('volume') + ' BUZZER ARMED' : request.status === 'CONFIRMED' ? '✓ CONFIRMED' : e(request.status)}</span></div><div class="esp32-oled-screen"><div class="oled-line oled-mode">${e(modeLabel)}</div><div class="oled-line oled-item">${e(itemName)}</div><div class="oled-line oled-code">ID: ${e(rentalCode)} &middot; PIN: ${e(request.verification_code || '------')}</div><div class="oled-line oled-cta">${pending ? '[ PRESS GPIO 35 BUTTON TO CONFIRM ]' : request.status === 'CONFIRMED' ? (mode === 'SHOP_DISPATCH' ? 'DISPATCHED FOR RESORT DELIVERY' : release ? 'HANDOVER CONFIRMED · TIMER STARTED' : 'RETURN COMPLETED') : 'TRANSACTION CLOSED'}</div></div></div>`;
     return `<p class="info-box" role="status">${e(message)}</p>${oledCard}${pending ? `<div class="handoff-code"><small>Verification code</small><strong>${e(request.verification_code)}</strong><p>Terminal ${e(request.terminal_code || 'Not assigned')} · Expires ${e(formatDate(request.expires_at))}</p></div><div class="handoff-refresh"><p>Check confirmation to view the latest counter status.</p><button type="button" class="secondary" data-handoff-refresh>Check confirmation</button></div>` : ''}<p class="form-error" role="alert" data-handoff-error></p>${renderFeeBreakdown(rental, h)}${inspection ? `<section class="record-section"><h3>Recorded inspection</h3><dl class="record-fields"><div><dt>Condition</dt><dd>${e(inspection.condition || 'Not recorded')}</dd></div><div><dt>Inspection result</dt><dd>${e(inspection.result || 'Not recorded')}</dd></div><div><dt>Notes</dt><dd>${e(inspection.notes || 'Not recorded')}</dd></div></dl></section>` : ''}${renderRequestHistory([request], { ...h, requestLinks: false })}`;
   }
   function bindHandoff() {
@@ -224,19 +225,19 @@ export function createTransactionWorkflow(h) {
           </div>
           <div class="terminal-station-actions">
             <button type="button" class="primary" id="rental-request-add">
-              ➕ Walk-In Rental
+              ${getIcon('plus')} Walk-In Rental
             </button>
             <button type="button" class="secondary" id="return-request-add">
-              🔄 Receive Return
+              ${getIcon('undo')} Receive Return
             </button>
             <button type="button" class="secondary terminal-test-btn" id="btn-terminal-test-ping" title="Sends a test ping to the ESP32. Buzzer will beep and OLED will display confirmation.">
-              ⚡ Test Buzzer &amp; OLED
+              ${getIcon('zap')} Test Buzzer &amp; OLED
             </button>
           </div>
         </div>
         <div class="terminal-hardware-grid">
           <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
-            <span class="spec-icon">🖥️</span>
+            <span class="spec-icon">${getIcon('monitor')}</span>
             <div>
               <span class="spec-label">OLED Display</span>
               <strong>${isOnline ? 'Active (128&times;64)' : 'Standby'}</strong>
@@ -244,7 +245,7 @@ export function createTransactionWorkflow(h) {
             </div>
           </div>
           <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
-            <span class="spec-icon">🔘</span>
+            <span class="spec-icon">${getIcon('radio')}</span>
             <div>
               <span class="spec-label">Physical Button</span>
               <strong>${isOnline ? 'Armed &amp; Ready' : 'Standby'}</strong>
@@ -252,7 +253,7 @@ export function createTransactionWorkflow(h) {
             </div>
           </div>
           <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
-            <span class="spec-icon">🔊</span>
+            <span class="spec-icon">${getIcon('volume')}</span>
             <div>
               <span class="spec-label">Audible Buzzer</span>
               <strong>${isOnline ? 'Alerts Enabled' : 'Muted'}</strong>
@@ -260,7 +261,7 @@ export function createTransactionWorkflow(h) {
             </div>
           </div>
           <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
-            <span class="spec-icon">📡</span>
+            <span class="spec-icon">${getIcon('wifi')}</span>
             <div>
               <span class="spec-label">Terminal Link</span>
               <strong>${isOnline ? 'Online &amp; Polling' : 'Station Disconnected'}</strong>

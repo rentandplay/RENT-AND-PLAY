@@ -1,0 +1,13 @@
+{
+  "name": "rent-and-play-root",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm --prefix apps/web install && npm --prefix apps/web run build && npm --prefix apps/backend install",
+    "start": "node apps/backend/src/server.mjs"
+  }
+}

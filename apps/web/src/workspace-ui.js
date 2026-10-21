@@ -359,7 +359,13 @@ export function createWorkspaceUI(h) {
   function maintenance() { return maintenanceUI.render(search, { paged, table, status, empty }); }
 
   function reports() {
-    return reportPayments.render(analyticsRange(analyticsSelection)) + renderAnalyticsReport(model, analyticsSelection, reportView, { escape: e, paged, table });
+    const isPerformance = !reportView.section || reportView.section === 'performance';
+    return renderAnalyticsReport(model, analyticsSelection, reportView, {
+      escape: e,
+      paged,
+      table,
+      reportPaymentsHtml: isPerformance ? reportPayments.render(analyticsRange(analyticsSelection)) : ''
+    });
   }
 
   function settings(user, appearance) {

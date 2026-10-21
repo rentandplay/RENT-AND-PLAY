@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: rent-and-play
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm --prefix apps/web install && npm --prefix apps/web run build && npm --prefix apps/backend install
+    startCommand: node apps/backend/src/server.mjs
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: ENABLE_ESP32
+        value: "false"
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /etc/secrets/firebase-service-account.json

@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
 import { FirebaseSessions, publicUser, changeWorkspacePassword } from './auth.mjs';
 import { validateEmailFormat } from './account-validation.mjs';
+import { isSupabaseConfigured } from './supabase.mjs';
 import { firebaseAuth as defaultFirebaseAuth, firebaseMessaging as defaultMessaging, firestore as defaultFirestore, requireFirebaseConfig, setFirestoreWriteListener } from './firebase.mjs';
 import { loadDashboard, loadAnalyticsSummary } from './dashboard.mjs';
 import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, setItemQuantity, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
@@ -506,7 +507,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         try {
           quotaBackoff.assertAvailable();
           await services.health();
-          return send(res, 200, { database: true, provider: 'firebase', firebaseProjectId: services.firebaseProjectId });
+          return send(res, 200, { database: true, provider: isSupabaseConfigured() ? 'supabase' : 'firebase', firebaseProjectId: services.firebaseProjectId });
         } catch (error) {
           quotaBackoff.record(error);
           const failure = firebaseFailure(error);

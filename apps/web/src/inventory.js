@@ -225,6 +225,13 @@ export function createInventory(h) {
   const errorBody = err => `<p role="alert">${e(err.message)}</p><p>Close this dialog and refresh to try again.</p>`;
   async function edit(id) { try { const { item, units = [item] } = await inventoryApi('/inventory/' + id), group = groupInventory(units, units.some(isActive) ? 'active' : 'archived')[0]; await form(units.find(unit => String(unit.id) === String(group.id)) || item, units); } catch (err) { showModal('Unable to open equipment', errorBody(err)); } }
   async function quickAction(id, action) {
+    if (action === 'add-stock') {
+      try {
+        const { item, units = [item] } = await inventoryApi('/inventory/' + id);
+        const group = groupInventory(units, units.some(isActive) ? 'active' : 'archived')[0];
+        return quickAddStockForm(group);
+      } catch (err) { showModal('Unable to open equipment', errorBody(err)); return; }
+    }
     if (action === 'view') return details(id);
     if (action === 'edit') return edit(id);
     if (!['qr', 'archive'].includes(action)) return;
@@ -249,6 +256,9 @@ export function createInventory(h) {
     const field = (name, title, type, value, extra = '') => `<label>${title}<input name="${name}" type="${type}" value="${e(value)}" ${extra} required/></label>`;
     const defaultImage = imageFilename(item?.name), initialImage = item?.image_data || (defaultImage ? `/public/images/${defaultImage}` : ''), placeholderCategory = item?.category || categories.find(c => String(c.id) === String(item?.category_id || cat))?.name || '';
     const multipleUnits = units.filter(isActive).length > 1, groupedCondition = groupInventory(units)[0]?.condition_status;
+    const unavailableQty = item ? (Number(item.rented_quantity || 0) + Number(item.reserved_quantity || 0) + Number(item.maintenance_quantity || 0)) : 0;
+    const minAllowedQty = item ? unavailableQty : 1;
+    const currentTotalQty = item ? Number(item.total_quantity ?? 1) : 1;
     const savedCondition = item?.condition_status || 'GOOD', conditionLocked = multipleUnits || Boolean(item && (Number(item.open_rentals) > 0 || item.reserved_rental_id || ['RENTED', 'RESERVED_PENDING', 'UNDER_INSPECTION'].includes(item.status)));
     const oldRateOptions = Array.isArray(item?.custom_rate_options) ? item.custom_rate_options : [];
     const legacyBaseIndex = item && !usesAdditionalRates(item) ? oldRateOptions.findIndex(rate => rate.kind === 'HOURLY' || rate.kind === 'BLOCK' && Number(rate.duration_minutes) === 1440) : -1;
@@ -257,7 +267,7 @@ export function createInventory(h) {
     const initialRentalRate = legacyBaseOption?.amount ?? item?.rental_rate ?? '';
     const savedCustomRates = legacyBaseIndex >= 0 ? oldRateOptions.filter((_, index) => index !== legacyBaseIndex) : additionalRateOptions(item || {});
     const initialRateMode = item?.pricing_product_id ? 'product' : 'traditional';
-    const imageEditor = `<section class="inv-image-editor"><div class="inv-image-preview" id="inv-form-image-preview">${initialImage ? `<img src="${e(initialImage)}" alt="${e(item?.name || 'Equipment image')}"/>` : `<span>${symbol(placeholderCategory)}</span>`}</div><div class="inv-image-editor-copy"><strong>Equipment image</strong><p>Upload a photo to use on this equipment card.</p><div class="inv-image-actions"><label class="secondary inv-image-picker">Choose image<input id="inv-image-file" type="file" accept="image/jpeg,image/png,image/webp"/></label><button type="button" class="secondary" id="inv-image-remove" ${item?.image_data ? '' : 'hidden'}>Remove image</button></div><small>JPG, PNG, or WebP · resized automatically</small><p class="inv-error" id="inv-image-error" role="alert"></p></div><input type="hidden" name="imageData" value="${e(item?.image_data || '')}"/></section>`;
+    const imageEditor = `<section class="inv-image-editor"><div class="inv-image-preview" id="inv-form-image-preview" title="Click to choose a photo">${initialImage ? `<img src="${e(initialImage)}" alt="${e(item?.name || 'Equipment image')}"/>` : `<span>${symbol(placeholderCategory)}</span>`}</div><div class="inv-image-editor-copy"><strong>Equipment image</strong><p>Upload a photo to use on this equipment card.</p><div class="inv-image-actions"><label class="secondary inv-image-picker">Choose image<input id="inv-image-file" type="file" accept="image/jpeg,image/png,image/webp"/></label><button type="button" class="secondary" id="inv-image-remove" ${item?.image_data ? '' : 'hidden'}>Remove image</button></div><small>JPG, PNG, or WebP · resized automatically</small><p class="inv-error" id="inv-image-error" role="alert"></p></div><input type="hidden" name="imageData" value="${e(item?.image_data || '')}"/></section>`;
     showModal(item ? 'Edit equipment' : 'Add equipment', `<form id="inv-form" class="inv-form inv-equipment-form">
       <p class="inv-form-intro">${item ? 'Update shared equipment details, stock, and pricing in one save.' : 'Add a photo, equipment details, stock, and rental pricing.'}</p>
       ${imageEditor}
@@ -265,7 +275,16 @@ export function createInventory(h) {
         <header class="inv-form-section-heading"><span>01</span><div><h3>Equipment details</h3><p>Name, category, condition, and useful notes.</p></div></header>
         <div class="inv-form-grid">
           ${field('name', 'Equipment name', 'text', item?.name || '', 'maxlength="150" placeholder="e.g. Basketball — size 7"')}
-          <label>Stock (total units)<input name="quantity" type="number" min="${item ? 0 : 1}" max="50" step="1" value="${item ? Number(item.total_quantity ?? 1) : 1}" required/><small>${item ? `${Number(item.available_quantity || 0)} currently available. Include rented, reserved, and maintained units in the total.` : 'All units appear under one equipment entry, each with its own QR and history.'}</small></label>
+          <label class="inv-stock-stepper-label" for="inv-form-quantity">
+            Stock (total units)
+            <div class="inv-stepper-control">
+              <button type="button" class="inv-stepper-btn" id="inv-form-qty-minus" aria-label="Decrease stock">−</button>
+              <input id="inv-form-quantity" name="quantity" type="number" min="${minAllowedQty}" max="50" step="1" value="${currentTotalQty}" required/>
+              <button type="button" class="inv-stepper-btn" id="inv-form-qty-plus" aria-label="Increase stock">＋</button>
+            </div>
+            <div class="inv-stock-delta-feedback" id="inv-form-stock-feedback"></div>
+            <small id="inv-form-stock-help">${item ? `${Number(item.available_quantity || 0)} currently available. Include rented, reserved, and maintained units in the total.` : 'All units appear under one equipment entry, each with its own QR and history.'}</small>
+          </label>
           <div class="inv-category-input">
             <label for="inv-form-category">Category<select id="inv-form-category" name="categoryId" required>${categories.map(c => `<option value="${e(c.id)}" ${String(c.id) === (item?.category_id || cat) ? 'selected' : ''}>${e(c.name)}</option>`).join('')}</select></label>
             <div class="inv-category-actions">
@@ -315,7 +334,46 @@ export function createInventory(h) {
       <div class="inv-form-actions"><button type="button" class="secondary" id="inv-cancel">Cancel</button><button class="primary" type="submit">${item ? 'Save changes' : 'Add equipment'}</button></div>
     </form>`);
     modal.querySelector('#inv-cancel').onclick = () => modal.close(); const formEl = modal.querySelector('#inv-form');
+    const qtyInput = formEl.elements.quantity, qtyMinus = formEl.querySelector('#inv-form-qty-minus'), qtyPlus = formEl.querySelector('#inv-form-qty-plus'), qtyFeedback = formEl.querySelector('#inv-form-stock-feedback');
+    const syncQtyFeedback = () => {
+      const val = Number(qtyInput.value);
+      if (!Number.isInteger(val)) {
+        qtyFeedback.className = 'inv-stock-delta-feedback inv-delta-invalid';
+        qtyFeedback.textContent = `Enter a whole number between ${minAllowedQty} and 50.`;
+        if (qtyMinus) qtyMinus.disabled = true;
+        if (qtyPlus) qtyPlus.disabled = true;
+        return;
+      }
+      if (qtyMinus) qtyMinus.disabled = val <= minAllowedQty;
+      if (qtyPlus) qtyPlus.disabled = val >= 50;
+
+      if (!item) {
+        qtyFeedback.className = 'inv-stock-delta-feedback inv-delta-positive';
+        qtyFeedback.innerHTML = `<strong>${val}</strong> unit${val === 1 ? '' : 's'} will be created, each with its own QR code.`;
+        return;
+      }
+
+      if (val > currentTotalQty) {
+        const added = val - currentTotalQty;
+        qtyFeedback.className = 'inv-stock-delta-feedback inv-delta-positive';
+        qtyFeedback.innerHTML = `Adding <strong>+${added}</strong> new unit${added === 1 ? '' : 's'} (New total: ${val}). Set to Good condition.`;
+      } else if (val < currentTotalQty) {
+        const reduced = currentTotalQty - val;
+        qtyFeedback.className = 'inv-stock-delta-feedback inv-delta-warning';
+        qtyFeedback.innerHTML = `Archiving <strong>${reduced}</strong> available unit${reduced === 1 ? '' : 's'} (New total: ${val}). Unit history stays in archive.`;
+      } else {
+        qtyFeedback.className = 'inv-stock-delta-feedback';
+        qtyFeedback.textContent = '';
+      }
+    };
+    if (qtyInput) {
+      qtyInput.oninput = syncQtyFeedback;
+      if (qtyMinus) qtyMinus.onclick = () => { qtyInput.value = Math.max(minAllowedQty, Number(qtyInput.value) - 1); syncQtyFeedback(); };
+      if (qtyPlus) qtyPlus.onclick = () => { qtyInput.value = Math.min(50, Number(qtyInput.value) + 1); syncQtyFeedback(); };
+      syncQtyFeedback();
+    }
     const imageDataInput = formEl.elements.imageData, imageFileInput = formEl.querySelector('#inv-image-file'), imagePreview = formEl.querySelector('#inv-form-image-preview'), imageRemove = formEl.querySelector('#inv-image-remove'), imageError = formEl.querySelector('#inv-image-error');
+    imagePreview.onclick = () => imageFileInput.click();
     const setImagePreview = source => {
       if (source) { const previewImage = document.createElement('img'); previewImage.src = source; previewImage.alt = formEl.elements.name.value || 'Equipment image'; imagePreview.replaceChildren(previewImage); }
       else { const fallback = document.createElement('span'); fallback.innerHTML = symbol(placeholderCategory); imagePreview.replaceChildren(fallback); }
@@ -480,7 +538,27 @@ export function createInventory(h) {
       for (const key of ['rentalRate', 'latePenalty']) values[key] = Number(values[key]);
       values.quantity = Number(values.quantity);
       if (item) { values.scope = 'stock'; values.version = item.updated_at; values.stockVersion = item.stock_version; }
-      await submit(formEl, () => api('/inventory' + (item ? '/' + item.id : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(values) }), item ? 'Equipment and stock updated.' : 'Equipment added.', () => { scope = values.quantity === 0 ? 'archived' : 'active'; status = 'all'; offset = 0; draw(); });
+      const isNew = !item, initialTotal = item ? Number(item.total_quantity || 0) : 0;
+      await submit(formEl, () => api('/inventory' + (item ? '/' + item.id : ''), { method: item ? 'PATCH' : 'POST', body: JSON.stringify(values) }), item ? 'Equipment and stock updated.' : 'Equipment added.', async savedResult => {
+        scope = values.quantity === 0 ? 'archived' : 'active'; status = 'all'; offset = 0; draw();
+        const targetId = savedResult?.id || item?.id;
+        if (targetId && (isNew || values.quantity > initialTotal)) {
+          try {
+            const { item: freshItem, units = [freshItem] } = await inventoryApi('/inventory/' + targetId);
+            const freshGroup = groupInventory(units, 'active')[0];
+            if (freshGroup) {
+              const countAdded = isNew ? values.quantity : values.quantity - initialTotal;
+              showSuccessPrompt({
+                title: isNew ? 'Equipment added' : 'Stock increased',
+                message: isNew
+                  ? `“${freshGroup.name}” has been created with ${countAdded} unit${countAdded === 1 ? '' : 's'}.`
+                  : `Added ${countAdded} new unit${countAdded === 1 ? '' : 's'} to “${freshGroup.name}”. Total stock is now ${freshGroup.total_quantity}.`,
+                group: freshGroup
+              });
+            }
+          } catch { }
+        }
+      });
     });
   }
   async function submit(formEl, operation, message, afterSave = null) {
@@ -796,7 +874,7 @@ function createInventoryView(root, h) {
   const statusText = item => stateLabel(item.effective_status || item.status || 'Unknown');
   const quickActions = item => {
     const archiveReason = archiveUnavailableReason(item);
-    const actions = [['view', 'View equipment', 'eye', ''], ['edit', 'Edit equipment & stock', 'edit', ''], ['qr', 'Unit QR labels', 'qr', ''], ['archive', 'Archive equipment', 'archive', archiveReason]];
+    const actions = [['view', 'View equipment', 'eye', ''], ['add-stock', 'Add stock units', 'plus', ''], ['edit', 'Edit equipment details', 'edit', ''], ['qr', 'Unit QR labels', 'qr', ''], ['archive', 'Archive equipment', 'archive', archiveReason]];
     return `<div class="inv-item-actions" role="group" aria-label="Actions for ${e(item.name)}">${actions.map(([action, name, glyph, reason]) => `<button type="button" class="inv-quick-action${action === 'archive' ? ' inv-quick-archive' : ''}" data-inv-action="${action}" data-inv-id="${e(item.id)}" aria-label="${e(name)} for ${e(item.name)}" title="${e(reason || name)}" aria-haspopup="dialog" ${reason ? 'disabled' : ''}>${icon(glyph)}</button>`).join('')}</div>`;
   };
   const signature = item => JSON.stringify([item.id, item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.pricing_product_id, item.custom_rate_options || [], item.custom_rate_options_version, item.sale_price, item.image_data || '', productFor(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id, item.available_quantity, item.total_quantity, item.reserved_quantity, item.rented_quantity, item.maintenance_quantity, item.archived_quantity, item.status_counts, item.visible_units.map(unit => [unit.id, unit.condition_status])]);

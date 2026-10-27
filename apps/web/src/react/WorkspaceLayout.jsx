@@ -526,6 +526,12 @@ export function WorkspaceShell({
       ? 'Expand sidebar'
       : 'Collapse sidebar';
 
+  const userAvatar =
+    user?.avatar ||
+    (typeof window !== 'undefined' && window.localStorage
+      ? localStorage.getItem(`rent_play_avatar_${user?.id || user?.email || 'active'}`)
+      : '');
+
   return (
     <>
       <a className="skip-link" href="#workspace-content">
@@ -706,7 +712,13 @@ export function WorkspaceShell({
                 }
               }}
             >
-              <span className="avatar">{initials(user.name)}</span>
+              <span className="avatar">
+                {userAvatar ? (
+                  <img src={userAvatar} alt={user.name} className="avatar-img" />
+                ) : (
+                  initials(user.name)
+                )}
+              </span>
               <div>
                 <strong>{user.name}</strong>
                 <small>{user.role}</small>
@@ -735,141 +747,159 @@ export function WorkspaceShell({
             </button>
 
             <div className="top-actions">
-              <button
-                className="text-button"
-                id="refresh"
-                disabled={manualRefreshPending}
-                aria-busy={manualRefreshPending ? 'true' : undefined}
-                onClick={onManualRefresh}
-              >
-                {manualRefreshPending ? 'Refreshing…' : 'Refresh'}
-              </button>
-
-              <div
-                className="notification-menu"
-                ref={notificationMenuRef}
-                onClick={handleNotificationMenuClick}
-                onKeyDown={handleNotificationKeyDown}
-                onBlur={handleNotificationFocusOut}
-              >
+              <div className="unified-top-pill" role="toolbar" aria-label="Quick actions">
                 <button
-                  ref={notificationBellRef}
+                  className={`top-pill-btn top-pill-refresh${manualRefreshPending ? ' spinning' : ''}`}
+                  id="refresh"
                   type="button"
-                  className="icon-button notification"
-                  id="notifications"
-                  aria-label="View notifications"
-                  aria-expanded={notificationsOpen}
-                  aria-controls="notification-dropdown"
-                  onClick={handleToggleNotifications}
+                  disabled={manualRefreshPending}
+                  aria-busy={manualRefreshPending ? 'true' : undefined}
+                  aria-label={manualRefreshPending ? 'Refreshing data…' : 'Refresh data'}
+                  title={manualRefreshPending ? 'Refreshing…' : 'Refresh'}
+                  onClick={onManualRefresh}
                 >
-                  <Icon name="bell" />
-                  {unreadCount > 0 ? (
-                    <span
-                      className="notification-count-badge"
-                      aria-label={`${unreadCount} unread updates`}
-                    >
-                      {unreadCount > 99 ? '99+' : unreadCount}
-                    </span>
-                  ) : showNotificationDot ? (
-                    <i />
-                  ) : null}
+                  <Icon name="refresh" />
                 </button>
-                <section
-                  ref={notificationDropdownRef}
-                  className="notification-dropdown"
-                  id="notification-dropdown"
-                  aria-label="Notifications"
-                  hidden={!notificationsOpen}
+
+                <span className="top-pill-sep" aria-hidden="true" />
+
+                <div
+                  className="notification-menu"
+                  ref={notificationMenuRef}
+                  onClick={handleNotificationMenuClick}
+                  onKeyDown={handleNotificationKeyDown}
+                  onBlur={handleNotificationFocusOut}
                 >
-                  <header className="notification-dropdown-heading">
-                    <h2>Notifications</h2>
-                    <span id="notification-count">
-                      {unreadCount ? `${unreadCount} unread` : 'No unread updates'}
+                  <button
+                    ref={notificationBellRef}
+                    type="button"
+                    className="top-pill-btn top-pill-bell notification"
+                    id="notifications"
+                    aria-label="View notifications"
+                    aria-expanded={notificationsOpen}
+                    aria-controls="notification-dropdown"
+                    onClick={handleToggleNotifications}
+                  >
+                    <Icon name="bell" />
+                    {unreadCount > 0 ? (
+                      <span
+                        className="notification-count-badge"
+                        aria-label={`${unreadCount} unread updates`}
+                      >
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </span>
+                    ) : showNotificationDot ? (
+                      <i />
+                    ) : null}
+                  </button>
+                  <section
+                    ref={notificationDropdownRef}
+                    className="notification-dropdown"
+                    id="notification-dropdown"
+                    aria-label="Notifications"
+                    hidden={!notificationsOpen}
+                  >
+                    <header className="notification-dropdown-heading">
+                      <h2>Notifications</h2>
+                      <span id="notification-count">
+                        {unreadCount ? `${unreadCount} unread` : 'No unread updates'}
+                      </span>
+                    </header>
+                    <div className="notification-toolbar">
+                      <button
+                        type="button"
+                        className="text-button"
+                        data-notification-mark-read
+                        disabled={!unreadCount}
+                      >
+                        Mark shown as read
+                      </button>
+                    </div>
+                    <div className="notification-list" ref={notificationListRef} />
+                  </section>
+                </div>
+
+                <span className="top-pill-sep" aria-hidden="true" />
+
+                <div
+                  className="profile-menu"
+                  onClick={e => e.stopPropagation()}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') {
+                      setAccountMenuOpen(false);
+                      accountToggleRef.current?.focus();
+                    }
+                  }}
+                >
+                  <button
+                    ref={accountToggleRef}
+                    className="top-pill-btn top-pill-profile profile-menu-toggle"
+                    id="profile-menu-toggle"
+                    type="button"
+                    aria-label="Open account menu"
+                    aria-haspopup="menu"
+                    aria-expanded={accountMenuOpen}
+                    onClick={handleToggleAccountMenu}
+                  >
+                    <span className="avatar small">
+                      {userAvatar ? (
+                        <img src={userAvatar} alt="" className="avatar-img" />
+                      ) : (
+                        initials(user.name)
+                      )}
                     </span>
-                  </header>
-                  <div className="notification-toolbar">
+                    <span className="top-pill-user-name">
+                      {user.name ? user.name.split(' ')[0] : 'Account'}
+                    </span>
+                    <span className="profile-menu-chevron" aria-hidden="true">
+                      ▾
+                    </span>
+                  </button>
+                  <div
+                    ref={accountDropdownRef}
+                    className="profile-dropdown"
+                    id="profile-dropdown"
+                    role="menu"
+                    hidden={!accountMenuOpen}
+                  >
+                    <div className="profile-dropdown-user">
+                      <strong>{user.name}</strong>
+                      <small>{user.email}</small>
+                    </div>
                     <button
-                      type="button"
-                      className="text-button"
-                      data-notification-mark-read
-                      disabled={!unreadCount}
+                      data-page="Profile"
+                      role="menuitem"
+                      onClick={e => {
+                        e.preventDefault();
+                        setAccountMenuOpen(false);
+                        onNavigate('Profile');
+                      }}
                     >
-                      Mark shown as read
+                      <Icon name="users" /> View profile
+                    </button>
+                    <button
+                      data-page="Settings"
+                      role="menuitem"
+                      onClick={e => {
+                        e.preventDefault();
+                        setAccountMenuOpen(false);
+                        onNavigate('Settings');
+                      }}
+                    >
+                      <Icon name="settings" /> Settings
+                    </button>
+                    <button
+                      data-action="logout"
+                      className="profile-dropdown-logout"
+                      role="menuitem"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        onLogout();
+                      }}
+                    >
+                      <Icon name="out" /> Sign out
                     </button>
                   </div>
-                  <div className="notification-list" ref={notificationListRef} />
-                </section>
-              </div>
-
-              <div
-                className="profile-menu"
-                onClick={e => e.stopPropagation()}
-                onKeyDown={e => {
-                  if (e.key === 'Escape') {
-                    setAccountMenuOpen(false);
-                    accountToggleRef.current?.focus();
-                  }
-                }}
-              >
-                <button
-                  ref={accountToggleRef}
-                  className="profile-menu-toggle"
-                  id="profile-menu-toggle"
-                  type="button"
-                  aria-label="Open account menu"
-                  aria-haspopup="menu"
-                  aria-expanded={accountMenuOpen}
-                  onClick={handleToggleAccountMenu}
-                >
-                  <span className="avatar small">{initials(user.name)}</span>
-                  <span className="profile-menu-chevron" aria-hidden="true">
-                    ▾
-                  </span>
-                </button>
-                <div
-                  ref={accountDropdownRef}
-                  className="profile-dropdown"
-                  id="profile-dropdown"
-                  role="menu"
-                  hidden={!accountMenuOpen}
-                >
-                  <div className="profile-dropdown-user">
-                    <strong>{user.name}</strong>
-                    <small>{user.email}</small>
-                  </div>
-                  <button
-                    data-page="Profile"
-                    role="menuitem"
-                    onClick={e => {
-                      e.preventDefault();
-                      setAccountMenuOpen(false);
-                      onNavigate('Profile');
-                    }}
-                  >
-                    <Icon name="users" /> View profile
-                  </button>
-                  <button
-                    data-page="Settings"
-                    role="menuitem"
-                    onClick={e => {
-                      e.preventDefault();
-                      setAccountMenuOpen(false);
-                      onNavigate('Settings');
-                    }}
-                  >
-                    <Icon name="settings" /> Settings
-                  </button>
-                  <button
-                    data-action="logout"
-                    className="profile-dropdown-logout"
-                    role="menuitem"
-                    onClick={() => {
-                      setAccountMenuOpen(false);
-                      onLogout();
-                    }}
-                  >
-                    <Icon name="out" /> Logout
-                  </button>
                 </div>
               </div>
             </div>

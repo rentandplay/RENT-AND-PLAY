@@ -4,6 +4,7 @@ export const icons = {
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   repeat: '<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.85.83 6.72 2.24L21 8"/><polyline points="21 3 21 8 16 8"/>',
   wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
   radio: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>',
@@ -13,8 +14,9 @@ export const icons = {
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/>',
   zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
   sportsBall: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20M12 2a14.5 14.5 0 0 1 0 20M2 12h20"/>',
-  gamepad: '<line x1="6" x2="10" y1="12" y2="12"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="15" x2="15.01" y1="13" y2="13"/><line x1="18" x2="18.01" y1="11" y2="11"/><rect width="20" height="12" x="2" y="6" rx="6"/>',
-  dice: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 8h.01M16 8h.01M12 12h.01M8 16h.01M16 16h.01"/>',
+  gamepad: '<rect width="20" height="12" x="2" y="6" rx="6"/><path d="M6 12h4m-2-2v4"/><circle cx="14.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.5" cy="10" r="1.3" fill="currentColor" stroke="none"/>',
+  dice: '<rect width="18" height="18" x="3" y="3" rx="3"/><circle cx="7.5" cy="7.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="16.5" cy="7.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="7.5" cy="16.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="16.5" cy="16.5" r="1.4" fill="currentColor" stroke="none"/>',
+  cards: '<rect x="3" y="5" width="12" height="16" rx="2"/><path d="M7 5V3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-2"/><polygon points="9 10.5 11.5 13.5 9 16.5 6.5 13.5" fill="currentColor" stroke="none"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5l1.5 1.5M5 19l1.5-1.5M17.5 6.5l1.5-1.5"/>',
   moon: '<path d="M20.5 13a9 9 0 0 1-9.5-9.5A9 9 0 1 0 20.5 13Z"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
@@ -41,7 +43,13 @@ export const icons = {
   print: '<path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/><path d="M17 11h.01"/>',
   download: '<path d="M12 3v12m-5-5 5 5 5-5M4 18v3h16v-3"/>',
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
-  chevron: '<path d="m6 9 6 6 6-6"/>'
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m11.5 11.5 8.5-8.5M16 7l3 3M18 5l2 2"/>',
+  copy: '<rect width="13" height="13" x="9" y="9" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  store: '<path d="m2 7 4-5h12l4 5v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z"/><path d="M2 7h20"/><path d="M10 21v-7h4v7"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>'
 };
 
 export const icon = name =>
@@ -82,21 +90,30 @@ export const initials = name =>
     .join('')
     .toUpperCase();
 
-export const categoryIconName = category =>
-  /sport/i.test(category)
-    ? 'sportsBall'
-    : /board/i.test(category)
-      ? 'dice'
-      : /consol/i.test(category)
-        ? 'gamepad'
-        : 'box';
+export const categoryIconName = category => {
+  const cat = String(category || '').toLowerCase();
+  if (/card/i.test(cat)) return 'cards';
+  if (/board|puzzle/i.test(cat)) return 'dice';
+  if (/sport|ball|outdoor|fitness/i.test(cat)) return 'sportsBall';
+  if (/tech|consol|game|electron|device|gadget/i.test(cat)) return 'gamepad';
+  return 'box';
+};
+
+export const categoryThemeClass = category => {
+  const cat = String(category || '').toLowerCase();
+  if (/card/i.test(cat)) return 'cat-cards';
+  if (/board|puzzle/i.test(cat)) return 'cat-board';
+  if (/sport|ball|outdoor|fitness/i.test(cat)) return 'cat-sports';
+  if (/tech|consol|game|electron|device|gadget/i.test(cat)) return 'cat-tech';
+  return 'cat-default';
+};
 
 export const symbol = category =>
-  `<span class="category-glyph" aria-hidden="true">${icon(categoryIconName(category))}</span>`;
+  `<span class="category-glyph ${categoryThemeClass(category)}" aria-hidden="true">${icon(categoryIconName(category))}</span>`;
 
 export function CategorySymbol({ category }) {
   return (
-    <span className="category-glyph" aria-hidden="true">
+    <span className={`category-glyph ${categoryThemeClass(category)}`} aria-hidden="true">
       <Icon name={categoryIconName(category)} />
     </span>
   );

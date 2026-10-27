@@ -364,9 +364,10 @@ export async function resolveTerminalRequest(db, terminal, input, now = new Date
         const fee = rental.fee_breakdown || {};
         if (request.terminal_mode === 'SHOP_DISPATCH') {
           newStatus = item.status || 'AVAILABLE';
+          const deliveryHoldMs = Number(process.env.RENTAL_DELIVERY_HOLD_SECONDS || 7200) * 1000;
           changes = {
             delivery_status: 'OUT_FOR_DELIVERY',
-            handoff_expires_at: rental.hold_expires_at || new Date(now.getTime() + 1800000),
+            handoff_expires_at: new Date(now.getTime() + deliveryHoldMs),
             hold_expires_at: null,
             delivery_departure: {
               at: now,
@@ -443,6 +444,7 @@ export async function resolveTerminalRequest(db, terminal, input, now = new Date
         penalty_amount: fee.penalty_amount,
         final_rental_charges: fee.final_rental_charges,
         latest_return_request_status: 'CONFIRMED',
+        latest_terminal_request_status: 'CONFIRMED',
         ...(rental.mobile_return_request ? { mobile_return_request: { ...rental.mobile_return_request, status: 'APPROVED', reviewed_at: now, reviewed_by: request.requested_by || terminal.id } } : {})
       };
       if (Object.hasOwn(rental, 'rental_paid_amount')) Object.assign(changes, rentalPaymentSummary(rental, changes));

@@ -21,6 +21,7 @@ var icons = {
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   repeat: '<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.85.83 6.72 2.24L21 8"/><polyline points="21 3 21 8 16 8"/>',
   wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
   radio: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>',
@@ -30,8 +31,9 @@ var icons = {
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/>',
   zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
   sportsBall: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20M12 2a14.5 14.5 0 0 1 0 20M2 12h20"/>',
-  gamepad: '<line x1="6" x2="10" y1="12" y2="12"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="15" x2="15.01" y1="13" y2="13"/><line x1="18" x2="18.01" y1="11" y2="11"/><rect width="20" height="12" x="2" y="6" rx="6"/>',
-  dice: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 8h.01M16 8h.01M12 12h.01M8 16h.01M16 16h.01"/>',
+  gamepad: '<rect width="20" height="12" x="2" y="6" rx="6"/><path d="M6 12h4m-2-2v4"/><circle cx="14.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.5" cy="10" r="1.3" fill="currentColor" stroke="none"/>',
+  dice: '<rect width="18" height="18" x="3" y="3" rx="3"/><circle cx="7.5" cy="7.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="16.5" cy="7.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="7.5" cy="16.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="16.5" cy="16.5" r="1.4" fill="currentColor" stroke="none"/>',
+  cards: '<rect x="3" y="5" width="12" height="16" rx="2"/><path d="M7 5V3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-2"/><polygon points="9 10.5 11.5 13.5 9 16.5 6.5 13.5" fill="currentColor" stroke="none"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5l1.5 1.5M5 19l1.5-1.5M17.5 6.5l1.5-1.5"/>',
   moon: '<path d="M20.5 13a9 9 0 0 1-9.5-9.5A9 9 0 1 0 20.5 13Z"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
@@ -58,7 +60,13 @@ var icons = {
   print: '<path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/><path d="M17 11h.01"/>',
   download: '<path d="M12 3v12m-5-5 5 5 5-5M4 18v3h16v-3"/>',
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
-  chevron: '<path d="m6 9 6 6 6-6"/>'
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m11.5 11.5 8.5-8.5M16 7l3 3M18 5l2 2"/>',
+  copy: '<rect width="13" height="13" x="9" y="9" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  store: '<path d="m2 7 4-5h12l4 5v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z"/><path d="M2 7h20"/><path d="M10 21v-7h4v7"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>'
 };
 var icon = (name) => `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icons[name] || icons.box}</svg>`;
 function Icon({ name }) {
@@ -84,10 +92,25 @@ var money = (v) => new Intl.NumberFormat("en-PH", {
   maximumFractionDigits: 2
 }).format(Number(v || 0));
 var initials = (name) => String(name || "").trim().split(/\s+/).slice(0, 2).map((x) => x[0]).join("").toUpperCase();
-var categoryIconName = (category) => /sport/i.test(category) ? "sportsBall" : /board/i.test(category) ? "dice" : /consol/i.test(category) ? "gamepad" : "box";
-var symbol = (category) => `<span class="category-glyph" aria-hidden="true">${icon(categoryIconName(category))}</span>`;
+var categoryIconName = (category) => {
+  const cat = String(category || "").toLowerCase();
+  if (/card/i.test(cat)) return "cards";
+  if (/board|puzzle/i.test(cat)) return "dice";
+  if (/sport|ball|outdoor|fitness/i.test(cat)) return "sportsBall";
+  if (/tech|consol|game|electron|device|gadget/i.test(cat)) return "gamepad";
+  return "box";
+};
+var categoryThemeClass = (category) => {
+  const cat = String(category || "").toLowerCase();
+  if (/card/i.test(cat)) return "cat-cards";
+  if (/board|puzzle/i.test(cat)) return "cat-board";
+  if (/sport|ball|outdoor|fitness/i.test(cat)) return "cat-sports";
+  if (/tech|consol|game|electron|device|gadget/i.test(cat)) return "cat-tech";
+  return "cat-default";
+};
+var symbol = (category) => `<span class="category-glyph ${categoryThemeClass(category)}" aria-hidden="true">${icon(categoryIconName(category))}</span>`;
 function CategorySymbol({ category }) {
-  return /* @__PURE__ */ React.createElement("span", { className: "category-glyph", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: categoryIconName(category) }));
+  return /* @__PURE__ */ React.createElement("span", { className: `category-glyph ${categoryThemeClass(category)}`, "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: categoryIconName(category) }));
 }
 var date = (v) => v ? new Date(/(?:Z|[+-]\d\d:\d\d)$/.test(String(v)) ? String(v) : String(v).replace(" ", "T") + "+08:00") : null;
 var formatDate = (v) => date(v) && Number.isFinite(date(v).getTime()) ? new Intl.DateTimeFormat("en-PH", {
@@ -627,7 +650,7 @@ function DashboardView({
   const openWorkflowModal = () => {
     showModal(
       "Rental workflow",
-      '<p>Review and approve the request, then scan the assigned equipment QR to prepare the unit. At handover, verify the customer rental QR, identity, payment, condition and accessories before confirming release.</p><div class="info-box">The timer starts at physical handover and stops when staff records physical receipt. Inspect returned equipment before making it available again.</div>'
+      '<p><strong>Walk-in Counter Flow:</strong> Approve or create the walk-in rental, scan the assigned equipment QR, inspect condition &amp; accessories, and confirm handover on the <strong>ESP32 Counter Terminal</strong> (or web fallback) to start the timer.</p><p><strong>Resort Stay Delivery Flow:</strong> Scan the unit QR at the shop and confirm <strong>Resort Dispatch on the ESP32 Terminal</strong> (marks unit Out for Delivery while keeping the timer stopped). At the resort villa/gate, scan the customer Rental QR to start the timer.</p><div class="info-box">On return, scanning the equipment QR immediately stops the rental timer and overtime. Final return inspection is confirmed on the ESP32 Counter Terminal before updating inventory availability.</div>'
     );
   };
   const handleRowClick = (e, rentalId) => {
@@ -813,7 +836,7 @@ function DashboardView({
       style: { height: `${amount / scale * 100}%` },
       title: `${days[i]}: ${money(amount)}`
     }
-  ), /* @__PURE__ */ React.createElement("span", null, days[i]))))), amounts.every((v) => v === 0) ? /* @__PURE__ */ React.createElement("p", { className: "chart-empty" }, "No confirmed rental fees in this period.") : null)), /* @__PURE__ */ React.createElement("aside", { className: "right-column" }, /* @__PURE__ */ React.createElement("section", { className: "panel terminal-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " ESP32 terminal"), /* @__PURE__ */ React.createElement("span", { className: "offline-dot" }, "Standby")), /* @__PURE__ */ React.createElement("div", { className: "device" }, /* @__PURE__ */ React.createElement("span", null, t?.terminal_code || "HARDWARE NOT CONNECTED"), /* @__PURE__ */ React.createElement("strong", null, "ON STANDBY"), /* @__PURE__ */ React.createElement("small", null, t?.name || "Ready for future hardware setup"), /* @__PURE__ */ React.createElement("div", { className: "device-led" })), /* @__PURE__ */ React.createElement("div", { className: "terminal-meta" }, /* @__PURE__ */ React.createElement("span", null, "Saved pending attempts"), /* @__PURE__ */ React.createElement("strong", null, queue.length)), /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " Admin confirms current releases and returns. The terminal is reserved for later hardware integration."), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("span", null, days[i]))))), amounts.every((v) => v === 0) ? /* @__PURE__ */ React.createElement("p", { className: "chart-empty" }, "No confirmed rental fees in this period.") : null)), /* @__PURE__ */ React.createElement("aside", { className: "right-column" }, /* @__PURE__ */ React.createElement("section", { className: "panel terminal-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " ESP32 terminal"), /* @__PURE__ */ React.createElement("span", { className: t?.online ? "online-dot" : "offline-dot" }, t?.online ? "Online" : queue.length > 0 ? "Pending" : "Counter Kiosk")), /* @__PURE__ */ React.createElement("div", { className: "device" }, /* @__PURE__ */ React.createElement("span", null, t?.terminal_code || "TERM-01"), /* @__PURE__ */ React.createElement("strong", null, queue.length > 0 ? "AWAITING BUTTON PRESS" : t?.online ? "ONLINE & READY" : "COUNTER STATION READY"), /* @__PURE__ */ React.createElement("small", null, t?.name || "Counter Kiosk Verification Station"), /* @__PURE__ */ React.createElement("div", { className: "device-led" })), /* @__PURE__ */ React.createElement("div", { className: "terminal-meta" }, /* @__PURE__ */ React.createElement("span", null, "Pending terminal requests"), /* @__PURE__ */ React.createElement("strong", null, queue.length)), /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " Counter OLED, LED/buzzer & physical GPIO 35 button verify walk-in handovers, resort dispatches, and return inspections."), /* @__PURE__ */ React.createElement(
     "button",
     {
       className: "secondary wide",
@@ -829,7 +852,7 @@ function DashboardView({
       "data-category": i,
       onClick: () => onNavigate("Inventory", false, "All rentals", c.name)
     },
-    /* @__PURE__ */ React.createElement("span", { className: "category-symbol" }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: c.name })),
+    /* @__PURE__ */ React.createElement("span", { className: `category-symbol ${categoryThemeClass(c.name)}` }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: c.name })),
     /* @__PURE__ */ React.createElement("span", null, c.name, /* @__PURE__ */ React.createElement("small", null, c.count, " items in inventory")),
     /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
   )) : /* @__PURE__ */ React.createElement("p", null, "No categories recorded.")), /* @__PURE__ */ React.createElement("div", { className: "counter-tip" }, /* @__PURE__ */ React.createElement("span", null, "\u2726"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "A small counter tip"), /* @__PURE__ */ React.createElement("p", null, "Check item condition before confirming a return."))))));
@@ -846,6 +869,14 @@ function ProfileView({
   toast
 }) {
   const formRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const [copiedId, setCopiedId] = useState(false);
+  const [customAvatar, setCustomAvatar] = useState(() => {
+    if (typeof window !== "undefined" && window.localStorage) {
+      return localStorage.getItem(`rent_play_avatar_${user?.id || user?.email || "active"}`) || "";
+    }
+    return "";
+  });
   useEffect(() => {
     if (!profileEditing || !formRef.current) return;
     const form = formRef.current;
@@ -868,17 +899,130 @@ function ProfileView({
             method: "PATCH",
             body: JSON.stringify(values)
           });
-          onUserUpdated(result.user);
+          onUserUpdated({ ...result?.user || user, avatar: customAvatar });
           onSetProfileEditing(false);
-          toast("Profile updated.");
+          toast?.("Profile updated successfully.");
         } catch (problem) {
           error.textContent = problem.message;
           button.disabled = false;
         }
       }
     );
-  }, [profileEditing, confirmSubmit, api, onUserUpdated, onSetProfileEditing, toast]);
-  return /* @__PURE__ */ React.createElement("div", { className: "profile-layout" }, /* @__PURE__ */ React.createElement("section", { className: "panel profile-card" }, /* @__PURE__ */ React.createElement("span", { className: "profile-avatar" }, initials(user.name)), /* @__PURE__ */ React.createElement("h2", null, user.name), /* @__PURE__ */ React.createElement("p", null, user.email), /* @__PURE__ */ React.createElement("span", { className: "profile-role" }, user.role), /* @__PURE__ */ React.createElement("small", null, "Account ID"), /* @__PURE__ */ React.createElement("code", null, user.account_code || "Not assigned")), profileEditing ? /* @__PURE__ */ React.createElement("section", { className: "panel profile-form-card" }, /* @__PURE__ */ React.createElement("span", { className: "eyebrow" }, "EDIT PROFILE"), /* @__PURE__ */ React.createElement("h2", null, "Update your details"), /* @__PURE__ */ React.createElement("p", null, "Your name appears throughout the workspace. Your email is also your Firebase login."), /* @__PURE__ */ React.createElement("form", { id: "profile-form", className: "profile-form", ref: formRef }, /* @__PURE__ */ React.createElement("label", null, "Full name", /* @__PURE__ */ React.createElement(
+  }, [profileEditing, confirmSubmit, api, onUserUpdated, onSetProfileEditing, toast, user, customAvatar]);
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast?.("Please select an image file (PNG, JPG, or WebP).");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          const size = 256;
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext("2d");
+          const minDim = Math.min(img.width, img.height);
+          const sx = (img.width - minDim) / 2;
+          const sy = (img.height - minDim) / 2;
+          ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
+          setCustomAvatar(dataUrl);
+          if (typeof window !== "undefined" && window.localStorage) {
+            localStorage.setItem(`rent_play_avatar_${user?.id || user?.email || "active"}`, dataUrl);
+          }
+          onUserUpdated?.({ ...user, avatar: dataUrl });
+          toast?.("Profile picture updated.");
+        } catch (_) {
+          toast?.("Failed to process image.");
+        }
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+  const handleRemovePhoto = () => {
+    setCustomAvatar("");
+    if (typeof window !== "undefined" && window.localStorage) {
+      localStorage.removeItem(`rent_play_avatar_${user?.id || user?.email || "active"}`);
+    }
+    onUserUpdated?.({ ...user, avatar: "" });
+    toast?.("Profile picture removed.");
+  };
+  const handleCopyId = () => {
+    const code = user.account_code || "USER-003";
+    if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(code).then(() => {
+        setCopiedId(true);
+        setTimeout(() => setCopiedId(false), 2e3);
+        toast?.(`Copied Account ID: ${code}`);
+      }).catch(() => {
+      });
+    }
+  };
+  const isOwner = String(user.role || "").toUpperCase() === "OWNER";
+  const roleDisplay = isOwner ? "Store Owner" : "Store Operator";
+  const accountCode = user.account_code || "USER-003";
+  return /* @__PURE__ */ React.createElement("div", { className: "profile-wrapper" }, /* @__PURE__ */ React.createElement("section", { className: "panel profile-single-card" }, /* @__PURE__ */ React.createElement("div", { className: "profile-card-header" }, /* @__PURE__ */ React.createElement("div", { className: "profile-avatar-container" }, /* @__PURE__ */ React.createElement("div", { className: "profile-clean-avatar" }, customAvatar ? /* @__PURE__ */ React.createElement("img", { src: customAvatar, alt: user.name, className: "profile-clean-avatar-img" }) : /* @__PURE__ */ React.createElement("span", { className: "profile-clean-avatar-txt" }, initials(user.name)), /* @__PURE__ */ React.createElement(
+    "label",
+    {
+      className: "profile-avatar-camera-btn",
+      title: "Change profile picture",
+      "aria-label": "Change profile picture"
+    },
+    /* @__PURE__ */ React.createElement(Icon, { name: "camera" }),
+    /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "file",
+        accept: "image/png,image/jpeg,image/webp",
+        ref: fileInputRef,
+        onChange: handlePhotoSelect,
+        hidden: true
+      }
+    )
+  )), /* @__PURE__ */ React.createElement("div", { className: "profile-header-details" }, /* @__PURE__ */ React.createElement("div", { className: "profile-header-name-row" }, /* @__PURE__ */ React.createElement("h2", null, user.name), /* @__PURE__ */ React.createElement("span", { className: "profile-role-badge" }, /* @__PURE__ */ React.createElement(Icon, { name: "shield" }), " ", roleDisplay), /* @__PURE__ */ React.createElement("span", { className: "profile-status-pill" }, /* @__PURE__ */ React.createElement("span", { className: "profile-dot-indicator" }), " Active")), /* @__PURE__ */ React.createElement("p", { className: "profile-header-email" }, user.email), /* @__PURE__ */ React.createElement("div", { className: "profile-avatar-action-row" }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "profile-photo-change-btn",
+      onClick: () => fileInputRef.current?.click()
+    },
+    /* @__PURE__ */ React.createElement(Icon, { name: "camera" }),
+    " ",
+    customAvatar ? "Change photo" : "Upload photo"
+  ), customAvatar ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "profile-action-sep" }, "\u2022"), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "profile-photo-remove-btn",
+      onClick: handleRemovePhoto
+    },
+    "Remove photo"
+  )) : null))), /* @__PURE__ */ React.createElement("div", { className: "profile-header-action" }, !profileEditing ? /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "primary profile-action-btn",
+      id: "profile-edit",
+      "data-profile-edit": "true",
+      type: "button",
+      onClick: () => onSetProfileEditing(true)
+    },
+    /* @__PURE__ */ React.createElement(Icon, { name: "edit" }),
+    " Edit profile"
+  ) : /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "secondary profile-action-btn",
+      type: "button",
+      onClick: () => onSetProfileEditing(false)
+    },
+    "Cancel"
+  ))), /* @__PURE__ */ React.createElement("div", { className: "profile-card-divider" }), profileEditing ? /* @__PURE__ */ React.createElement("div", { className: "profile-edit-body" }, /* @__PURE__ */ React.createElement("div", { className: "profile-edit-intro" }, /* @__PURE__ */ React.createElement("span", { className: "eyebrow" }, "EDIT PROFILE"), /* @__PURE__ */ React.createElement("h3", null, "Update your details"), /* @__PURE__ */ React.createElement("p", null, "Your name appears across rental receipts and counter records. Your email is your workspace login.")), /* @__PURE__ */ React.createElement("form", { id: "profile-form", className: "profile-form", ref: formRef }, /* @__PURE__ */ React.createElement("div", { className: "profile-form-grid" }, /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("span", null, "Full name ", /* @__PURE__ */ React.createElement("b", { className: "required-star" }, "*")), /* @__PURE__ */ React.createElement(
     "input",
     {
       name: "fullName",
@@ -886,9 +1030,10 @@ function ProfileView({
       minLength: 2,
       maxLength: 150,
       autoComplete: "name",
+      placeholder: "e.g. Juan Dela Cruz",
       required: true
     }
-  )), /* @__PURE__ */ React.createElement("label", null, "Login email", /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("span", null, "Login email ", /* @__PURE__ */ React.createElement("b", { className: "required-star" }, "*")), /* @__PURE__ */ React.createElement(
     "input",
     {
       name: "email",
@@ -896,9 +1041,16 @@ function ProfileView({
       defaultValue: user.email,
       maxLength: 254,
       autoComplete: "email",
+      placeholder: "e.g. rentandplay0@gmail.com",
       required: true
     }
-  )), /* @__PURE__ */ React.createElement("label", null, "Role", /* @__PURE__ */ React.createElement("input", { defaultValue: user.role, disabled: true }), /* @__PURE__ */ React.createElement("small", null, "Account roles are managed separately for security.")), /* @__PURE__ */ React.createElement("p", { className: "profile-error", role: "alert" }), /* @__PURE__ */ React.createElement("div", { className: "profile-actions" }, /* @__PURE__ */ React.createElement(
+  ))), /* @__PURE__ */ React.createElement("label", { className: "profile-form-role-field" }, /* @__PURE__ */ React.createElement("span", null, "Account Role"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      defaultValue: isOwner ? "Store Owner (OWNER)" : "Store Operator (OPERATOR)",
+      disabled: true
+    }
+  ), /* @__PURE__ */ React.createElement("small", null, "System roles are managed separately in Settings > Staff.")), /* @__PURE__ */ React.createElement("div", { className: "profile-form-notice" }, /* @__PURE__ */ React.createElement(Icon, { name: "mail" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Important note on email changes"), /* @__PURE__ */ React.createElement("p", null, "If you change your login email, use your new email the next time you sign into Rent & Play."))), /* @__PURE__ */ React.createElement("p", { className: "profile-error", role: "alert" }), /* @__PURE__ */ React.createElement("div", { className: "profile-actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       className: "secondary",
@@ -907,16 +1059,17 @@ function ProfileView({
       onClick: () => onSetProfileEditing(false)
     },
     "Cancel"
-  ), /* @__PURE__ */ React.createElement("button", { className: "primary", type: "submit" }, "Save changes")))) : /* @__PURE__ */ React.createElement("section", { className: "panel profile-overview" }, /* @__PURE__ */ React.createElement("div", { className: "profile-overview-heading" }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("button", { className: "primary", type: "submit" }, /* @__PURE__ */ React.createElement(Icon, { name: "check" }), " Save changes")))) : /* @__PURE__ */ React.createElement("div", { className: "profile-grid-details" }, /* @__PURE__ */ React.createElement("div", { className: "profile-grid-cell" }, /* @__PURE__ */ React.createElement("div", { className: "profile-cell-header" }, /* @__PURE__ */ React.createElement("span", { className: "profile-cell-icon" }, /* @__PURE__ */ React.createElement(Icon, { name: "users" })), /* @__PURE__ */ React.createElement("span", { className: "profile-cell-label" }, "Full Name")), /* @__PURE__ */ React.createElement("div", { className: "profile-cell-value" }, /* @__PURE__ */ React.createElement("strong", null, user.name))), /* @__PURE__ */ React.createElement("div", { className: "profile-grid-cell" }, /* @__PURE__ */ React.createElement("div", { className: "profile-cell-header" }, /* @__PURE__ */ React.createElement("span", { className: "profile-cell-icon" }, /* @__PURE__ */ React.createElement(Icon, { name: "mail" })), /* @__PURE__ */ React.createElement("span", { className: "profile-cell-label" }, "Login Email")), /* @__PURE__ */ React.createElement("div", { className: "profile-cell-value" }, /* @__PURE__ */ React.createElement("strong", null, user.email), /* @__PURE__ */ React.createElement("span", { className: "profile-verified-badge" }, /* @__PURE__ */ React.createElement(Icon, { name: "check" }), " Verified"))), /* @__PURE__ */ React.createElement("div", { className: "profile-grid-cell" }, /* @__PURE__ */ React.createElement("div", { className: "profile-cell-header" }, /* @__PURE__ */ React.createElement("span", { className: "profile-cell-icon" }, /* @__PURE__ */ React.createElement(Icon, { name: "store" })), /* @__PURE__ */ React.createElement("span", { className: "profile-cell-label" }, "Store Branch")), /* @__PURE__ */ React.createElement("div", { className: "profile-cell-value" }, /* @__PURE__ */ React.createElement("strong", null, "Rent & Play \xB7 Lakewood, Los Ba\xF1os"))), /* @__PURE__ */ React.createElement("div", { className: "profile-grid-cell" }, /* @__PURE__ */ React.createElement("div", { className: "profile-cell-header" }, /* @__PURE__ */ React.createElement("span", { className: "profile-cell-icon" }, /* @__PURE__ */ React.createElement(Icon, { name: "shield" })), /* @__PURE__ */ React.createElement("span", { className: "profile-cell-label" }, "Account Role")), /* @__PURE__ */ React.createElement("div", { className: "profile-cell-value" }, /* @__PURE__ */ React.createElement("strong", null, roleDisplay), /* @__PURE__ */ React.createElement("span", { className: "profile-val-hint" }, isOwner ? "Full store control, rates & reports" : "Counter rentals & returns"))), /* @__PURE__ */ React.createElement("div", { className: "profile-grid-cell profile-grid-cell-full" }, /* @__PURE__ */ React.createElement("div", { className: "profile-cell-header" }, /* @__PURE__ */ React.createElement("span", { className: "profile-cell-icon" }, /* @__PURE__ */ React.createElement(Icon, { name: "qr" })), /* @__PURE__ */ React.createElement("span", { className: "profile-cell-label" }, "Account ID")), /* @__PURE__ */ React.createElement("div", { className: "profile-cell-value" }, /* @__PURE__ */ React.createElement(
     "button",
     {
-      className: "primary",
-      id: "profile-edit",
       type: "button",
-      onClick: () => onSetProfileEditing(true)
+      className: "profile-copy-id-chip",
+      onClick: handleCopyId,
+      title: "Click to copy Account ID"
     },
-    "Edit profile"
-  )), /* @__PURE__ */ React.createElement("dl", { className: "profile-details" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "Full name"), /* @__PURE__ */ React.createElement("dd", null, user.name)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "Login email"), /* @__PURE__ */ React.createElement("dd", null, user.email)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "Account role"), /* @__PURE__ */ React.createElement("dd", null, user.role)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "Account status"), /* @__PURE__ */ React.createElement("dd", null, /* @__PURE__ */ React.createElement("span", { className: "profile-active" }, "Active")))), /* @__PURE__ */ React.createElement("div", { className: "profile-note" }, /* @__PURE__ */ React.createElement("strong", null, "Login details"), /* @__PURE__ */ React.createElement("p", null, "If you change the email address, use the new email the next time you sign in."))));
+    /* @__PURE__ */ React.createElement("code", null, accountCode),
+    /* @__PURE__ */ React.createElement("span", { className: "profile-copy-txt" }, /* @__PURE__ */ React.createElement(Icon, { name: "copy" }), " ", copiedId ? "Copied!" : "Copy")
+  ))))));
 }
 
 // src/react/WorkspaceLayout.jsx
@@ -1349,6 +1502,7 @@ function WorkspaceShell({
   }
   const showNotificationDot = !unreadCount && !notificationsOpen && Boolean(notificationFingerprint) && notificationFingerprint !== notificationsSeen;
   const mobileToggleLabel = isMobileViewport ? mobileDrawerOpen ? "Close navigation" : "Open navigation" : sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar";
+  const userAvatar = user?.avatar || (typeof window !== "undefined" && window.localStorage ? localStorage.getItem(`rent_play_avatar_${user?.id || user?.email || "active"}`) : "");
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("a", { className: "skip-link", href: "#workspace-content" }, "Skip to main content"), /* @__PURE__ */ React.createElement("div", { className: `workspace${sidebarCollapsed ? " sidebar-collapsed" : ""}` }, /* @__PURE__ */ React.createElement(
     "aside",
     {
@@ -1504,7 +1658,7 @@ function WorkspaceShell({
           }
         }
       },
-      /* @__PURE__ */ React.createElement("span", { className: "avatar" }, initials(user.name)),
+      /* @__PURE__ */ React.createElement("span", { className: "avatar" }, userAvatar ? /* @__PURE__ */ React.createElement("img", { src: userAvatar, alt: user.name, className: "avatar-img" }) : initials(user.name)),
       /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, user.name), /* @__PURE__ */ React.createElement("small", null, user.role)),
       /* @__PURE__ */ React.createElement("span", { className: "nav-tooltip", "aria-hidden": "true" }, "Profile")
     ))
@@ -1524,17 +1678,20 @@ function WorkspaceShell({
       }
     },
     /* @__PURE__ */ React.createElement(Icon, { name: "menu" })
-  ), /* @__PURE__ */ React.createElement("div", { className: "top-actions" }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { className: "top-actions" }, /* @__PURE__ */ React.createElement("div", { className: "unified-top-pill", role: "toolbar", "aria-label": "Quick actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
-      className: "text-button",
+      className: `top-pill-btn top-pill-refresh${manualRefreshPending ? " spinning" : ""}`,
       id: "refresh",
+      type: "button",
       disabled: manualRefreshPending,
       "aria-busy": manualRefreshPending ? "true" : void 0,
+      "aria-label": manualRefreshPending ? "Refreshing data\u2026" : "Refresh data",
+      title: manualRefreshPending ? "Refreshing\u2026" : "Refresh",
       onClick: onManualRefresh
     },
-    manualRefreshPending ? "Refreshing\u2026" : "Refresh"
-  ), /* @__PURE__ */ React.createElement(
+    /* @__PURE__ */ React.createElement(Icon, { name: "refresh" })
+  ), /* @__PURE__ */ React.createElement("span", { className: "top-pill-sep", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement(
     "div",
     {
       className: "notification-menu",
@@ -1548,7 +1705,7 @@ function WorkspaceShell({
       {
         ref: notificationBellRef,
         type: "button",
-        className: "icon-button notification",
+        className: "top-pill-btn top-pill-bell notification",
         id: "notifications",
         "aria-label": "View notifications",
         "aria-expanded": notificationsOpen,
@@ -1587,7 +1744,7 @@ function WorkspaceShell({
       )),
       /* @__PURE__ */ React.createElement("div", { className: "notification-list", ref: notificationListRef })
     )
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("span", { className: "top-pill-sep", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement(
     "div",
     {
       className: "profile-menu",
@@ -1603,7 +1760,7 @@ function WorkspaceShell({
       "button",
       {
         ref: accountToggleRef,
-        className: "profile-menu-toggle",
+        className: "top-pill-btn top-pill-profile profile-menu-toggle",
         id: "profile-menu-toggle",
         type: "button",
         "aria-label": "Open account menu",
@@ -1611,7 +1768,8 @@ function WorkspaceShell({
         "aria-expanded": accountMenuOpen,
         onClick: handleToggleAccountMenu
       },
-      /* @__PURE__ */ React.createElement("span", { className: "avatar small" }, initials(user.name)),
+      /* @__PURE__ */ React.createElement("span", { className: "avatar small" }, userAvatar ? /* @__PURE__ */ React.createElement("img", { src: userAvatar, alt: "", className: "avatar-img" }) : initials(user.name)),
+      /* @__PURE__ */ React.createElement("span", { className: "top-pill-user-name" }, user.name ? user.name.split(" ")[0] : "Account"),
       /* @__PURE__ */ React.createElement("span", { className: "profile-menu-chevron", "aria-hidden": "true" }, "\u25BE")
     ),
     /* @__PURE__ */ React.createElement(
@@ -1664,10 +1822,10 @@ function WorkspaceShell({
           }
         },
         /* @__PURE__ */ React.createElement(Icon, { name: "out" }),
-        " Logout"
+        " Sign out"
       )
     )
-  ))), /* @__PURE__ */ React.createElement("main", { className: "content", id: "workspace-content", tabIndex: -1 }, /* @__PURE__ */ React.createElement(PageHeading, { page, reportSection }), connectionError ? /* @__PURE__ */ React.createElement("div", { className: "connection-banner dashboard-connection-banner", role: "alert" }, connectionError, data ? " Showing the last successfully loaded records." : "") : null, !data ? /* @__PURE__ */ React.createElement("section", { className: "panel" }, /* @__PURE__ */ React.createElement("div", { className: "empty-state" }, /* @__PURE__ */ React.createElement(Icon, { name: "box" }), /* @__PURE__ */ React.createElement("h3", null, "Waiting for your database"), /* @__PURE__ */ React.createElement("p", null, "Check the backend connection, then select Refresh."))) : page === "Dashboard" ? /* @__PURE__ */ React.createElement(
+  )))), /* @__PURE__ */ React.createElement("main", { className: "content", id: "workspace-content", tabIndex: -1 }, /* @__PURE__ */ React.createElement(PageHeading, { page, reportSection }), connectionError ? /* @__PURE__ */ React.createElement("div", { className: "connection-banner dashboard-connection-banner", role: "alert" }, connectionError, data ? " Showing the last successfully loaded records." : "") : null, !data ? /* @__PURE__ */ React.createElement("section", { className: "panel" }, /* @__PURE__ */ React.createElement("div", { className: "empty-state" }, /* @__PURE__ */ React.createElement(Icon, { name: "box" }), /* @__PURE__ */ React.createElement("h3", null, "Waiting for your database"), /* @__PURE__ */ React.createElement("p", null, "Check the backend connection, then select Refresh."))) : page === "Dashboard" ? /* @__PURE__ */ React.createElement(
     DashboardView,
     {
       data,

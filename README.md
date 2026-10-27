@@ -12,7 +12,7 @@ The Android app source is outside this repository. It and the web dashboard use 
 
 - `apps/web` - Owner/Operator web dashboard
 - `apps/backend` - Shared REST API and business rules
-- `firmware/esp32-terminal` - ESP32 verification terminal firmware
+- `firmware/esp32_terminal` - ESP32 verification terminal firmware (Arduino IDE)
 - `packages/api-contracts` - Shared API schemas/examples
 - `docs` - Proposal, architecture, ERD, API, testing, and defense notes
 - `tests/system` - End-to-end system flow test notes

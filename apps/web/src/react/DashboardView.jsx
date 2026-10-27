@@ -2,6 +2,7 @@ import React from './react-shim.js';
 import {
   Icon,
   CategorySymbol,
+  categoryThemeClass,
   StatusBadge,
   escape,
   money,
@@ -86,7 +87,7 @@ export function DashboardView({
   const openWorkflowModal = () => {
     showModal(
       'Rental workflow',
-      '<p>Review and approve the request, then scan the assigned equipment QR to prepare the unit. At handover, verify the customer rental QR, identity, payment, condition and accessories before confirming release.</p><div class="info-box">The timer starts at physical handover and stops when staff records physical receipt. Inspect returned equipment before making it available again.</div>'
+      '<p><strong>Walk-in Counter Flow:</strong> Approve or create the walk-in rental, scan the assigned equipment QR, inspect condition &amp; accessories, and confirm handover on the <strong>ESP32 Counter Terminal</strong> (or web fallback) to start the timer.</p><p><strong>Resort Stay Delivery Flow:</strong> Scan the unit QR at the shop and confirm <strong>Resort Dispatch on the ESP32 Terminal</strong> (marks unit Out for Delivery while keeping the timer stopped). At the resort villa/gate, scan the customer Rental QR to start the timer.</p><div class="info-box">On return, scanning the equipment QR immediately stops the rental timer and overtime. Final return inspection is confirmed on the ESP32 Counter Terminal before updating inventory availability.</div>'
     );
   };
 
@@ -382,21 +383,29 @@ export function DashboardView({
               <h3>
                 <Icon name="chip" /> ESP32 terminal
               </h3>
-              <span className="offline-dot">Standby</span>
+              <span className={t?.online ? 'online-dot' : 'offline-dot'}>
+                {t?.online ? 'Online' : queue.length > 0 ? 'Pending' : 'Counter Kiosk'}
+              </span>
             </div>
             <div className="device">
-              <span>{t?.terminal_code || 'HARDWARE NOT CONNECTED'}</span>
-              <strong>ON STANDBY</strong>
-              <small>{t?.name || 'Ready for future hardware setup'}</small>
+              <span>{t?.terminal_code || 'TERM-01'}</span>
+              <strong>
+                {queue.length > 0
+                  ? 'AWAITING BUTTON PRESS'
+                  : t?.online
+                    ? 'ONLINE & READY'
+                    : 'COUNTER STATION READY'}
+              </strong>
+              <small>{t?.name || 'Counter Kiosk Verification Station'}</small>
               <div className="device-led" />
             </div>
             <div className="terminal-meta">
-              <span>Saved pending attempts</span>
+              <span>Pending terminal requests</span>
               <strong>{queue.length}</strong>
             </div>
             <p className="terminal-note">
-              <Icon name="chip" /> Admin confirms current releases and returns. The terminal is
-              reserved for later hardware integration.
+              <Icon name="chip" /> Counter OLED, LED/buzzer &amp; physical GPIO 35 button verify
+              walk-in handovers, resort dispatches, and return inspections.
             </p>
             <button
               className="secondary wide"
@@ -417,7 +426,7 @@ export function DashboardView({
                   data-category={i}
                   onClick={() => onNavigate('Inventory', false, 'All rentals', c.name)}
                 >
-                  <span className="category-symbol">
+                  <span className={`category-symbol ${categoryThemeClass(c.name)}`}>
                     <CategorySymbol category={c.name} />
                   </span>
                   <span>

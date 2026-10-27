@@ -258,7 +258,7 @@ test('dispatchRentalToTerminal bridges walk-in handover, resort shop dispatch, a
   assert.equal(returnDispatch.request.transaction_type, 'RETURN');
 
   await confirm(db, returnDispatch.request, new Date(returnReceiptTime.getTime() + 5000));
-  assert.equal(db.data('rentals', walkin.rental.id).status, 'COMPLETED');
+  assert.equal(db.data('rentals', walkin.rental.id).status, 'COMPLETED'); assert.equal(db.data('rentals', walkin.rental.id).latest_terminal_request_status, 'CONFIRMED');
   assert.equal(db.data('items', 'item-1').status, 'AVAILABLE');
 
   // 3. Resort Delivery APPROVED booking -> ESP32 SHOP_DISPATCH -> marks OUT_FOR_DELIVERY without starting timer
@@ -277,6 +277,6 @@ test('dispatchRentalToTerminal bridges walk-in handover, resort shop dispatch, a
   await confirm(db, shopDispatch.request, new Date(deliveryTime.getTime() + 5000));
   const dispatchedRental = db.data('rentals', resortBooking.rental.id);
   assert.equal(dispatchedRental.status, 'APPROVED');
-  assert.equal(dispatchedRental.delivery_status, 'OUT_FOR_DELIVERY');
+  assert.equal(dispatchedRental.delivery_status, 'OUT_FOR_DELIVERY'); assert.equal(dispatchedRental.latest_terminal_request_status, 'CONFIRMED');
   assert.equal(dispatchedRental.start_at, null);
 });

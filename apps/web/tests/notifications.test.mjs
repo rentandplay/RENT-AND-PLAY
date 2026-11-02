@@ -84,3 +84,18 @@ test('notification text and booking targets are escaped before being displayed',
     { escape: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'), formatDate: value => value });
   assert.doesNotMatch(html, /<script>|<img|data-notification-rental=""/); assert.match(html, /&lt;script&gt;/);
 });
+
+test('security notifications render shield badge and fallback to Settings page when no rental_id is linked', () => {
+  const html = renderRentalNotifications({
+    notifications: [
+      event('sec-1', { type: 'SECURITY_BRUTE_FORCE_LOGIN', category: 'SECURITY', title: 'Repeated failed logins', message: 'Multiple failed sign-in attempts detected.', rental_id: null, rental_code: null })
+    ]
+  }, {
+    escape: value => String(value ?? ''),
+    formatDate: value => value
+  });
+  assert.match(html, /notification-security-item/);
+  assert.match(html, /data-notification-page="Settings"/);
+  assert.match(html, /🛡/);
+});
+

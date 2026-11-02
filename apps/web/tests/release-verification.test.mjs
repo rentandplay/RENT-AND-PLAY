@@ -112,3 +112,21 @@ test('going back requires a fresh QR verification before confirming release', as
   assert.equal(await v.verifyBooking(), true);
   assert.deepEqual(v.releaseCodes(), { transactionCode: 'booking-qr' });
 });
+
+test('6-digit rolling verification PIN is accepted without requiring a manual lookup reason', async () => {
+  const calls = [];
+  const v = createReleaseVerification({
+    rentalId: 'bingo-booking',
+    api: async (path, options) => {
+      const input = JSON.parse(options.body);
+      calls.push({ path, input });
+      return { ...result(), verification_mode: 'ROLLING_PIN' };
+    }
+  });
+  v.update('transactionCode', '482910');
+  assert.equal(v.snapshot().manualLookup, false);
+  assert.equal(await v.verifyBooking(), true);
+  assert.equal(v.snapshot().verificationMode, 'ROLLING_PIN');
+  assert.deepEqual(calls.at(-1).input, { transactionCode: '482910' });
+});
+

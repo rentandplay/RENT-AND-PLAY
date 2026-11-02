@@ -97,3 +97,24 @@ test('non-owners see read-only Terms & Conditions and cannot edit them', () => {
   assert.ok(html.includes('ReadOnly Rental Policy'));
 });
 
+
+test('account & security tab renders active sessions management and real-time security alerts feed', () => {
+  const html = render({
+    tab: 'account',
+    activeSessions: [
+      { id: 'sess-1', device_label: 'Chrome on Windows', ip: '203.0.113.10', last_active_at: '2026-10-07T02:00:00Z', is_current: true },
+      { id: 'sess-2', device_label: 'Safari on iOS', ip: '203.0.113.25', last_active_at: '2026-10-07T01:40:00Z', is_current: false }
+    ],
+    securityAlerts: [
+      { id: 'alert-1', title: 'Flagged payment proof', message: 'Duplicate reference detected on R-009.', severity: 'HIGH', rental_id: 'r-9', rental_code: 'R-009', created_at: '2026-10-07T02:05:00Z' }
+    ]
+  });
+  assert.ok(html.includes('id="settings-active-sessions-card"'));
+  assert.ok(html.includes('Chrome on Windows'));
+  assert.ok(html.includes('Current session'));
+  assert.ok(html.includes('data-revoke-session="sess-2"'));
+  assert.ok(html.includes('id="settings-revoke-other-sessions"'));
+  assert.ok(html.includes('id="settings-security-alerts-card"'));
+  assert.ok(html.includes('Flagged payment proof'));
+  assert.ok(html.includes('data-security-open-rental="r-9"'));
+});

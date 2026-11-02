@@ -13761,3 +13761,657 @@ input[aria-invalid="true"]{border-color:#b42318!important}
   font-weight: 700;
   font-size: 11px;
 }
+
+
+/* =========================================================================
+   Security Features (Active Sessions, Payment Proof Check, Rolling QR, Alerts)
+   ========================================================================= */
+
+.active-sessions-list,
+.security-alerts-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.active-session-row,
+.security-alert-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.active-session-row.is-current {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+}
+
+.active-session-info,
+.security-alert-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.active-session-info strong,
+.security-alert-head strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.active-session-info small,
+.security-alert-body p,
+.security-alert-meta span {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+}
+
+.current-session-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #059669;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.security-alert-item.severity-critical,
+.security-alert-item.severity-high {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.security-alert-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.security-severity-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.security-severity-badge.severity-critical,
+.security-severity-badge.severity-high {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+
+.security-alert-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.security-proof-banner {
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 8px 0 12px;
+  border: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.security-proof-banner strong {
+  font-size: 13px;
+}
+
+.security-proof-banner small {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.security-proof-clean {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #065f46;
+}
+
+.security-proof-flagged {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
+.security-proof-flags {
+  margin: 4px 0 0 18px;
+  padding: 0;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rental-payment-proof-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+.rental-payment-proof-watermark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+  background: repeating-linear-gradient(
+    -28deg,
+    rgba(15, 23, 42, 0.18) 0px,
+    rgba(15, 23, 42, 0.18) 28px,
+    transparent 28px,
+    transparent 64px
+  );
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+  text-align: center;
+  padding: 12px;
+}
+
+.rolling-qr-panel {
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: #f8fafc;
+}
+
+.rolling-qr-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rolling-qr-header div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rolling-qr-live-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+  flex-wrap: wrap;
+}
+
+.rolling-qr-image {
+  width: 120px;
+  height: 120px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  padding: 4px;
+}
+
+.rolling-qr-pin-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.rolling-pin-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: #ea580c;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  padding: 6px 12px;
+  display: inline-block;
+  width: fit-content;
+}
+
+.rolling-qr-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.verification-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #e0f2fe;
+  color: #0369a1;
+  margin-left: 6px;
+}
+
+[data-theme="dark"] .active-session-row,
+[data-theme="dark"] .security-alert-item,
+[data-theme="dark"] .rolling-qr-panel {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+[data-theme="dark"] .active-session-row.is-current {
+  background: rgba(5, 150, 105, 0.15);
+  border-color: #059669;
+}
+
+[data-theme="dark"] .active-session-info strong,
+[data-theme="dark"] .security-alert-head strong {
+  color: #f8fafc;
+}
+
+
+/* ==========================================================================
+   Counter Command Bar & Fast-Track Actions
+   ========================================================================== */
+.counter-command-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.command-bar-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.command-bar-btn:hover {
+  transform: translateY(-1px);
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.command-bar-btn.primary {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  border-color: #059669;
+  color: #ffffff;
+}
+
+.command-bar-btn.primary .btn-icon-bubble {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.command-bar-btn.primary small {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.btn-icon-bubble {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #334155;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.btn-icon-bubble svg {
+  width: 18px;
+  height: 18px;
+}
+
+.btn-text-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.btn-text-wrap strong {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.btn-text-wrap small {
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.2;
+}
+
+.command-bar-btn.terminal-btn {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.btn-icon-bubble.terminal-pulse {
+  background: #e0f2fe;
+  color: #0284c7;
+  position: relative;
+}
+
+/* ==========================================================================
+   Real-Time ESP32 Pending Verification Banner
+   ========================================================================== */
+.terminal-live-action-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  border: 1px solid #fde68a;
+  border-left: 5px solid #d97706;
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.12);
+  animation: bannerFadeIn 0.3s ease-out;
+}
+
+@keyframes bannerFadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.terminal-banner-pulse {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #f59e0b;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.terminal-banner-pulse svg {
+  width: 22px;
+  height: 22px;
+}
+
+.terminal-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.terminal-banner-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.terminal-banner-badge {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #b45309;
+}
+
+.terminal-queue-count {
+  font-size: 10px;
+  font-weight: 700;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.terminal-banner-body strong {
+  font-size: 14px;
+  color: #78350f;
+  display: block;
+}
+
+.terminal-banner-body p {
+  font-size: 12px;
+  color: #92400e;
+  margin: 3px 0 0;
+  line-height: 1.35;
+}
+
+.terminal-banner-body code {
+  background: rgba(255, 255, 255, 0.8);
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.btn-open-terminal-gate {
+  white-space: nowrap;
+  background: #d97706 !important;
+  color: #ffffff !important;
+  border: none !important;
+  font-weight: 700 !important;
+  padding: 9px 16px !important;
+  border-radius: 8px !important;
+  cursor: pointer;
+}
+
+.btn-open-terminal-gate:hover {
+  background: #b45309 !important;
+}
+
+/* ==========================================================================
+   Fulfillment Tags & Due Status Enhancements
+   ========================================================================== */
+.customer-cell-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fulfillment-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-top: 2px;
+}
+
+.fulfillment-tag.shop {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.fulfillment-tag.resort {
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+.due-overdue-alert {
+  color: #dc2626 !important;
+  font-weight: 700 !important;
+}
+
+.due-soon-alert {
+  color: #d97706 !important;
+  font-weight: 700 !important;
+}
+
+/* ==========================================================================
+   Cash Drawer / Shift Closeout (Z-Reading)
+   ========================================================================== */
+.cash-drawer-summary {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.cash-drawer-summary .eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.05em;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.cash-expected-amount {
+  font-size: 24px;
+  font-weight: 800;
+  color: #0f172a;
+  display: block;
+}
+
+.cash-drawer-summary small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.cash-denominations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.cash-denominations-grid label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cash-denominations-grid input {
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.cash-total-override {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.cash-variance-display {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.cash-variance-display.is-balanced {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+}
+
+.cash-variance-display.is-over {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+}
+
+.cash-variance-display.is-short {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+/* ==========================================================================
+   Dark Theme Adjustments
+   ========================================================================== */
+[data-theme="dark"] .command-bar-btn {
+  background: #1e293b;
+  border-color: #334155;
+  color: #f1f5f9;
+}
+
+[data-theme="dark"] .command-bar-btn:hover {
+  background: #334155;
+  border-color: #475569;
+}
+
+[data-theme="dark"] .btn-icon-bubble {
+  background: #0f172a;
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .terminal-live-action-banner {
+  background: linear-gradient(135deg, #451a03 0%, #78350f 100%);
+  border-color: #92400e;
+  border-left-color: #f59e0b;
+}
+
+[data-theme="dark"] .terminal-banner-body strong {
+  color: #fef3c7;
+}
+
+[data-theme="dark"] .terminal-banner-body p {
+  color: #fde68a;
+}
+
+[data-theme="dark"] .terminal-banner-body code {
+  background: rgba(0, 0, 0, 0.4);
+  color: #fef3c7;
+}
+
+[data-theme="dark"] .cash-drawer-summary {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+[data-theme="dark"] .cash-expected-amount {
+  color: #f8fafc;
+}

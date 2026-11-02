@@ -44,6 +44,35 @@ function StatCard({ label, value, note, glyph, color, page, target = '', filter 
   );
 }
 
+function getDueInfo(r) {
+  if (['APPROVED', 'PENDING_ADMIN_APPROVAL'].includes(r.status)) {
+    return { badge: 'Starts at handoff', isOverdue: false, isDueSoon: false };
+  }
+  if (!r.due_at) return { badge: 'Philippine time', isOverdue: false, isDueSoon: false };
+  const due = new Date(r.due_at).getTime();
+  const now = Date.now();
+  if (isNaN(due)) return { badge: 'Philippine time', isOverdue: false, isDueSoon: false };
+  const diffMs = due - now;
+  if (diffMs < 0) {
+    const hours = Math.max(1, Math.floor(-diffMs / 3600000));
+    const mins = Math.floor((-diffMs % 3600000) / 60000);
+    return {
+      badge: `Overdue by ${hours}h ${mins > 0 ? `${mins}m` : ''}`.trim(),
+      isOverdue: true,
+      isDueSoon: false
+    };
+  }
+  if (diffMs <= 2 * 3600000) {
+    const mins = Math.max(1, Math.floor(diffMs / 60000));
+    return {
+      badge: `Due in ${mins}m`,
+      isOverdue: false,
+      isDueSoon: true
+    };
+  }
+  return { badge: 'Philippine time', isOverdue: false, isDueSoon: false };
+}
+
 export function DashboardView({
   data,
   filter,
@@ -55,7 +84,10 @@ export function DashboardView({
   period,
   onPeriodChange,
   onNavigate,
-  showModal
+  showModal,
+  workspaceUI,
+  api,
+  toast
 }) {
   const s = data.stats;
   const pageSize = 5;
@@ -117,9 +149,137 @@ export function DashboardView({
   // Terminal info
   const t = data.terminals[0];
   const queue = t ? data.pending.filter(p => p.terminal_code === t.terminal_code) : [];
+  const firstPending = queue[0] || data.pending?.[0];
 
   return (
     <>
+      {/* 1. Counter Command Bar */}
+      <section className="counter-command-bar" role="toolbar" aria-label="Counter command actions">
+        <button
+          type="button"
+          className="command-bar-btn primary"
+          id="cmd-new-rental"
+          onClick={() => {
+            if (workspaceUI?.openWalkInRental) {
+              workspaceUI.openWalkInRental();
+            } else {
+              onNavigate('Rentals', false, 'All rentals', '', '');
+            }
+          }}
+        >
+          <span className="btn-icon-bubble"><Icon name="plus" /></span>
+          <div className="btn-text-wrap">
+            <strong>+ New Walk-in Rental</strong>
+            <small>Quick Counter Checkout</small>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className="command-bar-btn"
+          id="cmd-scan-qr"
+          onClick={() => {
+            if (workspaceUI?.openRentalLookup) {
+              workspaceUI.openRentalLookup();
+            } else {
+              onNavigate('Rentals');
+            }
+          }}
+        >
+          <span className="btn-icon-bubble"><Icon name="search" /></span>
+          <div className="btn-text-wrap">
+            <strong>Scan QR / Lookup</strong>
+            <small>Camera / Barcode Scanner</small>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className="command-bar-btn"
+          id="cmd-quick-return"
+          onClick={() => {
+            if (workspaceUI?.openQuickReturn) {
+              workspaceUI.openQuickReturn();
+            } else {
+              onNavigate('Returns');
+            }
+          }}
+        >
+          <span className="btn-icon-bubble"><Icon name="undo" /></span>
+          <div className="btn-text-wrap">
+            <strong>Quick Return</strong>
+            <small>Stop Timer &amp; Inspect</small>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className="command-bar-btn terminal-btn"
+          id="cmd-ping-terminal"
+          title="Sends test chime &amp; OLED alert to the ESP32 terminal"
+          onClick={async () => {
+            try {
+              if (api) {
+                await api('/terminals/test-ping', {
+                  method: 'POST',
+                  body: JSON.stringify({ terminalCode: t?.terminal_code || 'TERM-01' })
+                });
+                toast?.('ESP32 Counter Station pinged! Buzzer chime and OLED alert triggered.');
+              } else {
+                toast?.('Counter station is ready.');
+              }
+            } catch (err) {
+              toast?.(err.message || 'Counter station test ping triggered.');
+            }
+          }}
+        >
+          <span className="btn-icon-bubble terminal-pulse"><Icon name="chip" /></span>
+          <div className="btn-text-wrap">
+            <strong>Ping ESP32 Station</strong>
+            <small>{t?.online ? 'Online & polling' : 'Station check'}</small>
+          </div>
+        </button>
+      </section>
+
+      {/* 2. Real-Time ESP32 Pending Verification Banner */}
+      {queue.length > 0 && firstPending ? (
+        <aside className="terminal-live-action-banner" role="alert">
+          <div className="terminal-banner-pulse" aria-hidden="true">
+            <span className="pulse-ring" />
+            <Icon name="chip" />
+          </div>
+          <div className="terminal-banner-body">
+            <div className="terminal-banner-badge-row">
+              <span className="terminal-banner-badge">AWAITING ESP32 HARDWARE CONFIRMATION</span>
+              <span className="terminal-queue-count">{queue.length} Pending at Counter</span>
+            </div>
+            <strong>
+              {firstPending.item_name || 'Equipment'} &middot; {firstPending.customer || 'Customer'}
+            </strong>
+            <p>
+              Code: <code>{firstPending.rental_code || firstPending.verification_code || firstPending.id}</code> &middot; 
+              Station: <strong>{firstPending.terminal_code || 'TERM-01'}</strong> &middot; 
+              Press physical <strong>GPIO 35 Button</strong> on the counter terminal to finalize transaction.
+            </p>
+          </div>
+          <div className="terminal-banner-actions">
+            <button
+              type="button"
+              className="primary btn-open-terminal-gate"
+              onClick={() => {
+                if (workspaceUI?.openHandoff) {
+                  workspaceUI.openHandoff(firstPending, data.rentals.find(r => String(r.id) === String(firstPending.rental_id)));
+                } else {
+                  onNavigate('ESP32 terminal');
+                }
+              }}
+            >
+              Open Verification Gate →
+            </button>
+          </div>
+        </aside>
+      ) : null}
+
       <div className="stats">
         <StatCard
           label="Active rentals"
@@ -237,6 +397,8 @@ export function DashboardView({
                       const itemCategory =
                         data.items.find(i => String(i.id) === String(r.item_id))?.category || '';
                       const label = r.rental_code || r.item_name;
+                      const dueInfo = getDueInfo(r);
+                      const isResort = r.fulfillment_mode === 'DELIVERY' || Boolean(r.delivery_location);
                       return (
                         <tr
                           key={r.id}
@@ -260,12 +422,27 @@ export function DashboardView({
                             </div>
                           </td>
                           <td>
-                            <span className="mini-avatar">{initials(r.customer)}</span>
-                            {r.customer}
+                            <div className="customer-cell-wrap">
+                              <span className="mini-avatar">{initials(r.customer)}</span>
+                              <div>
+                                <span>{r.customer}</span>
+                                {isResort ? (
+                                  <small className="fulfillment-tag resort" title={r.delivery_location || 'Resort delivery'}>
+                                    Resort: {r.delivery_location ? r.delivery_location.split(',')[0].trim() : 'Villa'}
+                                  </small>
+                                ) : (
+                                  <small className="fulfillment-tag shop" title="Shop counter handover">
+                                    Shop Counter
+                                  </small>
+                                )}
+                              </div>
+                            </div>
                           </td>
                           <td>
                             <strong>{formatDate(r.due_at)}</strong>
-                            <small>Philippine time</small>
+                            <small className={dueInfo.isOverdue ? 'due-overdue-alert' : dueInfo.isDueSoon ? 'due-soon-alert' : ''}>
+                              {dueInfo.badge}
+                            </small>
                           </td>
                           <td>
                             <StatusBadge status={r.displayStatus} />

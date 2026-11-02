@@ -2,7 +2,7 @@ import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
 import { calculateDetailedAnalytics, forecastScenario } from './analytics-insights.js';
 import { renderAnalyticsReport } from './analytics-report.js';
-import { renderSettings, settingsTabs, defaultTermsAndConditions, defaultRentalTerms } from './settings-ui.js';
+import { renderSettings, settingsTabs, defaultTermsAndConditions, defaultRentalTerms, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
 import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
 import { actualReturnTime, chargeCell, enrichVerification, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderAdminHandoff, renderRequestHistory, savedCharges } from './transaction-records.js';
@@ -34,6 +34,7 @@ export function createWorkspaceUI(h) {
   let preferences = readPreferences();
   try { preferences = readPreferences(localStorage); } catch { }
   let settingsTab = 'business', businessDraft = null, businessDirty = false, businessSaving = false, preferencesDraft = null;
+  let activeSessions = null, securityAlerts = null, securityLoading = false;
   const analyticsSelection = { period: preferences.reportPeriod, from: '', to: '', categoryId: '', itemId: '', groupBy: preferences.reportGrouping };
   const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', forecastScenario: 'baseline', recommendationType: 'all', details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
@@ -369,7 +370,7 @@ export function createWorkspaceUI(h) {
   }
 
   function settings(user, appearance) {
-    return renderSettings({ model, user, appearance, tab: settingsTab, draft: businessDraft, dirty: businessDirty, saving: businessSaving, preferences: preferencesDraft || preferences, users: () => users(user.id) }, { escape: e, icon });
+    return renderSettings({ model, user, appearance, tab: settingsTab, draft: businessDraft, dirty: businessDirty, saving: businessSaving, preferences: preferencesDraft || preferences, users: () => users(user.id), activeSessions, securityAlerts }, { escape: e, icon, formatDate });
   }
 
   function users(currentUserId) {
@@ -588,6 +589,60 @@ export function createWorkspaceUI(h) {
       }
       catch (problem) { message.textContent = problem.message; button.disabled = false; }
     });
+    const loadAccountSecurityData = async (force = false) => {
+      if (securityLoading && !force) return;
+      securityLoading = true;
+      try {
+        const [sessionsResp, alertsResp] = await Promise.all([
+          api('/auth/sessions').catch(() => ({ sessions: [] })),
+          api('/security/alerts?limit=15').catch(() => ({ alerts: [] }))
+        ]);
+        activeSessions = sessionsResp.sessions || [];
+        securityAlerts = alertsResp.alerts || [];
+        rerender();
+      } finally {
+        securityLoading = false;
+      }
+    };
+    if (page === 'Settings' && settingsTab === 'account' && activeSessions === null && !securityLoading) {
+      loadAccountSecurityData(false);
+    }
+    document.querySelector('#settings-refresh-sessions')?.addEventListener('click', () => loadAccountSecurityData(true));
+    document.querySelector('#settings-revoke-other-sessions')?.addEventListener('click', async event => {
+      const button = event.currentTarget, statusNote = document.querySelector('[data-sessions-status]');
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        if (!await confirmAction({ title: 'Sign out of all other devices?', description: 'All other signed-in browsers and devices on your account will be signed out immediately. This browser will stay signed in.', confirmLabel: 'Yes, sign out other devices', danger: true }) || !button.isConnected) { button.disabled = false; return; }
+        const result = await api('/auth/sessions/revoke', { method: 'POST', body: JSON.stringify({ allOthers: true }) });
+        activeSessions = result.sessions || [];
+        toast(result.revokedCount ? `Signed out of ${result.revokedCount} other session(s).` : 'No other active sessions found.');
+        await loadAccountSecurityData(true);
+      } catch (problem) {
+        if (statusNote) statusNote.textContent = problem.message;
+        button.disabled = false;
+      }
+    });
+    document.querySelectorAll('[data-revoke-session]').forEach(button => {
+      button.onclick = async () => {
+        if (button.disabled) return;
+        const sessionId = button.dataset.revokeSession;
+        button.disabled = true;
+        try {
+          if (!await confirmAction({ title: 'Sign out this device session?', description: 'This device will be signed out of your Rent & Play account.', confirmLabel: 'Sign out device', danger: true }) || !button.isConnected) { button.disabled = false; return; }
+          const result = await api('/auth/sessions/revoke', { method: 'POST', body: JSON.stringify({ sessionId }) });
+          activeSessions = result.sessions || [];
+          toast('Device session signed out.');
+          await loadAccountSecurityData(true);
+        } catch (problem) {
+          toast(problem.message);
+          button.disabled = false;
+        }
+      };
+    });
+    document.querySelectorAll('[data-security-open-rental]').forEach(button => {
+      button.onclick = () => openTransaction(button.dataset.securityOpenRental);
+    });
     document.querySelector('#user-add')?.addEventListener('click', userForm);
     document.querySelectorAll('[data-user-toggle]').forEach(button => button.onclick = async () => {
       if (button.disabled) return;
@@ -642,5 +697,5 @@ export function createWorkspaceUI(h) {
     if(!row){const result=await api('/rentals/lookup',{method:'POST',body:JSON.stringify({kind:'RENTAL',code:String(id)})});row=result.rental;model.transactions.push(row);}
     transactionDetails(row);
   }
-  return { load, refresh, invalidate, render, bind, openTransaction, openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; settingsTab = 'business'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
+  return { load, refresh, invalidate, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: () => financeUI.cashDrawerForm(), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; settingsTab = 'business'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
 }

@@ -1,5 +1,6 @@
 import { recordCode } from './record-codes.js';
 import { getMx10Printer } from './mx10-printer.js';
+import { renderWalkInReceipt } from './walk-in-receipt.js';
 
 const clean = value => String(value ?? '').replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim();
 const escapeXml = value => clean(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
@@ -99,7 +100,7 @@ export function openBluetoothReceipt(row, h, back, openPdf) {
       <section class="receipt-preview-panel" aria-label="Receipt preview"><div class="receipt-section-heading"><h3>Receipt preview</h3><span>Approx. ${e(Math.ceil(receipt.lengthMm + 5))} mm long</span></div><div class="receipt-preview-viewport" tabindex="0" aria-label="Scroll receipt preview"><div class="receipt-paper"><img alt="Thermal rental receipt preview" src="data:image/svg+xml;charset=utf-8,${e(encodeURIComponent(receipt.svg))}"/></div></div><p class="receipt-preview-caption">Side margins keep the receipt clear and readable.</p></section>
       <aside class="receipt-print-controls"><section class="receipt-device-card"><div class="receipt-device-heading"><span class="receipt-device-icon">${glyph('print')}</span><div><h3>Bluetooth printer</h3><p>Connect your receipt printer.</p></div></div><div class="receipt-connection" data-receipt-connection><span class="receipt-status-dot" aria-hidden="true"></span><p data-receipt-printer-state role="status" aria-live="polite"></p></div><p class="receipt-connection-help" data-receipt-printer-help></p><button type="button" class="secondary receipt-connect" data-receipt-connect>Connect printer</button><progress data-receipt-progress max="100" value="0" hidden aria-label="Receipt print progress"></progress><div class="receipt-message" data-receipt-print-message role="status" aria-live="polite" hidden></div></section>
       <section class="receipt-roll-card"><h3>Paper setup</h3><dl><div><dt>Paper type</dt><dd>Continuous roll</dd></div></dl><p>Load the roll with the thermal side facing the print head. Leave enough paper at the tear edge before printing.</p></section></aside>
-    </div><footer class="receipt-print-footer"><button type="button" class="text-button" data-receipt-back>Back to rental</button><div>${openPdf ? '<button type="button" class="secondary" data-receipt-pdf-fallback>Save / print PDF</button>' : ''}<button type="button" class="primary" data-receipt-bluetooth-print disabled>${glyph('print')}Print via Bluetooth</button></div></footer>
+    </div><footer class="receipt-print-footer"><button type="button" class="text-button" data-receipt-back>Back to rental</button><div>${openPdf ? '<button type="button" class="secondary" data-receipt-pdf-fallback>Save / print PDF</button>' : ''}<button type="button" class="secondary" data-receipt-browser-print>${glyph('print')}Browser / USB Print</button><button type="button" class="primary" data-receipt-bluetooth-print disabled>${glyph('print')}Print via Bluetooth</button></div></footer>
   </section>`);
   const panel = modal.querySelector('[data-thermal-receipt]'), message = panel.querySelector('[data-receipt-print-message]'), connect = panel.querySelector('[data-receipt-connect]'), print = panel.querySelector('[data-receipt-bluetooth-print]'), progress = panel.querySelector('[data-receipt-progress]');
   const supported = Boolean(window.isSecureContext && navigator.bluetooth);
@@ -128,6 +129,22 @@ export function openBluetoothReceipt(row, h, back, openPdf) {
   modal.addEventListener('cancel', preventBusyClose);
   panel.querySelector('[data-receipt-back]').onclick = () => { if (busy) return; cleanup(); back(); };
   panel.querySelector('[data-receipt-pdf-fallback]')?.addEventListener('click', () => { if (busy) return; cleanup(); openPdf(); });
+  panel.querySelector('[data-receipt-browser-print]')?.addEventListener('click', () => {
+    if (busy) return;
+    try {
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(renderWalkInReceipt(row, h));
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => printWindow.print(), 250);
+      } else {
+        window.print();
+      }
+    } catch {
+      window.print();
+    }
+  });
   connect.onclick = async () => { if (busy) return; showMessage(''); try { await printer.connect(); } catch (error) { if (active && panel.isConnected) showMessage(error.message); } };
   print.onclick = async () => {
     if (busy || print.disabled) return;

@@ -611,6 +611,34 @@ function StatCard({ label, value, note, glyph, color, page, target = "", filter 
     /* @__PURE__ */ React.createElement("small", null, note)
   );
 }
+function getDueInfo(r) {
+  if (["APPROVED", "PENDING_ADMIN_APPROVAL"].includes(r.status)) {
+    return { badge: "Starts at handoff", isOverdue: false, isDueSoon: false };
+  }
+  if (!r.due_at) return { badge: "Philippine time", isOverdue: false, isDueSoon: false };
+  const due = new Date(r.due_at).getTime();
+  const now = Date.now();
+  if (isNaN(due)) return { badge: "Philippine time", isOverdue: false, isDueSoon: false };
+  const diffMs = due - now;
+  if (diffMs < 0) {
+    const hours = Math.max(1, Math.floor(-diffMs / 36e5));
+    const mins = Math.floor(-diffMs % 36e5 / 6e4);
+    return {
+      badge: `Overdue by ${hours}h ${mins > 0 ? `${mins}m` : ""}`.trim(),
+      isOverdue: true,
+      isDueSoon: false
+    };
+  }
+  if (diffMs <= 2 * 36e5) {
+    const mins = Math.max(1, Math.floor(diffMs / 6e4));
+    return {
+      badge: `Due in ${mins}m`,
+      isOverdue: false,
+      isDueSoon: true
+    };
+  }
+  return { badge: "Philippine time", isOverdue: false, isDueSoon: false };
+}
 function DashboardView({
   data,
   filter,
@@ -622,7 +650,10 @@ function DashboardView({
   period,
   onPeriodChange,
   onNavigate,
-  showModal
+  showModal,
+  workspaceUI,
+  api,
+  toast
 }) {
   const s = data.stats;
   const pageSize = 5;
@@ -674,7 +705,95 @@ function DashboardView({
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const t = data.terminals[0];
   const queue = t ? data.pending.filter((p) => p.terminal_code === t.terminal_code) : [];
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "stats" }, /* @__PURE__ */ React.createElement(
+  const firstPending = queue[0] || data.pending?.[0];
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("section", { className: "counter-command-bar", role: "toolbar", "aria-label": "Counter command actions" }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "command-bar-btn primary",
+      id: "cmd-new-rental",
+      onClick: () => {
+        if (workspaceUI?.openWalkInRental) {
+          workspaceUI.openWalkInRental();
+        } else {
+          onNavigate("Rentals", false, "All rentals", "", "");
+        }
+      }
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble" }, /* @__PURE__ */ React.createElement(Icon, { name: "plus" })),
+    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "+ New Walk-in Rental"), /* @__PURE__ */ React.createElement("small", null, "Quick Counter Checkout"))
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "command-bar-btn",
+      id: "cmd-scan-qr",
+      onClick: () => {
+        if (workspaceUI?.openRentalLookup) {
+          workspaceUI.openRentalLookup();
+        } else {
+          onNavigate("Rentals");
+        }
+      }
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble" }, /* @__PURE__ */ React.createElement(Icon, { name: "search" })),
+    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Scan QR / Lookup"), /* @__PURE__ */ React.createElement("small", null, "Camera / Barcode Scanner"))
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "command-bar-btn",
+      id: "cmd-quick-return",
+      onClick: () => {
+        if (workspaceUI?.openQuickReturn) {
+          workspaceUI.openQuickReturn();
+        } else {
+          onNavigate("Returns");
+        }
+      }
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble" }, /* @__PURE__ */ React.createElement(Icon, { name: "undo" })),
+    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Quick Return"), /* @__PURE__ */ React.createElement("small", null, "Stop Timer & Inspect"))
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "command-bar-btn terminal-btn",
+      id: "cmd-ping-terminal",
+      title: "Sends test chime & OLED alert to the ESP32 terminal",
+      onClick: async () => {
+        try {
+          if (api) {
+            await api("/terminals/test-ping", {
+              method: "POST",
+              body: JSON.stringify({ terminalCode: t?.terminal_code || "TERM-01" })
+            });
+            toast?.("ESP32 Counter Station pinged! Buzzer chime and OLED alert triggered.");
+          } else {
+            toast?.("Counter station is ready.");
+          }
+        } catch (err) {
+          toast?.(err.message || "Counter station test ping triggered.");
+        }
+      }
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble terminal-pulse" }, /* @__PURE__ */ React.createElement(Icon, { name: "chip" })),
+    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Ping ESP32 Station"), /* @__PURE__ */ React.createElement("small", null, t?.online ? "Online & polling" : "Station check"))
+  )), queue.length > 0 && firstPending ? /* @__PURE__ */ React.createElement("aside", { className: "terminal-live-action-banner", role: "alert" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-pulse", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", { className: "pulse-ring" }), /* @__PURE__ */ React.createElement(Icon, { name: "chip" })), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-body" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-badge-row" }, /* @__PURE__ */ React.createElement("span", { className: "terminal-banner-badge" }, "AWAITING ESP32 HARDWARE CONFIRMATION"), /* @__PURE__ */ React.createElement("span", { className: "terminal-queue-count" }, queue.length, " Pending at Counter")), /* @__PURE__ */ React.createElement("strong", null, firstPending.item_name || "Equipment", " \xB7 ", firstPending.customer || "Customer"), /* @__PURE__ */ React.createElement("p", null, "Code: ", /* @__PURE__ */ React.createElement("code", null, firstPending.rental_code || firstPending.verification_code || firstPending.id), " \xB7 Station: ", /* @__PURE__ */ React.createElement("strong", null, firstPending.terminal_code || "TERM-01"), " \xB7 Press physical ", /* @__PURE__ */ React.createElement("strong", null, "GPIO 35 Button"), " on the counter terminal to finalize transaction.")), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-actions" }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "primary btn-open-terminal-gate",
+      onClick: () => {
+        if (workspaceUI?.openHandoff) {
+          workspaceUI.openHandoff(firstPending, data.rentals.find((r) => String(r.id) === String(firstPending.rental_id)));
+        } else {
+          onNavigate("ESP32 terminal");
+        }
+      }
+    },
+    "Open Verification Gate \u2192"
+  ))) : null, /* @__PURE__ */ React.createElement("div", { className: "stats" }, /* @__PURE__ */ React.createElement(
     StatCard,
     {
       label: "Active rentals",
@@ -766,6 +885,8 @@ function DashboardView({
   ))), /* @__PURE__ */ React.createElement("div", { className: "table-scroll" }, /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", null, "ITEM / RENTAL ID"), /* @__PURE__ */ React.createElement("th", null, "CUSTOMER"), /* @__PURE__ */ React.createElement("th", null, "DUE DATE"), /* @__PURE__ */ React.createElement("th", null, "STATUS"), /* @__PURE__ */ React.createElement("th", null))), /* @__PURE__ */ React.createElement("tbody", null, rows.length > 0 ? rows.map((r) => {
     const itemCategory = data.items.find((i) => String(i.id) === String(r.item_id))?.category || "";
     const label = r.rental_code || r.item_name;
+    const dueInfo = getDueInfo(r);
+    const isResort = r.fulfillment_mode === "DELIVERY" || Boolean(r.delivery_location);
     return /* @__PURE__ */ React.createElement(
       "tr",
       {
@@ -779,8 +900,8 @@ function DashboardView({
         onKeyDown: (e) => handleRowKeyDown(e, r.id)
       },
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "item-cell" }, /* @__PURE__ */ React.createElement("span", { className: "item-symbol" }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: itemCategory })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, r.item_name), /* @__PURE__ */ React.createElement("small", null, r.rental_code)))),
-      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("span", { className: "mini-avatar" }, initials(r.customer)), r.customer),
-      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("strong", null, formatDate(r.due_at)), /* @__PURE__ */ React.createElement("small", null, "Philippine time")),
+      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "customer-cell-wrap" }, /* @__PURE__ */ React.createElement("span", { className: "mini-avatar" }, initials(r.customer)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, r.customer), isResort ? /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag resort", title: r.delivery_location || "Resort delivery" }, "Resort: ", r.delivery_location ? r.delivery_location.split(",")[0].trim() : "Villa") : /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag shop", title: "Shop counter handover" }, "Shop Counter")))),
+      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("strong", null, formatDate(r.due_at)), /* @__PURE__ */ React.createElement("small", { className: dueInfo.isOverdue ? "due-overdue-alert" : dueInfo.isDueSoon ? "due-soon-alert" : "" }, dueInfo.badge)),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(StatusBadge, { status: r.displayStatus })),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(
         "button",
@@ -1427,7 +1548,11 @@ function WorkspaceShell({
       setNotificationsOpen(false);
       try {
         await rentalNotifications.markRead([entry.dataset.rentalNotification]);
-        await workspaceUI.openTransaction(entry.dataset.notificationRental);
+        if (entry.dataset.notificationRental) {
+          await workspaceUI.openTransaction(entry.dataset.notificationRental);
+        } else if (entry.dataset.notificationPage) {
+          onNavigate(entry.dataset.notificationPage);
+        }
       } catch (error) {
         toast(error.message);
       }
@@ -1838,7 +1963,10 @@ function WorkspaceShell({
       period,
       onPeriodChange,
       onNavigate,
-      showModal
+      showModal,
+      workspaceUI,
+      api,
+      toast
     }
   ) : page === "Inventory" ? /* @__PURE__ */ React.createElement(
     InventorySection,
@@ -1900,6 +2028,7 @@ import {
 } from "./workspace-navigation.js";
 import { createApiClient } from "./api-client.js";
 import { createRentalNotifications, syncLiveRentalUpdate } from "./notifications.js";
+import { initHardwareBarcodeScanner } from "./qr-reader.js";
 var dashboardSnapshot = (value) => value ? JSON.stringify(
   Object.fromEntries(Object.entries(value).filter(([key]) => key !== "refreshedAt"))
 ) : "";
@@ -2322,6 +2451,7 @@ function App() {
       source.addEventListener("data.changed", scheduleRentalEventSync);
       source.addEventListener("category.changed", scheduleRentalEventSync);
       source.addEventListener("settings.changed", scheduleRentalEventSync);
+      source.addEventListener("security.alert", scheduleRentalEventSync);
       source.onerror = () => {
         if (rentalEventSourceRef.current === source && source.readyState === EventSource.CLOSED) {
           rentalEventSourceRef.current = null;
@@ -2462,7 +2592,29 @@ function App() {
         if (problem.status !== 401) toast(problem.message);
       }
     }, 12e4);
+    const stopScanner = initHardwareBarcodeScanner({
+      onScan: (code) => {
+        if (!code) return;
+        toast(`Scanned: ${code}`);
+        if (/^R-[A-Z0-9]+$/i.test(code) || /^rp-rental-/i.test(code)) {
+          c.workspaceUI?.openRentalLookup?.();
+          const input = c.modal?.querySelector('input[name="code"], input[name="transactionCode"]');
+          if (input) {
+            input.value = code;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        } else if (/^EQ-[A-Z0-9]+$/i.test(code) || /^ITEM-[A-Z0-9]+$/i.test(code)) {
+          c.workspaceUI?.openQuickReturn?.();
+          const input = c.modal?.querySelector('input[name="code"], input[name="inventoryCode"]');
+          if (input) {
+            input.value = code;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        }
+      }
+    });
     return () => {
+      stopScanner();
       modal?.removeEventListener("close", handleModalClose);
       modal?.removeEventListener("click", handleModalClick);
       document.removeEventListener("visibilitychange", handleVisibilityChange);

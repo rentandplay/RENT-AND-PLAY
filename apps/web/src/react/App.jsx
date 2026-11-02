@@ -28,6 +28,7 @@ import {
 } from '../workspace-navigation.js';
 import { createApiClient } from '../api-client.js';
 import { createRentalNotifications, syncLiveRentalUpdate } from '../notifications.js';
+import { initHardwareBarcodeScanner } from '../qr-reader.js';
 
 const dashboardSnapshot = value =>
   value
@@ -511,6 +512,7 @@ export function App() {
       source.addEventListener('data.changed', scheduleRentalEventSync);
       source.addEventListener('category.changed', scheduleRentalEventSync);
       source.addEventListener('settings.changed', scheduleRentalEventSync);
+      source.addEventListener('security.alert', scheduleRentalEventSync);
       source.onerror = () => {
         if (
           rentalEventSourceRef.current === source &&
@@ -705,7 +707,30 @@ export function App() {
       }
     }, 120000);
 
+    const stopScanner = initHardwareBarcodeScanner({
+      onScan: code => {
+        if (!code) return;
+        toast(`Scanned: ${code}`);
+        if (/^R-[A-Z0-9]+$/i.test(code) || /^rp-rental-/i.test(code)) {
+          c.workspaceUI?.openRentalLookup?.();
+          const input = c.modal?.querySelector('input[name="code"], input[name="transactionCode"]');
+          if (input) {
+            input.value = code;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        } else if (/^EQ-[A-Z0-9]+$/i.test(code) || /^ITEM-[A-Z0-9]+$/i.test(code)) {
+          c.workspaceUI?.openQuickReturn?.();
+          const input = c.modal?.querySelector('input[name="code"], input[name="inventoryCode"]');
+          if (input) {
+            input.value = code;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        }
+      }
+    });
+
     return () => {
+      stopScanner();
       modal?.removeEventListener('close', handleModalClose);
       modal?.removeEventListener('click', handleModalClick);
       document.removeEventListener('visibilitychange', handleVisibilityChange);

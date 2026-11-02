@@ -16,7 +16,7 @@ const messages = (db, key) => db.collection(`notification_inboxes/${key}/message
 const validId = id => typeof id === 'string' && /^n_[a-f0-9]{40}$/.test(id);
 const iso = value => value && asDate(value)?.toISOString() || null;
 
-function content(type, rental, reason) {
+function content(type, rental = {}, reason = '') {
   const item = rental.item_name || rental.itemName || 'Equipment';
   const customer = rental.customer_name || rental.customerName || 'A customer';
   const location = rental.delivery_location ? ` Location: ${rental.delivery_location}.` : '';
@@ -43,7 +43,11 @@ function content(type, rental, reason) {
     RETURN_REQUEST_REJECTED: ['Return request rejected', `Your return request for ${item} was rejected.${extra} The rental remains active until the admin physically receives the equipment.`],
     RETURN_RECEIVED: ['Equipment received', `The admin received ${item}. Your rental timer has stopped. Inspection is still pending.`],
     RETURN_COMPLETED: ['Return confirmed', `The return of ${item} is confirmed after inspection. Check your rental details for any outstanding balance.`],
-  })[type];
+    SECURITY_PAYMENT_PROOF_FLAGGED: ['Security alert: Payment proof flagged', `${customer} submitted a flagged payment screenshot for ${item}.${extra} Check for duplicate or edited receipt details before approving.`],
+    SECURITY_BRUTE_FORCE_LOGIN: ['Security alert: Multiple failed logins', `Repeated failed login attempts were blocked.${extra}`],
+    SECURITY_QR_VERIFICATION_FAILED: ['Security alert: QR verification failed', `An expired or invalid rolling QR code was rejected for ${item}.${extra}`],
+    SECURITY_SESSIONS_REVOKED: ['Security alert: Active sessions revoked', `Active device sessions were signed out.${extra}`]
+  })[type] || ['Security alert', reason || 'Review workspace security activity.'];
 }
 
 // Inbox entries and their push outbox are written in the same transaction as
@@ -65,6 +69,92 @@ export function queueRentalNotification(tx, db, rental, type, now, { audience = 
     created_at: now, next_attempt_at: now, lease_until: null });
 }
 
+export function queueSecurityAlert(tx, db, type, payload = {}, now = new Date()) {
+  const key = 'staff';
+  const uniqueKey = payload.dedupeKey || `${type}:${payload.rental_id || payload.ip || payload.actor_id || ''}:${payload.revision ?? now.getTime()}`;
+  const id = `n_${hash(`security:${uniqueKey}`).slice(0, 40)}`;
+  const [title, message] = content(type, payload, payload.reason || '');
+  const severity = payload.severity || 'HIGH';
+  const page = payload.page || (payload.rental_id ? 'Rentals' : 'Settings');
+  const notification = {
+    type,
+    category: 'SECURITY',
+    severity,
+    title: payload.title || title,
+    message: payload.message || message,
+    rental_id: payload.rental_id || null,
+    rental_code: payload.rental_code || 'SECURITY',
+    item_name: payload.item_name || 'Security Monitor',
+    security_flags: Array.isArray(payload.security_flags) ? payload.security_flags : [],
+    actor_id: payload.actor_id || null,
+    ip: payload.ip || null,
+    created_at: now,
+    read_by: {},
+    page
+  };
+  tx.set(messages(db, key).doc(id), notification, { merge: true });
+  tx.set(db.collection('notification_inboxes').doc(key), { revision: randomBytes(16).toString('hex') }, { merge: true });
+  tx.set(db.collection('security_alerts').doc(id), { id, ...notification }, { merge: true });
+  return { id, ...notification };
+}
+
+export async function recordSecurityAlert(db, type, payload = {}, now = new Date()) {
+  if (!db || typeof db.collection !== 'function') return null;
+  const key = 'staff';
+  const uniqueKey = payload.dedupeKey || `${type}:${payload.rental_id || payload.ip || payload.actor_id || ''}:${payload.revision ?? now.getTime()}`;
+  const id = `n_${hash(`security:${uniqueKey}`).slice(0, 40)}`;
+  const [title, message] = content(type, payload, payload.reason || '');
+  const severity = payload.severity || 'HIGH';
+  const page = payload.page || (payload.rental_id ? 'Rentals' : 'Settings');
+  const notification = {
+    type,
+    category: 'SECURITY',
+    severity,
+    title: payload.title || title,
+    message: payload.message || message,
+    rental_id: payload.rental_id || null,
+    rental_code: payload.rental_code || 'SECURITY',
+    item_name: payload.item_name || 'Security Monitor',
+    security_flags: Array.isArray(payload.security_flags) ? payload.security_flags : [],
+    actor_id: payload.actor_id || null,
+    ip: payload.ip || null,
+    created_at: now,
+    read_by: {},
+    page
+  };
+  await Promise.all([
+    messages(db, key).doc(id).set(notification, { merge: true }),
+    db.collection('notification_inboxes').doc(key).set({ revision: randomBytes(16).toString('hex') }, { merge: true }),
+    db.collection('security_alerts').doc(id).set({ id, ...notification }, { merge: true })
+  ]);
+  return { id, ...notification, created_at: iso(now) };
+}
+
+export async function listSecurityAlerts(db, actor, { limit = 25 } = {}) {
+  if (!staff(actor)) fail(403, 'Only staff accounts can view security alerts.');
+  const max = Math.min(Math.max(1, Number(limit) || 25), 60);
+  const snapshot = await db.collection('security_alerts').orderBy('created_at', 'desc').limit(max).get();
+  const alerts = snapshot.docs.map(doc => {
+    const row = doc.data();
+    return {
+      id: doc.id,
+      type: row.type,
+      category: 'SECURITY',
+      severity: row.severity || 'HIGH',
+      title: row.title,
+      message: row.message,
+      rental_id: row.rental_id || null,
+      rental_code: row.rental_code || 'SECURITY',
+      item_name: row.item_name || 'Security Monitor',
+      security_flags: Array.isArray(row.security_flags) ? row.security_flags : [],
+      ip: row.ip || null,
+      page: row.page || 'Settings',
+      created_at: iso(row.created_at)
+    };
+  });
+  return { alerts };
+}
+
 export async function listNotifications(db, actor, { before, since } = {}) {
   const key = inboxKey(actor), collection = messages(db, key);
   const header = await db.collection('notification_inboxes').doc(key).get();
@@ -81,9 +171,22 @@ export async function listNotifications(db, actor, { before, since } = {}) {
   const snapshot = await query.limit(61).get();
   const page = snapshot.docs.slice(0, 60).map(doc => {
     const row = doc.data();
-    return { id: doc.id, type: row.type, title: row.title, message: row.message, rental_id: row.rental_id,
-      rental_code: row.rental_code, item_name: row.item_name, page: row.page,
-      created_at: iso(row.created_at), read_at: iso(row.read_by?.[actorId(actor)]), is_read: Boolean(row.read_by?.[actorId(actor)]) };
+    return {
+      id: doc.id,
+      type: row.type,
+      ...(row.category ? { category: row.category } : {}),
+      ...(row.severity ? { severity: row.severity } : {}),
+      ...(Array.isArray(row.security_flags) && row.security_flags.length ? { security_flags: row.security_flags } : {}),
+      title: row.title,
+      message: row.message,
+      rental_id: row.rental_id,
+      rental_code: row.rental_code,
+      item_name: row.item_name,
+      page: row.page,
+      created_at: iso(row.created_at),
+      read_at: iso(row.read_by?.[actorId(actor)]),
+      is_read: Boolean(row.read_by?.[actorId(actor)])
+    };
   });
   return { revision, notifications: page, unread_count: page.filter(row => !row.is_read).length,
     audience: staff(actor) ? 'STAFF' : 'CUSTOMER', next_cursor: snapshot.docs.length > 60 ? page.at(-1).id : null };

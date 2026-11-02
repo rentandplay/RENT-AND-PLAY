@@ -1,10 +1,10 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { allocateCustomerCode } from './customer-codes.mjs';
 import QRCode from 'qrcode';
 import { asDate, docData } from './firebase.mjs';
 import { frozenQuote, rentalsForItem, validateInspection, validatePenalty, finalCharges } from './transactions.mjs';
-import { queueRentalNotification } from './notifications.mjs';
-import { validatePaymentProof } from './payment-proof.mjs';
+import { queueRentalNotification, queueSecurityAlert, recordSecurityAlert } from './notifications.mjs';
+import { validatePaymentProof, evaluatePaymentProofSecurity, inspectPaymentImage } from './payment-proof.mjs';
 import { allocateRecordCodes } from './record-codes.mjs';
 import { healthyUnit, unitHasMaintenance } from './maintenance-state.mjs';
 import { returnMaintenanceRecord } from './maintenance.mjs';
@@ -32,6 +32,7 @@ const money = value => typeof value === 'number' && Number.isFinite(value) && va
 const round = value => Math.round(value * 100) / 100;
 const state = rental => String(rental.status || '').toUpperCase();
 export const MOBILE_RENTAL_TERMS_VERSION = '2026-10-13-rental-v1';
+export const ROLLING_QR_WINDOW_SECONDS = 120;
 export const openRentalStatuses = ['PENDING_ADMIN_APPROVAL', 'PENDING_ESP32_RENT', 'PENDING_VERIFICATION', 'APPROVED', 'ACTIVE', 'RETURN_PENDING_INSPECTION'];
 const pendingStatuses = ['PENDING_ADMIN_APPROVAL', 'PENDING_ESP32_RENT', 'APPROVED'];
 const open = rental => openRentalStatuses.includes(state(rental));
@@ -41,6 +42,67 @@ const actorId = actor => String(actor.id || actor);
 const audit = (tx, db, actor, action, id, now, extra = {}) => { tx.create(db.collection('audit_logs').doc(), { actor_type: 'USER', user_id: actorId(actor), action, entity_type: 'RENTAL', entity_id: id, rental_id: id, created_at: now, ...extra }); tx.set(db.collection('report_jobs').doc(id),{rental_id:id,queued_at:now}); };
 const operationKey = value => { if (typeof value !== 'string' || !/^[a-f0-9]{32}$/.test(value)) fail(400, 'A valid operation key is required. Refresh the form and try again.'); return value; };
 const ttl = (setting, fallback) => { const seconds = Number(process.env[setting] || fallback); if (!Number.isInteger(seconds) || seconds < 60 || seconds > 86400) fail(500, 'Rental hold duration must be between one minute and one day.'); return seconds * 1000; };
+
+export function createRollingQrPayload(bookingQrToken, now = new Date(), windowSeconds = ROLLING_QR_WINDOW_SECONDS) {
+  const secret = String(bookingQrToken || '');
+  const nowMs = (now instanceof Date ? now : new Date(now)).getTime();
+  const step = Math.floor(nowMs / (windowSeconds * 1000));
+  const sig = createHmac('sha256', secret).update(`rolling:${secret}:${step}`).digest('hex').slice(0, 16);
+  const pin = String(parseInt(sig.slice(0, 8), 16) % 1000000).padStart(6, '0');
+  const expiresAt = new Date((step + 1) * windowSeconds * 1000);
+  return {
+    rolling_qr_token: `${secret}.${step}.${sig}`,
+    rolling_pin: pin,
+    rolling_expires_at: expiresAt,
+    rolling_window_seconds: windowSeconds,
+    step
+  };
+}
+
+export function verifyTransactionQrCode(code, rental, now = new Date(), { manual = false, windowSeconds = ROLLING_QR_WINDOW_SECONDS } = {}) {
+  const trimmed = String(code || '').trim();
+  const baseSecret = String(rental?.booking_qr_token || '');
+  const nowMs = (now instanceof Date ? now : new Date(now)).getTime();
+  const currentStep = Math.floor(nowMs / (windowSeconds * 1000));
+
+  // Check if this is a time-based rolling QR token: <booking_qr_token>.<step>.<sig>
+  const rollingMatch = /^(rp-rental-[A-Za-z0-9_-]+)\.(\d+)\.([a-f0-9]{16})$/i.exec(trimmed);
+  if (rollingMatch) {
+    const [, tokenPart, stepStr, sigPart] = rollingMatch;
+    if (tokenPart !== baseSecret) {
+      return { valid: false, reason: 'MISMATCH', message: 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.' };
+    }
+    const step = Number(stepStr);
+    const expectedSig = createHmac('sha256', baseSecret).update(`rolling:${baseSecret}:${step}`).digest('hex').slice(0, 16);
+    if (sigPart.toLowerCase() !== expectedSig.toLowerCase()) {
+      return { valid: false, reason: 'TAMPERED_QR', message: 'Invalid or tampered rolling QR signature. Ask the customer to refresh their rental QR.' };
+    }
+    if (Math.abs(currentStep - step) > 1) {
+      return { valid: false, reason: 'EXPIRED_ROLLING_QR', message: 'This rolling QR code has expired. Ask the customer to refresh the QR code on their phone.' };
+    }
+    return { valid: true, mode: 'ROLLING_QR', step };
+  }
+
+  // Check if this is a 6-digit rolling TOTP PIN
+  if (baseSecret && /^\d{6}$/.test(trimmed)) {
+    for (const candidateStep of [currentStep, currentStep - 1, currentStep + 1]) {
+      const sig = createHmac('sha256', baseSecret).update(`rolling:${baseSecret}:${candidateStep}`).digest('hex').slice(0, 16);
+      const pin = String(parseInt(sig.slice(0, 8), 16) % 1000000).padStart(6, '0');
+      if (trimmed === pin) {
+        return { valid: true, mode: 'ROLLING_PIN', step: candidateStep };
+      }
+    }
+    return { valid: false, reason: 'EXPIRED_ROLLING_PIN', message: 'This 6-digit rolling verification PIN is invalid or expired. Check the latest PIN on the customer’s ticket.' };
+  }
+
+  if (baseSecret && trimmed === baseSecret) {
+    return { valid: true, mode: 'STATIC_QR' };
+  }
+  if (manual && [rental.id, rental.rental_code, rental.legacy_rental_code].filter(Boolean).includes(trimmed)) {
+    return { valid: true, mode: 'MANUAL' };
+  }
+  return { valid: false, reason: 'MISMATCH', message: 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.' };
+}
 
 function remainingDeposit(rental) {
   const applied = round(Number(rental.deposit_applied_amount || 0));
@@ -55,10 +117,24 @@ function collectPayment(rental, input, requirePayment = false) {
   return { rental_paid_amount: input.paymentVerified === true ? base : paid, rental_refunded_amount: Number(rental.rental_refunded_amount || 0) };
 }
 
-function transactionScanCheck(input, rental) {
+function transactionScanCheck(input, rental, now = new Date(), { tx = null, db = null } = {}) {
   const { manual } = manualLookup(input);
   const code = requiredText(input.transactionCode, 'Customer transaction QR', 256);
-  if (!(code === rental.booking_qr_token || manual && [rental.id, rental.rental_code, rental.legacy_rental_code].filter(Boolean).includes(code))) fail(409, 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.');
+  const check = verifyTransactionQrCode(code, rental, now, { manual });
+  if (!check.valid) {
+    if (db && ['TAMPERED_QR', 'EXPIRED_ROLLING_QR', 'EXPIRED_ROLLING_PIN'].includes(check.reason)) {
+      recordSecurityAlert(db, 'SECURITY_QR_VERIFICATION_FAILED', {
+        rental_id: rental.id,
+        rental_code: rental.rental_code || rental.id,
+        item_name: rental.item_name || 'Equipment',
+        customer_name: rental.customer_name || 'Customer',
+        reason: check.message,
+        security_flags: [{ code: check.reason, severity: check.reason === 'TAMPERED_QR' ? 'HIGH' : 'MEDIUM', message: check.message }]
+      }, now).catch(() => {});
+    }
+    fail(409, check.message);
+  }
+  return check;
 }
 
 function manualLookup(input) {
@@ -67,8 +143,8 @@ function manualLookup(input) {
   return { manual: input.manualLookup === true || Boolean(reason), reason };
 }
 
-function scanCheck(input, item, rental = null) {
-  if (rental) transactionScanCheck(input, rental);
+function scanCheck(input, item, rental = null, now = new Date()) {
+  if (rental) transactionScanCheck(input, rental, now);
   const { manual, reason } = manualLookup(input);
   const inventory = requiredText(input.inventoryCode, 'Inventory QR or item code', 256);
   if (!(inventory === item.qr_token || manual && [item.id, item.item_code, item.qrCode, item.legacy_item_code].filter(Boolean).includes(inventory))) fail(409, `Equipment mismatch. This rental request requires ${item.name || 'the assigned equipment'} (${item.item_code || item.id}). Scan the QR sticker on that exact unit.`);
@@ -152,9 +228,14 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
   const paymentMethod = String(input.paymentMethod || 'CASH').toUpperCase();
   if (!['QR', 'CASH'].includes(paymentMethod)) fail(400, 'Choose QR or cash as the payment method.');
   const paymentProof = !staff && paymentMethod === 'QR' ? validatePaymentProof(input.paymentProof || {}) : null;
+  let proofSecurity = null;
   if (paymentProof) {
-    const settings = await db.collection('settings').doc('business').get();
+    const [settings, existingProofsSnap] = await Promise.all([
+      db.collection('settings').doc('business').get(),
+      db.collection('rental_payment_proofs').get()
+    ]);
     if (!settings.exists || !settings.data().instapay_qr_data_url) fail(409, 'QR payment is not available yet. Choose cash or contact the owner.');
+    proofSecurity = evaluatePaymentProofSecurity(rows(existingProofsSnap), paymentProof, rentalRef.id);
   }
   const proofRef = paymentProof ? record(db, 'rental_payment_proofs', rentalRef.id) : null;
   const result = await db.runTransaction(async tx => {
@@ -163,7 +244,7 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
       const saved = docData(existing);
       if ((asDate(saved.scheduled_start_at)?.toISOString() || null) !== (start?.toISOString() || null)) fail(409, 'This request key belongs to a different scheduled time.');
       if (saved.request_source !== requestSource || walkIn && saved.fulfillment_mode !== fulfillment) fail(409, 'This operation key belongs to a different rental flow.');
-      if ((stockGroupId ? saved.stock_group_id !== stockGroupId : saved.item_id !== requestedItemId) || saved.customer_id !== customerId || saved.delivery_location !== location || saved.payment_method !== paymentMethod || saved.booking_mode !== (input.mode || 'TIMED') || saved.fee_breakdown?.requested_minutes !== Number(input.durationMinutes) && saved.booking_mode === 'TIMED' || saved.resort_checkout_input !== (input.resortCheckoutAt || null)) fail(409, 'This operation key belongs to different rental details.');
+      if ((stockGroupId ? saved.stock_group_id !== stockGroupId : saved.item_id !== requestedItemId) || saved.customer_id !== customerId || saved.delivery_location !== location || saved.payment_method !== paymentMethod || saved.booking_mode !== (input.mode || 'TIMED') || saved.fee_breakdown?.requested_minutes !== Number(input.inputDurationMinutes ?? input.durationMinutes) && saved.booking_mode === 'TIMED' || saved.resort_checkout_input !== (input.resortCheckoutAt || null)) fail(409, 'This operation key belongs to different rental details.');
       return { rental: saved, duplicate: true };
     }
     const [customerDoc,selected]=await Promise.all([tx.get(record(db,'customers',customerId)),selectRentableUnit(tx,db,requestedItemId,stockGroupId,input,now,start)]);
@@ -201,11 +282,39 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
     const [rentalCode] = await allocateRecordCodes(tx, db, ['rentals'], now);
     const rental = { rental_code: rentalCode, ...(!staff ? { fulfillment_mode: 'DELIVERY' } : {}), ...(walkIn ? { rental_channel: 'WALK_IN', fulfillment_mode: fulfillment } : {}), item_id: itemId, ...(stockGroupId?{stock_group_id:stockGroupId}:{}), item_name: item.name, item_code: item.item_code || item.qrCode || '', customer_id: customerId, customer_name: customer.full_name || customer.name || customer.email || 'Customer', customer_email: customer.email || null, customer_phone: customer.phone || null,
       status: staff ? 'APPROVED' : 'PENDING_ADMIN_APPROVAL', scheduled_start_at: start, scheduled_end_at: start ? asDate(fee.due_at) : null, delivery_area: LOCAL_DELIVERY_AREA, booking_mode: input.mode || 'TIMED', resort_checkout_input: input.resortCheckoutAt || null, booking_qr_token: `rp-rental-${randomBytes(24).toString('hex')}`, hold_expires_at: staff && start ? handoffDeadline({scheduled_start_at:start},now,1800000) : new Date(now.getTime() + ttl(staff ? 'RENTAL_PICKUP_HOLD_SECONDS' : 'RENTAL_REQUEST_HOLD_SECONDS', staff ? 1800 : 900)),
-      rental_fee: fee.rental_fee, fee_breakdown: fee, estimated_due_at: fee.due_at, start_at: null, due_at: null, confirmed_rental_at: null, confirmed_return_at: null, received_at: null, delivery_location: location, payment_method: paymentMethod, payment_confirmed_by_admin: false, payment_proof_status: paymentProof ? 'PENDING_REVIEW' : 'NOT_REQUIRED', payment_proof_reference: paymentProof?.reference || null, payment_proof_note: null, payment_proof_revision: 0, rental_paid_amount: 0, rental_refunded_amount: 0, delivery_status: 'NOT_PREPARED', delivery_preparation: null, request_source: requestSource, release_condition: null, return_condition: null, created_at: now, updated_at: now, created_by: actorId(actor), ...(acceptedTerms ? { rental_terms_acceptance: acceptedTerms } : {}), ...(staff ? { admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_at: now } } : {}) };
+      rental_fee: fee.rental_fee, fee_breakdown: fee, estimated_due_at: fee.due_at, start_at: null, due_at: null, confirmed_rental_at: null, confirmed_return_at: null, received_at: null, delivery_location: location, payment_method: paymentMethod, payment_confirmed_by_admin: false, payment_proof_status: paymentProof ? 'PENDING_REVIEW' : 'NOT_REQUIRED', payment_proof_reference: paymentProof?.reference || null, payment_proof_note: null, payment_proof_revision: 0,
+      ...(proofSecurity ? { payment_proof_security_status: proofSecurity.security_status, payment_proof_flags: proofSecurity.security_flags } : {}),
+      rental_paid_amount: 0, rental_refunded_amount: 0, delivery_status: 'NOT_PREPARED', delivery_preparation: null, request_source: requestSource, release_condition: null, return_condition: null, created_at: now, updated_at: now, created_by: actorId(actor), ...(acceptedTerms ? { rental_terms_acceptance: acceptedTerms } : {}), ...(staff ? { admin_review: { action: 'APPROVED', reviewed_by: actorId(actor), reviewed_at: now } } : {}) };
     Object.assign(rental, paymentSummary(rental));
     if (!customerDoc.exists) tx.create(record(db, 'customers', customerId), { full_name: rental.customer_name, search_name:String(rental.customer_name).toLowerCase().replace(/\s+/g,' '), customer_code: generatedCustomerCode, email: rental.customer_email, phone: rental.customer_phone, auth_uid: customerId, is_active: true, created_at: now, updated_at: now });
     tx.create(rentalRef, rental);
-    if (proofRef) tx.create(proofRef, { rental_id: rentalRef.id, customer_id: customerId, image_data_url: paymentProof.image_data_url, reference: paymentProof.reference, status: 'PENDING_REVIEW', submitted_at: now, updated_at: now });
+    if (proofRef) {
+      tx.create(proofRef, {
+        rental_id: rentalRef.id,
+        rental_code: rentalCode,
+        customer_id: customerId,
+        image_data_url: paymentProof.image_data_url,
+        image_hash: proofSecurity.image_hash,
+        reference: paymentProof.reference,
+        normalized_reference: proofSecurity.normalized_reference,
+        security_status: proofSecurity.security_status,
+        security_flags: proofSecurity.security_flags,
+        status: 'PENDING_REVIEW',
+        submitted_at: now,
+        updated_at: now
+      });
+      if (proofSecurity.security_status === 'FLAGGED') {
+        queueSecurityAlert(tx, db, 'SECURITY_PAYMENT_PROOF_FLAGGED', {
+          rental_id: rentalRef.id,
+          rental_code: rentalCode,
+          item_name: rental.item_name,
+          customer_name: rental.customer_name,
+          security_flags: proofSecurity.security_flags,
+          reason: proofSecurity.security_flags.map(f => f.message).join(' '),
+          revision: 0
+        }, now);
+      }
+    }
     // Physical availability and the reservation are separate. The catalog derives Reserved from this pointer.
     tx.update(itemDoc.ref, { ...(start ? { schedule_revision: Number(item.schedule_revision || 0)+1 } : { reserved_rental_id: rentalRef.id }), updated_at: now });
     audit(tx, db, actor, 'RENTAL_BOOKED', rentalRef.id, now, { actor_type: staff ? 'USER' : 'CUSTOMER' });
@@ -248,6 +357,8 @@ export async function submitRentalPaymentProof(db, actor, id, input, now = new D
   details(input);
   const proof = validatePaymentProof(input), rentalId = idValue(id);
   const rentalRef = record(db, 'rentals', rentalId), proofRef = record(db, 'rental_payment_proofs', rentalId);
+  const existingProofsSnap = await db.collection('rental_payment_proofs').get();
+  const proofSecurity = evaluatePaymentProofSecurity(rows(existingProofsSnap), proof, rentalId);
   const result = await db.runTransaction(async tx => {
     const [rentalDoc, proofDoc] = await Promise.all([tx.get(rentalRef), tx.get(proofRef)]);
     if (!rentalDoc.exists) fail(404, 'Rental request not found.');
@@ -256,26 +367,87 @@ export async function submitRentalPaymentProof(db, actor, id, input, now = new D
     if (rental.payment_method !== 'QR' || state(rental) !== 'PENDING_ADMIN_APPROVAL') fail(409, 'Payment proof can only be uploaded for a QR rental request awaiting review.');
     if (rental.payment_proof_status !== 'REJECTED') fail(409, 'Payment proof can only be replaced after the owner rejects the previous screenshot.');
     if (holdElapsed(rental, now)) fail(409, 'This rental request expired. Send a new request before uploading payment proof.');
-    const proofRecord = { rental_id: rentalId, customer_id: actorId(actor), image_data_url: proof.image_data_url, reference: proof.reference, status: 'PENDING_REVIEW', submitted_at: now, updated_at: now };
+    const proofRecord = {
+      rental_id: rentalId,
+      rental_code: rental.rental_code || rentalId,
+      customer_id: actorId(actor),
+      image_data_url: proof.image_data_url,
+      image_hash: proofSecurity.image_hash,
+      reference: proof.reference,
+      normalized_reference: proofSecurity.normalized_reference,
+      security_status: proofSecurity.security_status,
+      security_flags: proofSecurity.security_flags,
+      status: 'PENDING_REVIEW',
+      submitted_at: now,
+      updated_at: now
+    };
     if (proofDoc.exists) tx.set(proofRef, proofRecord); else tx.create(proofRef, proofRecord);
     const revision = Number(rental.payment_proof_revision || 0) + 1;
-    const changes = { payment_proof_status: 'PENDING_REVIEW', payment_proof_reference: proof.reference || null, payment_proof_note: null, payment_proof_revision: revision, updated_at: now };
+    const changes = {
+      payment_proof_status: 'PENDING_REVIEW',
+      payment_proof_reference: proof.reference || null,
+      payment_proof_note: null,
+      payment_proof_revision: revision,
+      payment_proof_security_status: proofSecurity.security_status,
+      payment_proof_flags: proofSecurity.security_flags,
+      updated_at: now
+    };
     tx.update(rentalRef, changes);
     queueRentalNotification(tx, db, { ...rental, ...changes }, 'PAYMENT_PROOF_SUBMITTED', now, { audience: 'STAFF', revision });
-    audit(tx, db, actor, 'RENTAL_PAYMENT_PROOF_SUBMITTED', rentalId, now, { reference: proof.reference || null });
+    if (proofSecurity.security_status === 'FLAGGED') {
+      queueSecurityAlert(tx, db, 'SECURITY_PAYMENT_PROOF_FLAGGED', {
+        rental_id: rentalId,
+        rental_code: rental.rental_code || rentalId,
+        item_name: rental.item_name,
+        customer_name: rental.customer_name,
+        security_flags: proofSecurity.security_flags,
+        reason: proofSecurity.security_flags.map(f => f.message).join(' '),
+        revision
+      }, now);
+    }
+    audit(tx, db, actor, 'RENTAL_PAYMENT_PROOF_SUBMITTED', rentalId, now, { reference: proof.reference || null, image_hash: proofSecurity.image_hash, security_status: proofSecurity.security_status });
     return { rental: { ...rental, ...changes } };
   });
   return serializeFlow(result);
 }
 
 export async function rentalPaymentProof(db, id) {
-  const rentalId = idValue(id), [rentalDoc, proofDoc] = await Promise.all([
-    record(db, 'rentals', rentalId).get(), record(db, 'rental_payment_proofs', rentalId).get()
+  const rentalId = idValue(id), [rentalDoc, proofDoc, allProofsSnap] = await Promise.all([
+    record(db, 'rentals', rentalId).get(),
+    record(db, 'rental_payment_proofs', rentalId).get(),
+    db.collection('rental_payment_proofs').get()
   ]);
   if (!rentalDoc.exists) fail(404, 'Rental request not found.');
   if (!proofDoc.exists) fail(404, 'This customer has not uploaded payment proof.');
   const proof = proofDoc.data();
-  return { proof: { rental_id: rentalId, image_data_url: proof.image_data_url, reference: proof.reference || null, status: proof.status, submitted_at: serializeFlow(proof.submitted_at), review_note: proof.review_note || null } };
+  const inspection = inspectPaymentImage(proof.image_data_url);
+  const computedSecurity = evaluatePaymentProofSecurity(
+    rows(allProofsSnap),
+    {
+      image_data_url: proof.image_data_url,
+      image_hash: proof.image_hash || inspection.image_hash,
+      reference: proof.reference || null,
+      security_checks: inspection
+    },
+    rentalId
+  );
+  const securityFlags = Array.isArray(proof.security_flags) && proof.security_flags.length
+    ? proof.security_flags
+    : computedSecurity.security_flags;
+  const securityStatus = securityFlags.length > 0 ? 'FLAGGED' : (proof.security_status || computedSecurity.security_status || 'CLEAN');
+  return {
+    proof: {
+      rental_id: rentalId,
+      image_data_url: proof.image_data_url,
+      image_hash: proof.image_hash || computedSecurity.image_hash || null,
+      reference: proof.reference || null,
+      status: proof.status,
+      security_status: securityStatus,
+      security_flags: securityFlags,
+      submitted_at: serializeFlow(proof.submitted_at),
+      review_note: proof.review_note || null
+    }
+  };
 }
 
 export async function reviewRentalPaymentProof(db, actor, id, input, now = new Date()) {
@@ -374,13 +546,13 @@ export async function verifyReleaseCodes(db, actor, id, input, now = new Date())
     if (holdElapsed(rental, now)) fail(409, 'The handoff deadline expired. Ask the customer to send a new rental request.');
     if(rental.handoff_expires_at && asDate(rental.handoff_expires_at)<=now)fail(409,'The delivery handoff deadline elapsed. Resolve the delivery and physically receive the unit at the shop.');
     if (!['PREPARED','OUT_FOR_DELIVERY'].includes(rental.delivery_status) || rental.delivery_preparation?.item_id !== itemId) fail(409, 'Scan and prepare the assigned equipment at the shop before delivery.');
-    transactionScanCheck(input, rental);
+    const qrCheck = transactionScanCheck(input, rental, now, { tx, db });
     const [itemDoc, related] = await Promise.all([tx.get(record(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
     const item = docData(itemDoc);
     if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== id) fail(409, 'The assigned equipment is no longer reserved for handoff. Refresh this rental request.');
     assertCalendarFree(rows(related),now,new Date(now.getTime()+Number(rental.fee_breakdown?.billed_minutes||0)*60000),now,id);
-    return { rental_verified: true, booking_verified: true, inventory_verified: true, delivery_prepared: true, rental: { id: rental.id, status: rental.status, rental_code: rental.rental_code, item_id: itemId, customer_id: rental.customer_id || rental.customerId }, item: { id: item.id, name: item.name, item_code: item.item_code || item.qrCode || '' } };
+    return { rental_verified: true, booking_verified: true, inventory_verified: true, delivery_prepared: true, verification_mode: qrCheck.mode, rental: { id: rental.id, status: rental.status, rental_code: rental.rental_code, item_id: itemId, customer_id: rental.customer_id || rental.customerId }, item: { id: item.id, name: item.name, item_code: item.item_code || item.qrCode || '' } };
   }));
 }
 
@@ -399,9 +571,9 @@ export async function releaseBooking(db, actor, id, input, now = new Date()) {
     if (!['PREPARED','OUT_FOR_DELIVERY'].includes(rental.delivery_status) || rental.delivery_preparation?.item_id !== itemId) fail(409, 'Prepare the assigned equipment at the shop before the customer handoff.');
     if (!itemDoc.exists) fail(404, 'Assigned equipment not found.');
     const item = docData(itemDoc);
-    transactionScanCheck(input, rental);
+    const qrCheck = transactionScanCheck(input, rental, now, { tx, db });
     const lookup = manualLookup(input);
-    const verification = { verification_method: lookup.manual ? 'MANUAL' : 'QR', manual_reason: lookup.reason || null };
+    const verification = { verification_method: lookup.manual ? 'MANUAL' : 'QR', qr_mode: qrCheck.mode, manual_reason: lookup.reason || null };
     if (input.customerVerified !== true) fail(400, 'Verify that the person receiving the equipment matches the rental customer.');
     if (rental.request_source === 'WALK_IN' && input.customerTermsAcknowledged !== true) fail(400, 'Confirm that the customer agreed to the duration, total, late fees, and return terms before handover.');
     if (item.is_active === false || !['AVAILABLE', 'RESERVED_PENDING'].includes(item.status) || item.reserved_rental_id !== id) fail(409, 'The assigned equipment is no longer available for release.');
@@ -414,12 +586,12 @@ export async function releaseBooking(db, actor, id, input, now = new Date()) {
     const savePayment = await planLedgerEntry(tx,db,actor,rental,{key:`handoff:${id}:${key}`,amount:payment.rental_paid_amount-Number(rental.rental_paid_amount||0),method:rental.payment_method,source:'IN_PERSON_HANDOFF'},now);
     savePayment();
     const condition = inspectionRecord(tx, db, actor, id, itemId, input.inspection, 'RELEASE', now);
-    const changes = { status: 'ACTIVE', delivery_status: 'HANDED_OFF', delivery_handoff: { handed_off_at: now, handed_off_by: actorId(actor), verification_method: verification.verification_method, manual_reason: verification.manual_reason }, ...payment, handoff_verification: verification, release_operation_key: key, start_at: now, due_at: due, confirmed_rental_at: now, confirmed_rental_by: actorId(actor), payment_confirmed_by_admin: true, fee_breakdown: { ...fee, start_at: now, due_at: due }, release_condition: condition, release_condition_record_id: condition.id, updated_at: now };
+    const changes = { status: 'ACTIVE', delivery_status: 'HANDED_OFF', delivery_handoff: { handed_off_at: now, handed_off_by: actorId(actor), verification_method: verification.verification_method, qr_mode: verification.qr_mode, manual_reason: verification.manual_reason }, ...payment, handoff_verification: { verification_method: verification.verification_method, manual_reason: verification.manual_reason }, release_operation_key: key, start_at: now, due_at: due, confirmed_rental_at: now, confirmed_rental_by: actorId(actor), payment_confirmed_by_admin: true, fee_breakdown: { ...fee, start_at: now, due_at: due }, release_condition: condition, release_condition_record_id: condition.id, updated_at: now };
     Object.assign(changes, paymentSummary(rental, changes));
     if (rental.request_source === 'WALK_IN') changes.rental_terms_acceptance = { version: MOBILE_RENTAL_TERMS_VERSION, acceptance_method: 'STAFF_WITNESSED', accepted_at: now, accepted_by: rental.customer_id, witnessed_by: actorId(actor), rental_fee: rental.rental_fee, billed_minutes: fee.billed_minutes, late_fee_rate: fee.overtime_rate, late_fee_unit_minutes: fee.overtime_unit_minutes, grace_minutes: fee.grace_minutes, due_at: due, fulfillment_mode: rental.fulfillment_mode, delivery_location: rental.delivery_location };
     tx.update(rentalDoc.ref, changes); tx.update(itemDoc.ref, { status: 'RENTED', condition_status: condition.condition, reserved_rental_id: null, current_rental_id: id, updated_at: now });
     tx.create(db.collection('item_status_history').doc(), { item_id: itemId, old_status: item.status, new_status: 'RENTED', changed_at: now, changed_by: actorId(actor), source: 'ADMIN', reference_type: 'RENTAL', rental_id: id });
-    audit(tx, db, actor, 'RENTAL_RELEASED', id, now, verification);
+    audit(tx, db, actor, 'RENTAL_RELEASED', id, now, { verification_method: verification.verification_method, manual_reason: verification.manual_reason });
     queueRentalNotification(tx, db, { ...rental, ...changes }, 'RENTAL_RELEASED', now);
     return { rental: { ...rental, ...changes } };
   });
@@ -437,7 +609,7 @@ export async function recordRentalReceipt(db, actor, id, input, now = new Date()
     const [itemDoc, related] = await Promise.all([tx.get(record(db, 'items', itemId)), rentalsForItem(tx, db, itemId)]);
     if (state(rental) === 'RETURN_PENDING_INSPECTION' && rental.receipt_operation_key === key) return { rental, duplicate: true };
     if (state(rental) !== 'ACTIVE' || !itemDoc.exists || itemDoc.data().status !== 'RENTED' || itemDoc.data().current_rental_id && itemDoc.data().current_rental_id !== id || rows(related).some(row => row.id !== id && ['ACTIVE', 'RETURN_PENDING_INSPECTION'].includes(state(row)))) fail(409, 'Only the active rental for this physical unit can be received.');
-    const verification = scanCheck(input, docData(itemDoc));
+    const verification = scanCheck(input, docData(itemDoc), null, now);
     if (input.physicalReceiptConfirmed !== true) fail(400, 'Confirm that the equipment is physically back in your possession.');
     const changes = { status: 'RETURN_PENDING_INSPECTION', received_at: now, received_by: actorId(actor), receipt_operation_key: key, receipt_verification: verification, latest_return_request_status: 'RECEIVED', updated_at: now };
     if(rental.extension_request?.status==='PENDING')changes.extension_request={...rental.extension_request,status:'CANCELLED',closed_at:now,reason:'Equipment physically received.'};
@@ -525,7 +697,8 @@ export async function rentalTicket(db, actor, id, now = new Date()) {
   const doc = await record(db, 'rentals', idValue(id)).get();
   if (!doc.exists) fail(404, 'Rental request not found.');
   const rental = docData(doc);
-  if (String(rental.customer_id || rental.customerId) !== actorId(actor)) fail(403, 'You can only view your own rental handoff QR.');
+  const isStaff = isStaffRole(actor?.role);
+  if (!isStaff && String(rental.customer_id || rental.customerId) !== actorId(actor)) fail(403, 'You can only view your own rental handoff QR.');
   if (state(rental) !== 'APPROVED') {
     fail(409, state(rental) === 'ACTIVE'
       ? 'This rental is already in use. The handoff QR is no longer available.'
@@ -536,7 +709,26 @@ export async function rentalTicket(db, actor, id, now = new Date()) {
   if (!expiresAt) fail(409, 'The handoff deadline is missing. Please ask the admin to check this rental.');
   if (expiresAt <= now) fail(409, 'The handoff hold expired. Refresh My Rentals to check the request status.');
   if (!rental.booking_qr_token) fail(409, 'This older rental does not have a handoff QR. Ask the operator to find it by rental code.');
-  return { ticket: { rental_id: id, rental_code: rental.rental_code, status: state(rental), value: rental.booking_qr_token, image_data_url: await QRCode.toDataURL(rental.booking_qr_token, { errorCorrectionLevel: 'M', margin: 4, width: 360 }), hold_expires_at: serializeFlow(expiresAt) } };
+  const rolling = createRollingQrPayload(rental.booking_qr_token, now);
+  const [staticQrImage, rollingQrImage] = await Promise.all([
+    QRCode.toDataURL(rental.booking_qr_token, { errorCorrectionLevel: 'M', margin: 4, width: 360 }),
+    QRCode.toDataURL(rolling.rolling_qr_token, { errorCorrectionLevel: 'M', margin: 4, width: 360 })
+  ]);
+  return {
+    ticket: {
+      rental_id: id,
+      rental_code: rental.rental_code,
+      status: state(rental),
+      value: rental.booking_qr_token,
+      image_data_url: staticQrImage,
+      rolling_qr_token: rolling.rolling_qr_token,
+      rolling_image_data_url: rollingQrImage,
+      rolling_pin: rolling.rolling_pin,
+      rolling_expires_at: serializeFlow(rolling.rolling_expires_at),
+      rolling_window_seconds: rolling.rolling_window_seconds,
+      hold_expires_at: serializeFlow(expiresAt)
+    }
+  };
 }
 
 export async function lookupRental(db, input, now = new Date()) {
@@ -544,12 +736,18 @@ export async function lookupRental(db, input, now = new Date()) {
   const code = requiredText(input.code, 'QR or lookup code', 256), kind = input.kind || 'RENTAL';
   let rental;
   if (kind === 'RENTAL' || kind === 'BOOKING') {
+    const rollingMatch = /^(rp-rental-[A-Za-z0-9_-]+)\.(\d+)\.([a-f0-9]{16})$/i.exec(code);
+    const lookupCode = rollingMatch ? rollingMatch[1] : code;
     const fields = ['booking_qr_token', 'rental_code', 'legacy_rental_code'];
-    const matches = (await Promise.all(fields.map(field => db.collection('rentals').where(field, '==', code).get()))).flatMap(snap => rows(snap));
-    if (/^[A-Za-z0-9_-]{1,128}$/.test(code)) { const doc = await record(db, 'rentals', code).get(); if (doc.exists) matches.push(docData(doc)); }
+    const matches = (await Promise.all(fields.map(field => db.collection('rentals').where(field, '==', lookupCode).get()))).flatMap(snap => rows(snap));
+    if (/^[A-Za-z0-9_-]{1,128}$/.test(lookupCode)) { const doc = await record(db, 'rentals', lookupCode).get(); if (doc.exists) matches.push(docData(doc)); }
     const unique = [...new Map(matches.map(row => [row.id, row])).values()];
     if (unique.length !== 1) fail(404, 'No unique rental request matches that QR or rental code.');
     rental = unique[0];
+    if (rollingMatch) {
+      const check = verifyTransactionQrCode(code, rental, now);
+      if (!check.valid) fail(409, check.message);
+    }
   } else if (kind === 'INVENTORY') {
     const item = await lookupInventory(db, code);
     const all = rows(await rentalsForItem({ get: query => query.get() }, db, item.id)).filter(row => ['APPROVED', 'ACTIVE', 'RETURN_PENDING_INSPECTION'].includes(state(row)));

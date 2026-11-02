@@ -231,7 +231,13 @@ export function createRentalDesk(h) {
       const result = await api(`/rentals/${encodeURIComponent(row.id)}/payment-proof`);
       if (!form.isConnected) return;
       const proof = result.proof || {};
-      form.querySelector('[data-proof-content]').innerHTML = `${proof.reference ? `<p>Transfer reference: <strong>${e(proof.reference)}</strong></p>` : '<p>No transfer reference provided.</p>'}${proof.image_data_url ? `<img class="rental-payment-proof-image" alt="Customer payment screenshot" src="${e(proof.image_data_url)}"/>` : '<p class="form-error">No image was attached.</p>'}`;
+      const flags = Array.isArray(proof.security_flags) ? proof.security_flags : [];
+      const isFlagged = proof.security_status === 'FLAGGED' || flags.length > 0;
+      const hashPreview = proof.image_hash ? `${String(proof.image_hash).slice(0, 16)}…` : 'Verified';
+      const securityBanner = isFlagged
+        ? `<div class="security-proof-banner security-proof-flagged" role="alert"><strong>⚠️ Security Alert: Tampering or Duplicate Detected (${flags.length})</strong><ul>${flags.map(f => `<li><strong>${e(f.code)}:</strong> ${e(f.message)}</li>`).join('')}</ul><small>SHA-256 Image Hash: <code>${e(hashPreview)}</code></small></div>`
+        : `<div class="security-proof-banner security-proof-clean"><strong>✓ Authenticity &amp; Duplicate Check Passed</strong><p>Unique screenshot hash and transfer reference verified. No duplicate receipt or image-editing metadata detected.</p><small>SHA-256 Image Hash: <code>${e(hashPreview)}</code></small></div>`;
+      form.querySelector('[data-proof-content]').innerHTML = `${securityBanner}${proof.reference ? `<p>Transfer reference: <strong>${e(proof.reference)}</strong></p>` : '<p>No transfer reference provided.</p>'}${proof.image_data_url ? `<div class="rental-payment-proof-frame"><img class="rental-payment-proof-image" alt="Customer payment screenshot" src="${e(proof.image_data_url)}"/><span class="rental-payment-proof-watermark" aria-hidden="true">FOR RENT &amp; PLAY VERIFICATION ONLY · ${e(row.rental_code || row.id)}</span></div>` : '<p class="form-error">No image was attached.</p>'}`;
     } catch (problem) {
       form.querySelector('[data-proof-content]').innerHTML = `<p class="form-error">${e(problem.message)}</p>`;
       verify.disabled = true; reject.disabled = true; return;
@@ -288,18 +294,20 @@ export function createRentalDesk(h) {
     if (!row || row.status !== 'APPROVED' || !['PREPARED', 'OUT_FOR_DELIVERY'].includes(row.delivery_status)) { toast('Prepare the assigned equipment at the shop before confirming delivery.'); return; }
     const walkIn = row.request_source === 'WALK_IN';
     const amount = value => e(h.money(Number(value || 0)));
+    const rollingHelperHtml = walkIn ? '' : `<div class="rolling-qr-panel" data-rolling-qr-panel><div class="rolling-qr-header"><div><strong>Time-Based Rolling QR &amp; TOTP PIN</strong><small>Rotates every 2 minutes with HMAC signature to prevent screenshot sharing.</small></div><button type="button" class="secondary" data-load-rolling-qr>Show live rolling QR / PIN</button></div><div data-rolling-qr-content hidden></div></div>`;
     showModal('Deliver / Hand over equipment', `<form class="admin-form rental-desk-form rental-release-form">
       <ol class="rental-release-steps" aria-label="Handoff progress">${[walkIn ? 'Verify walk-in rental' : 'Customer rental QR', 'Confirm handoff'].map((label, i) => `<li data-release-step="${i + 1}" ${i === 0 ? 'aria-current="step"' : ''}><span>${i + 1}</span><strong>${label}</strong></li>`).join('')}</ol>
       <div class="rental-flow-summary"><div><small>Rental request · ${e(row.rental_code || row.id)}</small><strong>${e(row.item_name)}</strong><span>${e(row.customer_name)} · ${e(row.delivery_location || 'Shop pickup')}</span></div><span class="rental-timer-note">Timer starts at handoff</span></div>
       <div class="rental-flow-scroll">
-        <section class="rental-scan-panel" data-release-panel="1"><span class="rental-step-caption">STEP 1 OF 2</span><h3>${walkIn ? 'Verify the walk-in rental reference' : 'Scan customer rental QR'}</h3><p>${walkIn ? 'The customer does not need an app. Verify this saved rental reference, then confirm their identity and actual payment at handover.' : 'Scan the handoff QR on the customer’s phone, or type the copied R-code. The equipment is already verified.'}</p><div class="rental-scan-entry"><label>Customer QR or rental code<input name="transactionCode" maxlength="256" autocomplete="off" placeholder="Scan QR or enter copied R-code" required/></label><button type="button" class="primary" data-scan-field="transactionCode">${cameraIcon}<span>Scan customer QR</span></button></div><label class="pricing-check rental-manual-toggle"><input type="checkbox" name="manualLookup"/><span>Use printed rental code (auto-detected)</span></label><label data-manual-reason hidden>Reason for manual verification (optional)<textarea name="manualReason" maxlength="1000" rows="2" placeholder="For example: camera unavailable"></textarea></label><p data-camera-status="transactionCode" role="status"></p></section>
-        <section data-release-panel="2" hidden><div class="rental-verified-notice"><span>✓</span><div><strong>Rental and prepared unit verified</strong><small>${e(row.item_name)} · ${e(row.customer_name)}</small></div></div><fieldset class="rental-release-checks" data-release-checks disabled><div class="rental-section-heading"><h3>Confirm the physical handoff</h3><p>Check the customer and equipment together before confirming delivery.</p></div><label class="pricing-check"><input name="customerVerified" type="checkbox" required/><span>Customer identity verified<small>The person receiving the item matches ${e(row.customer_name)}.</small></span></label><div class="rental-payment-checks"><label class="pricing-check"><input name="paymentVerified" type="checkbox" required ${Number(row.rental_paid_amount || 0) >= Number(row.rental_fee) ? 'checked' : ''}/><span>Rental payment received<strong>${amount(row.rental_fee)}</strong><small>${Number(row.rental_paid_amount || 0) >= Number(row.rental_fee) ? 'QR payment verified' : 'Collect the rental fee now'}</small></span></label></div>${walkIn ? `<label class="pricing-check"><input name="customerTermsAcknowledged" type="checkbox" required/><span>Customer agreed to the rental terms<small>Explain the ${e(row.fee_breakdown?.billed_minutes)} minute duration, ${amount(row.rental_fee)} total, late fee of ${amount(row.fee_breakdown?.overtime_rate)} per started ${e(row.fee_breakdown?.overtime_unit_minutes || 60)} minutes after ${e(row.fee_breakdown?.grace_minutes || 0)} minutes of grace, and physical return inspection.</small></span></label>` : ''}${inspectionControls(true)}</fieldset></section>
+        <section class="rental-scan-panel" data-release-panel="1"><span class="rental-step-caption">STEP 1 OF 2</span><h3>${walkIn ? 'Verify the walk-in rental reference' : 'Scan customer rental QR'}</h3><p>${walkIn ? 'The customer does not need an app. Verify this saved rental reference, then confirm their identity and actual payment at handover.' : 'Scan the rolling handoff QR on the customer’s phone, enter the 6-digit rolling PIN, or type the copied R-code. The equipment is already verified.'}</p><div class="rental-scan-entry"><label>Customer QR, 6-digit Rolling PIN, or rental code<input name="transactionCode" maxlength="256" autocomplete="off" placeholder="Scan rolling QR, enter 6-digit PIN, or R-code" required/></label><button type="button" class="primary" data-scan-field="transactionCode">${cameraIcon}<span>Scan customer QR</span></button></div>${rollingHelperHtml}<label class="pricing-check rental-manual-toggle"><input type="checkbox" name="manualLookup"/><span>Use printed rental code (auto-detected)</span></label><label data-manual-reason hidden>Reason for manual verification (optional)<textarea name="manualReason" maxlength="1000" rows="2" placeholder="For example: camera unavailable"></textarea></label><p data-camera-status="transactionCode" role="status"></p></section>
+        <section data-release-panel="2" hidden><div class="rental-verified-notice"><span>✓</span><div><strong>Rental and prepared unit verified</strong><small>${e(row.item_name)} · ${e(row.customer_name)} <span data-verification-mode-badge class="verification-mode-pill"></span></small></div></div><fieldset class="rental-release-checks" data-release-checks disabled><div class="rental-section-heading"><h3>Confirm the physical handoff</h3><p>Check the customer and equipment together before confirming delivery.</p></div><label class="pricing-check"><input name="customerVerified" type="checkbox" required/><span>Customer identity verified<small>The person receiving the item matches ${e(row.customer_name)}.</small></span></label><div class="rental-payment-checks"><label class="pricing-check"><input name="paymentVerified" type="checkbox" required ${Number(row.rental_paid_amount || 0) >= Number(row.rental_fee) ? 'checked' : ''}/><span>Rental payment received<strong>${amount(row.rental_fee)}</strong><small>${Number(row.rental_paid_amount || 0) >= Number(row.rental_fee) ? 'QR payment verified' : 'Collect the rental fee now'}</small></span></label></div>${walkIn ? `<label class="pricing-check"><input name="customerTermsAcknowledged" type="checkbox" required/><span>Customer agreed to the rental terms<small>Explain the ${e(row.fee_breakdown?.billed_minutes)} minute duration, ${amount(row.rental_fee)} total, late fee of ${amount(row.fee_breakdown?.overtime_rate)} per started ${e(row.fee_breakdown?.overtime_unit_minutes || 60)} minutes after ${e(row.fee_breakdown?.grace_minutes || 0)} minutes of grace, and physical return inspection.</small></span></label>` : ''}${inspectionControls(true)}</fieldset></section>
         <p class="form-error rental-release-error" role="alert"></p>
       </div>
       <div class="rental-release-footer"><p data-release-hint>Scan the customer rental QR at the selected handoff location.</p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button><button type="button" class="primary" data-verify-booking>Verify customer rental</button><button type="button" class="secondary" data-release-esp32 hidden disabled title="Send to ESP32 Counter Terminal and press the physical button to start the rental timer.">${terminalWifiIcon}Confirm on ESP32 Terminal</button><button type="submit" class="primary" data-release-confirm hidden disabled>Confirm handoff and start timer</button></div></div>
     </form>`);
     const form = modal.querySelector('form'), photos = bindInspectionPhotos(form);
     const espReleaseBtn = form.querySelector('[data-release-esp32]');
+    let rollingTimer = null;
     const sync = state => {
       form.querySelectorAll('[data-release-panel]').forEach(panel => { panel.hidden = Number(panel.dataset.releasePanel) !== state.step; });
       form.querySelectorAll('[data-release-step]').forEach(step => {
@@ -310,6 +318,16 @@ export function createRentalDesk(h) {
       form.querySelector('[data-manual-reason]').hidden = !state.manualLookup;
       form.elements.transactionCode.required = state.step === 1;
       form.querySelector('[data-release-checks]').disabled = state.step !== 2 || !state.bookingVerified;
+      const modeBadge = form.querySelector('[data-verification-mode-badge]');
+      if (modeBadge) {
+        const modeLabels = {
+          ROLLING_QR: '· Rolling TOTP QR Verified',
+          ROLLING_PIN: '· 6-Digit Rolling PIN Verified',
+          STATIC_QR: '· Customer QR Verified',
+          MANUAL: '· Manual Reference Verified'
+        };
+        modeBadge.textContent = modeLabels[state.verificationMode] || '';
+      }
       const scan = form.querySelector('[data-scan-field]'), verify = form.querySelector('[data-verify-booking]'), confirm = form.querySelector('[data-release-confirm]');
       scan.disabled = verify.disabled = state.busy; verify.hidden = state.step !== 1;
       verify.textContent = state.busy ? 'Verifying…' : 'Verify customer rental';
@@ -322,7 +340,66 @@ export function createRentalDesk(h) {
     const verification = createReleaseVerification({ api, rentalId: row.id, onChange: sync });
     const stopCamera = bindQrReaders(form, modal, { onCapture: () => verifyRental() });
     const verifyRental = async () => { stopCamera(); if (await verification.verifyBooking()) form.elements.customerVerified.focus(); };
-    for (const name of ['transactionCode', 'manualReason']) form.elements[name].addEventListener('input', () => { verification.update(name, form.elements[name].value); });
+    const loadRollingBtn = form.querySelector('[data-load-rolling-qr]');
+    const rollingContent = form.querySelector('[data-rolling-qr-content]');
+    if (loadRollingBtn && rollingContent) {
+      const fetchRollingTicket = async () => {
+        loadRollingBtn.disabled = true;
+        try {
+          const res = await api(`/rentals/${encodeURIComponent(row.id)}/rolling-qr`);
+          if (!form.isConnected) return;
+          const ticket = res?.ticket || {};
+          const expiresMs = ticket.rolling_expires_at ? new Date(ticket.rolling_expires_at).getTime() : Date.now() + 120000;
+          rollingContent.hidden = false;
+          const renderRollingView = () => {
+            const remainingSec = Math.max(0, Math.ceil((expiresMs - Date.now()) / 1000));
+            if (remainingSec <= 0 && form.isConnected && !rollingContent.hidden) {
+              fetchRollingTicket();
+              return;
+            }
+            rollingContent.innerHTML = `<div class="rolling-qr-live-card">${ticket.rolling_image_data_url ? `<img src="${e(ticket.rolling_image_data_url)}" alt="Time-based rolling rental QR" class="rolling-qr-img"/>` : ''}<div class="rolling-qr-details"><div><span class="eyebrow">6-DIGIT ROLLING PIN</span><strong class="rolling-pin-code">${e(ticket.rolling_pin || '------')}</strong></div><p class="rolling-countdown">Rotates in <strong>${remainingSec}s</strong> (2-min HMAC window)</p><div class="rolling-qr-actions"><button type="button" class="secondary" data-use-rolling-pin="${e(ticket.rolling_pin || '')}">Use 6-Digit PIN</button><button type="button" class="secondary" data-use-rolling-token="${e(ticket.rolling_qr_token || '')}">Use Rolling QR Token</button></div></div></div>`;
+            rollingContent.querySelector('[data-use-rolling-pin]')?.addEventListener('click', ev => {
+              const pin = ev.currentTarget.dataset.useRollingPin;
+              if (!pin) return;
+              form.elements.transactionCode.value = pin;
+              verification.update('transactionCode', pin);
+              verifyRental();
+            });
+            rollingContent.querySelector('[data-use-rolling-token]')?.addEventListener('click', ev => {
+              const tok = ev.currentTarget.dataset.useRollingToken;
+              if (!tok) return;
+              form.elements.transactionCode.value = tok;
+              verification.update('transactionCode', tok);
+              verifyRental();
+            });
+          };
+          clearInterval(rollingTimer);
+          renderRollingView();
+          rollingTimer = setInterval(() => {
+            if (!form.isConnected) { clearInterval(rollingTimer); return; }
+            renderRollingView();
+          }, 1000);
+          loadRollingBtn.textContent = 'Refresh rolling QR';
+        } catch (problem) {
+          if (form.isConnected) {
+            rollingContent.hidden = false;
+            rollingContent.innerHTML = `<p class="form-error">${e(problem.message)}</p>`;
+          }
+        } finally {
+          if (form.isConnected) loadRollingBtn.disabled = false;
+        }
+      };
+      loadRollingBtn.onclick = fetchRollingTicket;
+    }
+    for (const name of ['transactionCode', 'manualReason']) {
+      form.elements[name].addEventListener('input', () => {
+        const val = form.elements[name].value;
+        verification.update(name, val);
+        if (name === 'transactionCode' && /^\d{6}$/.test(val.trim())) {
+          verifyRental();
+        }
+      });
+    }
     form.elements.manualLookup.onchange = () => {
       stopCamera(); const manual = form.elements.manualLookup.checked;
       form.querySelector('[data-manual-reason]').hidden = !manual;
@@ -331,7 +408,7 @@ export function createRentalDesk(h) {
     };
     form.querySelector('[data-verify-booking]').onclick = verifyRental;
     form.elements.transactionCode.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); verifyRental(); } });
-    modal.addEventListener('close', () => verification.dispose(), { once: true });
+    modal.addEventListener('close', () => { clearInterval(rollingTimer); verification.dispose(); }, { once: true });
     if (walkIn) {
       form.elements.transactionCode.value = row.rental_code; form.elements.transactionCode.readOnly = true;
       form.elements.manualReason.value = 'Staff-assisted walk-in handover. Customer identity checked in person.';

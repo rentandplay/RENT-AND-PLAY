@@ -435,7 +435,11 @@ export function WorkspaceShell({
       setNotificationsOpen(false);
       try {
         await rentalNotifications.markRead([entry.dataset.rentalNotification]);
-        await workspaceUI.openTransaction(entry.dataset.notificationRental);
+        if (entry.dataset.notificationRental) {
+          await workspaceUI.openTransaction(entry.dataset.notificationRental);
+        } else if (entry.dataset.notificationPage) {
+          onNavigate(entry.dataset.notificationPage);
+        }
       } catch (error) {
         toast(error.message);
       }
@@ -935,6 +939,9 @@ export function WorkspaceShell({
                 onPeriodChange={onPeriodChange}
                 onNavigate={onNavigate}
                 showModal={showModal}
+                workspaceUI={workspaceUI}
+                api={api}
+                toast={toast}
               />
             ) : page === 'Inventory' ? (
               <InventorySection

@@ -148,3 +148,39 @@ export function bindInspectionPhotos(form) {
   };
   return () => { if (loading) throw new Error('Wait for the inspection photos to finish processing.'); return photos; };
 }
+
+
+export function initHardwareBarcodeScanner({ onScan } = {}) {
+  if (typeof window === 'undefined') return () => {};
+  let buffer = '', lastKeyTime = 0;
+  const handler = event => {
+    const isInput = event.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName);
+    const now = Date.now();
+    const isFast = (now - lastKeyTime) < 75;
+    lastKeyTime = now;
+
+    if (event.key === 'Enter') {
+      if (buffer.length >= 3 && isFast) {
+        const scanned = buffer.trim();
+        buffer = '';
+        if (onScan && typeof onScan === 'function') {
+          onScan(scanned, event);
+        }
+      }
+      buffer = '';
+      return;
+    }
+
+    if (event.key && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (!isFast && buffer.length > 0) {
+        buffer = '';
+      }
+      if (!isInput) {
+        buffer += event.key;
+      }
+    }
+  };
+
+  window.addEventListener('keydown', handler, true);
+  return () => window.removeEventListener('keydown', handler, true);
+}

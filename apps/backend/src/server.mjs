@@ -16,7 +16,7 @@ import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobi
 import { createReadCache } from './read-cache.mjs';
 import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-errors.mjs';
 import { createBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt, completeRentalReturn, lookupRental, rentalTicket, changeAssignedUnit, settleRentalPayment, inspectionPhoto, submitRentalPaymentProof, rentalPaymentProof, reviewRentalPaymentProof, prepareRentalDelivery, MOBILE_RENTAL_TERMS_VERSION } from './rental-flow.mjs';
-import { listNotifications, markNotificationsRead, registerNotificationDevice, unregisterNotificationDevice, createNotificationDispatcher } from './notifications.mjs';
+import { listNotifications, markNotificationsRead, registerNotificationDevice, unregisterNotificationDevice, createNotificationDispatcher, recordSecurityAlert, listSecurityAlerts } from './notifications.mjs';
 import { isCustomerRole, isOwnerRole, isStaffRole, normalizeRole } from './roles.mjs';
 import { createRegistrationOtpService } from './registration-otp.mjs';
 import { createPasswordResetOtpService } from './password-reset-otp.mjs';
@@ -109,6 +109,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     validateEmail,
     changeStaffPassword: (user, input, sessions) => changeWorkspacePassword(firebaseAuth, firestore, user, input, sessions, now()),
     listNotifications: (actor, options) => listNotifications(firestore, actor, options),
+    listSecurityAlerts: (actor, options) => listSecurityAlerts(firestore, actor, options),
+    recordSecurityAlert: (type, payload) => recordSecurityAlert(firestore, type, payload, now()),
     markNotificationsRead: (actor, input) => markNotificationsRead(firestore, actor, input, now()),
     registerNotificationDevice: async (actor, input) => {
       const result = await registerNotificationDevice(firestore, actor, input, now());
@@ -439,6 +441,10 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       services.invalidateReadCache?.(['payment_ledger', 'financial_daily']);
       rentalEvents.publishFinance();
     }
+    if (collections.has('security_alerts')) {
+      services.invalidateReadCache?.(['security_alerts', 'notification_inboxes']);
+      rentalEvents.publishDataChange('security.alert', { collections: ['security_alerts'] });
+    }
     rentalEvents.publishDataChange('data.changed', { collections: [...collections] });
   });
   function limitRegistrationRequests(req, action, max) {
@@ -637,13 +643,19 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const input = await body(req); if (typeof input?.email !== 'string' || typeof input?.password !== 'string' || input.email.length > 254 || input.password.length > 1024 || !input.password) return send(res, 400, { error: 'Enter your email and password.' });
         const email = validateEmailFormat(input.email);
         const session = await sessions.signIn(email, input.password, input.remember === true);
-        if (!session) return send(res, 401, { error: 'Email or password is incorrect.' });
+        if (!session) {
+          if (entry.count + 1 >= 3) {
+            Promise.resolve(services.recordSecurityAlert?.('SECURITY_BRUTE_FORCE_LOGIN', { ip: ip || 'unknown', reason: `Multiple failed sign-in attempts (${entry.count + 1}) for ${email} from IP ${String(ip || 'unknown').replace(/^::ffff:/, '')}.`, dedupeKey: `brute:${email}:${ip}:${Math.floor(now / 900000)}` })).then(() => rentalEvents.publishDataChange('security.alert', { type: 'SECURITY_BRUTE_FORCE_LOGIN' })).catch(() => {});
+          }
+          return send(res, 401, { error: 'Email or password is incorrect.' });
+        }
         const user = await services.getUser(session.uid);
         if (!user) return send(res, 403, { error: 'Your account has no workspace profile. Ask the owner to set up your access.' });
         if (!user.is_active) return send(res, 403, { error: 'Your workspace account is inactive. Ask the owner to restore your access.' });
         user.role = normalizeRole(user.role);
         if (!isStaffRole(user.role)) return send(res, 403, { error: 'Only operator or owner accounts can access the staff workspace. Customer accounts use the mobile app.' });
         await services.touchLogin(user.id); attempts.delete(ip);
+        sessions.recordSession?.(user.id, session.cookie, { userAgent: req.headers['user-agent'], ip, remember: input.remember === true, seconds: session.seconds });
         return send(res, 200, { user: publicUser(user) }, { 'Set-Cookie': cookie(session.cookie, session.seconds, input.remember === true) });
       }
       const terminalRoute = path.match(/^\/api\/terminals\/([A-Za-z0-9_-]{1,128})\/(pending|confirm)$/);
@@ -660,7 +672,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
       const inspectionRoute = path.match(/^\/api\/verification-requests\/([A-Za-z0-9_-]{1,128})\/inspection$/);
       const transactionRoute = path === '/api/rentals' || path === '/api/returns' || inspectionRoute;
-      const rentalFlowRoute = path.match(/^\/api\/rentals\/([A-Za-z0-9_-]{1,128})\/(release-verification|release|prepare-delivery|payment-proof|payment-review|receipt|complete-return|assignment|settlement|delivery|extension-review|extension-quote|extension|terminal-dispatch)$/);
+      const rentalFlowRoute = path.match(/^\/api\/rentals\/([A-Za-z0-9_-]{1,128})\/(release-verification|release|prepare-delivery|payment-proof|payment-review|rolling-qr|receipt|complete-return|assignment|settlement|delivery|extension-review|extension-quote|extension|terminal-dispatch)$/);
       const rentalLookupRoute = path === '/api/rentals/lookup';
       const counterBookingRoute = path === '/api/rental-bookings';
       const inspectionPhotoRoute = path.match(/^\/api\/rental-inspection-photos\/([A-Za-z0-9_-]{1,128})$/);
@@ -674,7 +686,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       const historicalReceiptRoute=path.match(/^\/api\/finance\/rentals\/([A-Za-z0-9_-]{1,128})\/receipt-history$/);
       const financeRoute=historicalReceiptRoute || ['/api/finance/summary','/api/finance/ledger','/api/finance/rentals','/api/finance/expenses','/api/reports/daily'].includes(path);
       const terminalTestRoute = path.match(/^\/api\/terminals\/([A-Za-z0-9_-]{1,128})\/test-ping$/);
-      const workspaceRoute = recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || path === '/api/settings/terms' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
+      const securitySessionsRoute = path === '/api/auth/sessions' || path === '/api/auth/sessions/revoke' || path === '/api/security/alerts';
+      const workspaceRoute = securitySessionsRoute || recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || path === '/api/settings/terms' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || maintenanceRoute || maintenanceStaffRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute || rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) {
         const mobileToken = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
@@ -709,6 +722,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (rentalLookupRoute && req.method === 'POST') return send(res, 200, await services.lookupRental(await body(req)));
         if (inspectionPhotoRoute && req.method === 'GET') return send(res, 200, await services.inspectionPhoto(inspectionPhotoRoute[1]));
         if (rentalFlowRoute && req.method === 'GET' && rentalFlowRoute[2] === 'payment-proof') return send(res, 200, await services.rentalPaymentProof(rentalFlowRoute[1]));
+        if (rentalFlowRoute && req.method === 'GET' && rentalFlowRoute[2] === 'rolling-qr') return send(res, 200, await services.rentalTicket(user, rentalFlowRoute[1]));
         if (rentalFlowRoute && req.method === 'POST') {
           const [, id, action] = rentalFlowRoute;
           const operations = { 'release-verification': 'verifyReleaseCodes', release: 'releaseBooking', 'prepare-delivery': 'prepareRentalDelivery', 'payment-review': 'reviewRentalPaymentProof', receipt: 'recordRentalReceipt', 'complete-return': 'completeRentalReturn', assignment: 'changeAssignedUnit', settlement: 'settleRentalPayment',delivery:'updateLocalDelivery','extension-review':'reviewRentalExtension','extension':'requestRentalExtension','extension-quote':'quoteRentalExtension','terminal-dispatch':'dispatchRentalToTerminal' };
@@ -717,7 +731,33 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
           return sendRentalUpdate(res, 200, result, { rentalId: id });
         }
         if (rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) return send(res, 405, { error: 'Method not allowed.' });
-        if (path === '/api/auth/me') return send(res, 200, { user: publicUser(user), firebaseProjectId: services.firebaseProjectId });
+        if (path === '/api/auth/me') {
+          if (token) sessions.recordSession?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress });
+          return send(res, 200, { user: publicUser(user), firebaseProjectId: services.firebaseProjectId });
+        }
+        if (path === '/api/auth/sessions' && req.method === 'GET') {
+          const list = sessions.listSessions?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress }) || [];
+          return send(res, 200, { sessions: list });
+        }
+        if (path === '/api/auth/sessions/revoke' && req.method === 'POST') {
+          const input = await body(req);
+          if (input?.allOthers === true) {
+            const revoked = sessions.revokeOtherSessions?.(user.id, token) || { revoked: true, revoked_count: 0 };
+            await services.recordSecurityAlert?.('SECURITY_SESSIONS_REVOKED', { actor_id: user.id, ip: req.socket.remoteAddress, reason: `${user.full_name || user.name || user.email} signed out of ${revoked.revoked_count} other active device session(s).` });
+            rentalEvents.publishDataChange('security.alert', { type: 'SECURITY_SESSIONS_REVOKED' });
+            return send(res, 200, { ok: true, ...revoked, sessions: sessions.listSessions?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress }) || [] });
+          }
+          if (typeof input?.sessionId === 'string' && input.sessionId.trim()) {
+            const revoked = sessions.revokeSessionById?.(user.id, input.sessionId.trim(), token);
+            if (!revoked) return send(res, 404, { error: 'Active session not found or already signed out.' });
+            const headers = revoked.revokedCurrent ? { 'Set-Cookie': cookie('', 0, true) } : {};
+            return send(res, 200, { ok: true, ...revoked, sessions: sessions.listSessions?.(user.id, revoked.revokedCurrent ? null : token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress }) || [] }, headers);
+          }
+          return send(res, 400, { error: 'Specify a sessionId or allOthers to revoke.' });
+        }
+        if (path === '/api/security/alerts' && req.method === 'GET') {
+          return send(res, 200, await services.listSecurityAlerts?.(user) || { alerts: [] });
+        }
         if (path === '/api/profile') return send(res, 200, { user: publicUser(await services.updateProfile(user.id, await body(req))) });
         if (path === '/api/workspace' && req.method === 'GET') return send(res, 200, await services.workspace(user.role,{view:queryOptions.view || '',filters:queryOptions}));
         if (maintenanceStaffRoute) return req.method === 'GET' ? send(res, 200, await services.maintenanceStaff()) : send(res, 405, { error: 'Method not allowed.' });

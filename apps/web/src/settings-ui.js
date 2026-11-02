@@ -33,8 +33,45 @@ Late returns incur additional late fees at the rates shown. Damage, loss, or mis
 4. Identification & Payment
 Show one physical Government or Student ID at handoff. For InstaPay / GCash QR transfers, upload the successful payment receipt for staff verification before release.`;
 
-export function renderSettings({ model, user, appearance, tab, draft, dirty, saving, preferences, users }, h) {
-  const { escape: e, icon } = h, isAdmin = ['OPERATOR', 'ADMIN', 'OWNER'].includes(String(user.role).toUpperCase()), owner = String(user.role).toUpperCase() === 'OWNER', s = model.settings || {}, tabs = settingsTabs(owner);
+export function renderActiveSessionsList(sessions = [], { escape: e, formatDate = v => String(v || '') } = {}) {
+  if (!Array.isArray(sessions) || !sessions.length) {
+    return '<p class="settings-draft-note">Active browser session verified. Other signed-in devices will appear here.</p>';
+  }
+  return `<div class="active-sessions-list">${sessions.map(session => {
+    const current = session.is_current === true;
+    return `<div class="active-session-row ${current ? 'is-current-session' : ''}" data-session-row="${e(session.id)}">
+      <div class="active-session-info">
+        <div class="active-session-header">
+          <strong>${e(session.device_label || 'Web Browser')}</strong>
+          ${current ? '<span class="session-badge current-session-badge">Current session</span>' : '<span class="session-badge">Signed in</span>'}
+        </div>
+        <small>IP: ${e(session.ip || 'Local')} · Last active: ${e(formatDate(session.last_active_at || session.created_at))}</small>
+      </div>
+      ${current ? '' : `<button type="button" class="secondary danger-outline" data-revoke-session="${e(session.id)}">Revoke</button>`}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+export function renderSecurityAlertsList(alerts = [], { escape: e, formatDate = v => String(v || '') } = {}) {
+  if (!Array.isArray(alerts) || !alerts.length) {
+    return '<p class="settings-draft-note">No security alerts triggered recently. Brute-force login blocks, duplicate payment proofs, and tampered QR scans appear here in real time.</p>';
+  }
+  return `<div class="security-alerts-feed">${alerts.map(alert => {
+    const high = String(alert.severity || 'HIGH').toUpperCase() === 'HIGH';
+    return `<div class="security-alert-item ${high ? 'severity-high' : 'severity-medium'}" data-security-alert="${e(alert.id)}">
+      <div class="security-alert-header">
+        <span class="security-severity-badge ${high ? 'high' : 'medium'}">${e(alert.severity || 'HIGH')}</span>
+        <strong>${e(alert.title)}</strong>
+        <small class="security-alert-time">${e(formatDate(alert.created_at))}</small>
+      </div>
+      <p>${e(alert.message)}</p>
+      ${alert.rental_id ? `<div class="security-alert-actions"><button type="button" class="secondary small-btn" data-security-open-rental="${e(alert.rental_id)}">Inspect rental ${e(alert.rental_code || alert.rental_id)}</button></div>` : ''}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+export function renderSettings({ model, user, appearance, tab, draft, dirty, saving, preferences, users, activeSessions = null, securityAlerts = null }, h) {
+  const { escape: e, icon, formatDate = v => String(v || '') } = h, isAdmin = ['OPERATOR', 'ADMIN', 'OWNER'].includes(String(user.role).toUpperCase()), owner = String(user.role).toUpperCase() === 'OWNER', s = model.settings || {}, tabs = settingsTabs(owner);
   const active = tabs.some(row => row.id === tab) ? tab : 'business';
   const values = draft || { businessName: s.business_name || 'Rent & Play', location: s.location || 'Los Baños, Laguna', currency: s.currency || 'PHP', timezone: s.timezone || 'Asia/Manila', defaultLateGraceHours: s.default_late_grace_hours ?? 0 };
   const title = (eyebrow, name, note) => `<div class="settings-section-title"><span class="eyebrow">${eyebrow}</span><h3>${name}</h3><p>${note}</p></div>`;
@@ -55,6 +92,11 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
   if (active === 'appearance') content = `<section class="panel settings-card">${appearance}<div class="settings-tip"><strong>Personal to this browser</strong><p>Your appearance choice is remembered on this device. It does not change another staff member’s screen.</p></div></section>`;
   if (active === 'preferences') content = `<section class="panel settings-card">${title('YOUR WORKFLOW', 'Workspace preferences', 'Saved on this browser. These options do not change business data or other devices.')}<form id="preferences-form" class="admin-form"><label class="settings-checkbox-row"><input name="autoRefresh" type="checkbox" ${preferences.autoRefresh ? 'checked' : ''}/><span>Automatically refresh workspace data<small>Check for updates every 2 minutes while the page is visible. Paused in Settings and while editing. Manual Refresh is always available.</small></span></label><div class="settings-divider"></div><h4>Default analytics view</h4><p>Use these defaults when opening Reports in a new session. You can still adjust filters inside Reports.</p><div class="form-grid"><label>Default period<select name="reportPeriod">${options([['7d', 'Last 7 days'], ['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['365d', 'Last 365 days']], preferences.reportPeriod)}</select></label><label>Default trend grouping<select name="reportGrouping">${options([['auto', 'Automatic'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']], preferences.reportGrouping)}</select></label></div><p class="form-error" role="alert"></p><div class="settings-form-footer"><button type="button" id="preferences-reset" class="secondary">Restore defaults</button><button type="submit" class="primary">Save preferences</button></div></form></section>`;
   if (active === 'users') content = `${users()}<div class="settings-tip"><strong>Customer accounts are managed separately</strong><p>This list contains staff accounts only: Operators and Owners. Manage customer profiles and mobile app access in the Customers section. Each account uses its own email and password.</p></div>`;
-  if (active === 'account') { const roleLabel = owner ? 'Owner' : isAdmin ? 'Operator' : 'Customer'; content = `<section class="panel settings-card">${title('ACCOUNT & SECURITY', 'Your account', 'Review your signed-in account and keep your access secure.')}<dl class="settings-account-details"><div><dt>Name</dt><dd>${e(user.name)}</dd></div><div><dt>Email</dt><dd>${e(user.email)}</dd></div><div><dt>Workspace role</dt><dd>${roleLabel}</dd></div><div><dt>Sign-in provider</dt><dd>Firebase Authentication</dd></div></dl><div class="settings-action-row"><div><h4>Profile details</h4><p>Update your name and personal profile information.</p></div><button class="secondary" data-page="Profile">View profile</button></div><div class="settings-action-row"><div><h4>Password reset</h4><p>Send a reset link to <strong>${e(user.email)}</strong>. Complete the password change in your email.</p></div><button class="secondary" id="settings-password-reset">Send reset email</button></div><p class="settings-security-status" role="status"></p><div class="settings-tip"><strong>On a shared computer?</strong><p>Sign out from the account menu when you finish. Your password is never shown on this page.</p></div></section>`; }
+  if (active === 'account') {
+    const roleLabel = owner ? 'Owner' : isAdmin ? 'Operator' : 'Customer';
+    content = `<section class="panel settings-card">${title('ACCOUNT & SECURITY', 'Your account', 'Review your signed-in account and keep your access secure.')}<dl class="settings-account-details"><div><dt>Name</dt><dd>${e(user.name)}</dd></div><div><dt>Email</dt><dd>${e(user.email)}</dd></div><div><dt>Workspace role</dt><dd>${roleLabel}</dd></div><div><dt>Sign-in provider</dt><dd>Firebase Authentication</dd></div></dl><div class="settings-action-row"><div><h4>Profile details</h4><p>Update your name and personal profile information.</p></div><button class="secondary" data-page="Profile">View profile</button></div><div class="settings-action-row"><div><h4>Password reset</h4><p>Send a reset link to <strong>${e(user.email)}</strong>. Complete the password change in your email.</p></div><button class="secondary" id="settings-password-reset">Send reset email</button></div><p class="settings-security-status" role="status"></p><div class="settings-tip"><strong>On a shared computer?</strong><p>Sign out from the account menu when you finish. Your password is never shown on this page.</p></div></section>
+    <section class="panel settings-card" id="settings-active-sessions-card">${title('ACTIVE SESSIONS MANAGEMENT', 'Signed-in devices & browsers', 'Monitor active browsers signed into your account and revoke access from other devices immediately.')}<div data-active-sessions-list>${activeSessions ? renderActiveSessionsList(activeSessions, { escape: e, formatDate }) : '<p class="settings-draft-note">Loading active sessions…</p>'}</div><div class="settings-form-footer"><button type="button" class="secondary" id="settings-refresh-sessions">Refresh sessions</button><button type="button" class="secondary" id="settings-revoke-other-sessions">Sign out of all other devices</button></div></section>
+    <section class="panel settings-card" id="settings-security-alerts-card">${title('REAL-TIME SECURITY ALERTS', 'Security & anti-fraud monitor', 'Live feed of blocked brute-force logins, duplicate or edited payment proofs, and rolling QR verification failures.')}<div data-security-alerts-list>${securityAlerts ? renderSecurityAlertsList(securityAlerts, { escape: e, formatDate }) : '<p class="settings-draft-note">Loading recent security alerts…</p>'}</div></section>`;
+  }
   return `<div class="settings-tabs" role="tablist" aria-label="Settings sections" aria-orientation="horizontal">${tabs.map(row => `<button type="button" role="tab" id="settings-tab-${row.id}" data-settings-tab="${row.id}" aria-controls="settings-panel-${row.id}" aria-selected="${row.id === active}" tabindex="${row.id === active ? 0 : -1}">${icon(row.icon)}<span>${row.label}</span></button>`).join('')}</div><div class="settings-tab-panel" role="tabpanel" id="settings-panel-${active}" aria-labelledby="settings-tab-${active}" tabindex="0">${content}</div>`;
 }

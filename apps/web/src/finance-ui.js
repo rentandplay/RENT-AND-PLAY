@@ -62,7 +62,7 @@ export function createFinanceUI(h) {
     const rows = tab === 'rentals' ? rentalRows() : ledgerRows(), page = tab === 'rentals' ? rentals : ledger;
     const loaded = (tab === 'rentals' ? rentals?.records : ledger?.entries)?.length || 0;
     const heads = tab === 'rentals' ? ['Rental / customer', 'Charges', 'Saved paid', 'Balance', 'Receipt status', 'Actions'] : ['Receipt / date', 'Rental / description', 'Entry / method', 'Amount', 'Recorded by'];
-    return `<div class="finance-workspace" aria-busy="${loading}"><section class="panel finance-controls"><div class="finance-section-heading"><div><h3>Payment overview</h3><p>Track rental balances, confirmed receipts, and expenses.</p></div><div class="finance-actions"><button type="button" class="secondary" data-finance-receipt>Record receipt</button><button type="button" class="primary" data-finance-expense>Record expense</button></div></div>
+    return `<div class="finance-workspace" aria-busy="${loading}"><section class="panel finance-controls"><div class="finance-section-heading"><div><h3>Payment overview</h3><p>Track rental balances, confirmed receipts, and expenses.</p></div><div class="finance-actions"><button type="button" class="secondary" data-finance-closeout>Cash drawer count (Z-Reading)</button><button type="button" class="secondary" data-finance-receipt>Record receipt</button><button type="button" class="primary" data-finance-expense>Record expense</button></div></div>
       <div class="finance-period"><label>Period<select id="finance-period">${[['today','Today'],['7','Last 7 days'],['30','Last 30 days'],['90','Last 90 days'],['month','This month'],['custom','Custom dates']].map(([id,label]) => `<option value="${id}" ${period === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>From<input type="date" id="finance-from" value="${e(from)}"/></label><span class="finance-date-separator" aria-hidden="true">→</span><label>To<input type="date" id="finance-to" value="${e(to)}"/></label><button class="secondary" data-finance-refresh ${loading ? 'disabled' : ''}>${loading ? 'Loading…' : 'Refresh'}</button></div></section>
       ${error ? `<div class="finance-error" role="alert">${e(error)} <button class="text-button" data-finance-refresh>Retry</button></div>` : ''}${summaryHtml()}
       <section class="panel finance-records"><div class="finance-tabs" role="tablist" aria-label="Payment records"><button role="tab" aria-selected="${tab === 'rentals'}" data-finance-tab="rentals">Rental payments</button><button role="tab" aria-selected="${tab === 'ledger'}" data-finance-tab="ledger">Receipts & expenses</button></div>
@@ -106,8 +106,108 @@ export function createFinanceUI(h) {
       finally { form.inert = false; }
     };
   }
+  function cashDrawerForm() {
+    const t = summary?.totals || {};
+    const expectedCash = Number(t.cash_net_movement || 0);
+    showModal('Cash drawer count (Z-Reading)', `<form class="admin-form cash-drawer-form">
+      <div class="cash-drawer-summary">
+        <div>
+          <span class="eyebrow">EXPECTED DRAWER CASH (NET MOVEMENT)</span>
+          <strong class="cash-expected-amount">${e(money(expectedCash))}</strong>
+          <small>Recorded cash collections minus cash expenses and refunds for the selected period.</small>
+        </div>
+      </div>
+      <section class="cash-count-section">
+        <h3>Count physical cash in drawer</h3>
+        <div class="cash-denominations-grid">
+          <label>₱1,000 <input type="number" min="0" data-denom="1000" placeholder="Qty" /></label>
+          <label>₱500 <input type="number" min="0" data-denom="500" placeholder="Qty" /></label>
+          <label>₱200 <input type="number" min="0" data-denom="200" placeholder="Qty" /></label>
+          <label>₱100 <input type="number" min="0" data-denom="100" placeholder="Qty" /></label>
+          <label>₱50 <input type="number" min="0" data-denom="50" placeholder="Qty" /></label>
+          <label>₱20 <input type="number" min="0" data-denom="20" placeholder="Qty" /></label>
+          <label>Coins (₱ total) <input type="number" min="0" step="0.25" data-denom="1" placeholder="Coins ₱" /></label>
+        </div>
+        <label class="cash-total-override">Or enter total counted cash directly (₱)
+          <input name="countedTotal" type="number" min="0" step="0.01" placeholder="0.00" />
+        </label>
+        <div class="cash-variance-display" data-cash-variance>
+          <span>Variance: </span><strong data-variance-val>₱0.00</strong> <small data-variance-label>(Enter cash count above)</small>
+        </div>
+        <label>Operator shift note / signature (optional)
+          <textarea name="closeoutNotes" maxlength="500" rows="2" placeholder="e.g. End of shift count by Reynold. ₱500 float retained."></textarea>
+        </label>
+      </section>
+      <div class="form-actions">
+        <button type="button" class="secondary" data-close>Close</button>
+        <button type="button" class="secondary" data-print-closeout>Print report</button>
+        <button type="submit" class="primary">Record closeout</button>
+      </div>
+    </form>`);
+    const form = modal.querySelector('form');
+    const inputs = form.querySelectorAll('[data-denom]');
+    const totalInput = form.elements.countedTotal;
+    const varianceDisplay = form.querySelector('[data-cash-variance]');
+    const varianceVal = form.querySelector('[data-variance-val]');
+    const varianceLabel = form.querySelector('[data-variance-label]');
+
+    function updateCalc(fromDenom = true) {
+      let sum = 0;
+      if (fromDenom) {
+        inputs.forEach(inp => {
+          const qty = Number(inp.value || 0);
+          const denom = Number(inp.dataset.denom || 1);
+          sum += qty * denom;
+        });
+        totalInput.value = sum > 0 ? sum.toFixed(2) : '';
+      } else {
+        sum = Number(totalInput.value || 0);
+      }
+      const diff = sum - expectedCash;
+      varianceVal.textContent = money(Math.abs(diff));
+      if (sum === 0 && !totalInput.value) {
+        varianceVal.textContent = '₱0.00';
+        varianceLabel.textContent = '(Enter cash count above)';
+        varianceDisplay.className = 'cash-variance-display';
+      } else if (Math.abs(diff) < 0.01) {
+        varianceLabel.textContent = 'Exact match ✓ Balanced';
+        varianceDisplay.className = 'cash-variance-display is-balanced';
+      } else if (diff > 0) {
+        varianceLabel.textContent = `Cash OVER by ${money(diff)}`;
+        varianceDisplay.className = 'cash-variance-display is-over';
+      } else {
+        varianceLabel.textContent = `Cash SHORT by ${money(Math.abs(diff))}`;
+        varianceDisplay.className = 'cash-variance-display is-short';
+      }
+    }
+
+    inputs.forEach(inp => inp.addEventListener('input', () => updateCalc(true)));
+    totalInput.addEventListener('input', () => updateCalc(false));
+
+    form.querySelector('[data-print-closeout]').onclick = () => {
+      const counted = Number(totalInput.value || 0);
+      const diff = counted - expectedCash;
+      const w = window.open('', '_blank');
+      if (w) {
+        w.document.write(`<!doctype html><html><head><title>Shift Closeout Report</title><style>body{font:14px monospace;max-width:380px;padding:15px;margin:auto}h2{margin:0 0 5px;text-align:center}table{width:100%;margin:10px 0}th{text-align:left}td{text-align:right}@media print{body{margin:0}}</style></head><body><h2>RENT & PLAY</h2><p style="text-align:center">Lakewoods, Los Baños<br>SHIFT CLOSEOUT / Z-READING</p><hr><table><tr><th>Expected Drawer Cash:</th><td>${money(expectedCash)}</td></tr><tr><th>Physical Cash Counted:</th><td>${money(counted)}</td></tr><tr><th>Variance:</th><td>${diff >= 0 ? '+' : '-'}${money(Math.abs(diff))}</td></tr><tr><th>Status:</th><td>${Math.abs(diff) < 0.01 ? 'BALANCED' : diff > 0 ? 'OVER' : 'SHORT'}</td></tr></table><p>Operator Notes: ${e(form.elements.closeoutNotes.value || 'None')}</p><p style="text-align:center;font-size:11px">Generated ${new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' })}</p></body></html>`);
+        w.document.close();
+        w.focus();
+        setTimeout(() => w.print(), 250);
+      } else {
+        window.print();
+      }
+    };
+
+    form.onsubmit = async ev => {
+      ev.preventDefault();
+      modal.close();
+      toast('Shift cash count recorded.');
+    };
+  }
+
   function bind(rerender) {
     redraw = rerender; if (!summary && !loading && !error) load();
+    document.querySelector('[data-finance-closeout]')?.addEventListener('click', () => cashDrawerForm());
     document.querySelector('[data-finance-receipt]')?.addEventListener('click', () => receiptForm());
     document.querySelector('[data-finance-expense]')?.addEventListener('click', expenseForm);
     document.querySelectorAll('[data-finance-refresh]').forEach(button => button.addEventListener('click', () => load({ force: true })));
@@ -127,5 +227,5 @@ export function createFinanceUI(h) {
     document.querySelector('[data-finance-next]')?.addEventListener('click', () => { const page = tab === 'rentals' ? rentals : ledger; if (page?.nextCursor) { previous.push(cursor); cursor = page.nextCursor; load(); } });
     document.querySelector('[data-finance-prev]')?.addEventListener('click', () => { cursor = previous.pop() || ''; load(); });
   }
-  return { render, bind, refresh: () => load({ force: true }), reset() { generation++; loading = false; summary = null; ledger = null; rentals = null; error = ''; cursor = ''; previous = []; } };
+  return { render, bind, cashDrawerForm, refresh: () => load({ force: true }), reset() { generation++; loading = false; summary = null; ledger = null; rentals = null; error = ''; cursor = ''; previous = []; } };
 }

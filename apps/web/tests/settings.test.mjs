@@ -62,7 +62,12 @@ test('owner can view and edit Terms & Conditions and InstaPay / GCash QR setting
         instapay_account_name: 'Rent and Play Shop',
         instapay_account_number: '09171234567',
         terms_and_conditions: 'Custom Rental Agreement 2026',
-        rental_terms: 'Custom Checkout Policy 2026'
+        rental_terms: 'Custom Checkout Policy 2026',
+        privacy_policy: 'Custom Privacy 2026',
+        refund_policy: 'Custom Refund 2026',
+        accepted_id_types: 'Custom IDs 2026',
+        receipt_header_title: 'CUSTOM HUB',
+        receipt_footer_note: 'Custom Footer Note 2026'
       }
     },
     user: { role: 'OWNER' },
@@ -75,7 +80,14 @@ test('owner can view and edit Terms & Conditions and InstaPay / GCash QR setting
   assert.ok(html.includes('id="terms-settings-form"'));
   assert.ok(html.includes('Custom Rental Agreement 2026'));
   assert.ok(html.includes('Custom Checkout Policy 2026'));
+  assert.ok(html.includes('Custom Privacy 2026'));
+  assert.ok(html.includes('Custom Refund 2026'));
+  assert.ok(html.includes('Custom IDs 2026'));
   assert.ok(html.includes('terms-restore-default'));
+  assert.ok(html.includes('id="rules-settings-form"'));
+  assert.ok(html.includes('id="receipt-settings-form"'));
+  assert.ok(html.includes('CUSTOM HUB'));
+  assert.ok(html.includes('Custom Footer Note 2026'));
 });
 
 test('non-owners see read-only Terms & Conditions and cannot edit them', () => {

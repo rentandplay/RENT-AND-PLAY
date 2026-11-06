@@ -6,7 +6,17 @@ import { isStaffRole, normalizeRole } from './roles.mjs';
 import { allocateCustomerCode } from './customer-codes.mjs';
 import { validateInstapayQr } from './payment-proof.mjs';
 import { randomBytes, createHash } from 'node:crypto';
-import { DEFAULT_TERMS_AND_CONDITIONS, DEFAULT_RENTAL_TERMS, DEFAULT_TERMS_VERSION } from './terms-constants.mjs';
+import {
+  DEFAULT_TERMS_AND_CONDITIONS,
+  DEFAULT_RENTAL_TERMS,
+  DEFAULT_PRIVACY_POLICY,
+  DEFAULT_REFUND_POLICY,
+  DEFAULT_ACCEPTED_IDS,
+  DEFAULT_SECURITY_DEPOSIT_NOTE,
+  DEFAULT_DAMAGE_POLICY_NOTE,
+  DEFAULT_RECEIPT_FOOTER,
+  DEFAULT_TERMS_VERSION
+} from './terms-constants.mjs';
 import { emailError, nameError, passwordError, passwordMatchError, phoneError, validationFailure, validateEmailFormat } from './account-validation.mjs';
 import { createAccountMailer } from './account-mail.mjs';
 import { recordPage } from './record-pages.mjs';
@@ -21,7 +31,12 @@ const clean = (value, max = 255) => typeof value === 'string' ? value.trim().sli
 const serial = serializeTransaction;
 const customerFields = ['full_name', 'customer_code', 'email', 'phone', 'address', 'auth_uid', 'is_active'];
 const accountFields = ['full_name', 'email', 'phone', 'role', 'is_active'];
-const businessFields = ['business_name', 'location', 'currency', 'timezone', 'default_late_grace_hours'];
+const businessFields = [
+  'business_name', 'location', 'currency', 'timezone', 'default_late_grace_hours',
+  'contact_phone', 'contact_channels', 'opens_at', 'closes_at',
+  'reservation_hold_minutes', 'max_active_rentals_per_customer',
+  'announcement_enabled', 'announcement_text'
+];
 
 export function validateCustomer(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Customer details are required.');
@@ -59,6 +74,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
         if (view === 'Reports') {
           const from=filters.from || new Date(now.getTime()-365*86400000).toISOString().slice(0,10);
           query=query.where('confirmed_rental_at','>=',new Date(Date.parse(from+'T00:00:00+08:00')-31*86400000));
+          if (filters.to) query=query.where('confirmed_rental_at','<=',new Date(Date.parse(filters.to+'T23:59:59.999+08:00')));
         } else query=query.where('status','in',OPEN_RENTALS).limit(201);
       }
       if (name === 'customers') query=query.limit(50);
@@ -76,7 +92,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   source.audit_logs = auditSnapshot.docs.map(docData);
   const itemMap = new Map(source.items.map(item => [item.id, item]));
   const customerMap = new Map(source.customers.map(customer => [customer.id, customer]));
-  if(view){
+  if(view === 'Customers' || !view){
     const summaries=await Promise.all(source.customers.map(customer=>db.collection('customer_report_summaries').doc(customer.id).get()));
     source.customers.forEach((customer,index)=>{if(summaries[index].exists)customer.rental_summary=summaries[index].data();});
   }
@@ -115,7 +131,26 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   const settings = settingsDoc.exists ? settingsDoc.data() : { business_name: 'Rent & Play', location: 'Los Baños, Laguna', currency: 'PHP', timezone: 'Asia/Manila', default_late_grace_hours: 0 };
   if (!settings.terms_and_conditions) settings.terms_and_conditions = DEFAULT_TERMS_AND_CONDITIONS;
   if (!settings.rental_terms) settings.rental_terms = DEFAULT_RENTAL_TERMS;
+  if (!settings.privacy_policy) settings.privacy_policy = DEFAULT_PRIVACY_POLICY;
+  if (!settings.refund_policy) settings.refund_policy = DEFAULT_REFUND_POLICY;
+  if (!settings.accepted_id_types) settings.accepted_id_types = DEFAULT_ACCEPTED_IDS;
+  if (!settings.security_deposit_note) settings.security_deposit_note = DEFAULT_SECURITY_DEPOSIT_NOTE;
+  if (!settings.damage_policy_note) settings.damage_policy_note = DEFAULT_DAMAGE_POLICY_NOTE;
+  if (!settings.receipt_footer_note) settings.receipt_footer_note = DEFAULT_RECEIPT_FOOTER;
   if (!settings.terms_version) settings.terms_version = DEFAULT_TERMS_VERSION;
+  if (!settings.opens_at) settings.opens_at = '08:00';
+  if (!settings.closes_at) settings.closes_at = '20:00';
+  if (!settings.contact_phone) settings.contact_phone = '0992-768-5192';
+  if (!settings.contact_channels) settings.contact_channels = 'Call / Text / Viber';
+  if (settings.reservation_hold_minutes == null) settings.reservation_hold_minutes = 30;
+  if (settings.max_active_rentals_per_customer == null) settings.max_active_rentals_per_customer = 2;
+  if (settings.default_overtime_rate == null) settings.default_overtime_rate = 100;
+  if (settings.lost_piece_fee == null) settings.lost_piece_fee = 50;
+  if (settings.accept_cash == null) settings.accept_cash = true;
+  if (!settings.receipt_header_title) settings.receipt_header_title = 'RENT & PLAY';
+  if (!settings.receipt_branch_line) settings.receipt_branch_line = 'Lakewoods Subdivision';
+  if (!settings.receipt_city_line) settings.receipt_city_line = 'Los Baños, Laguna';
+  if (!settings.receipt_contact_line) settings.receipt_contact_line = 'Contact: 0992-768-5192';
   let users = [];
   const userProfiles = new Map();
   if (role === 'OWNER' && !mobile && (!view || view==='Settings')) {
@@ -445,23 +480,59 @@ export async function savePricing(db, actor, input, now = new Date()) {
 }
 
 export async function saveSettings(db, actor, input, now = new Date()) {
-  const value = { business_name: clean(input.businessName, 150), location: clean(input.location, 255), currency: clean(input.currency, 3).toUpperCase(), timezone: clean(input.timezone, 80), default_late_grace_hours: Number(input.defaultLateGraceHours || 0), updated_at: now };
-  if (!value.business_name || !value.location || !/^[A-Z]{3}$/.test(value.currency) || !value.timezone || !Number.isFinite(value.default_late_grace_hours) || value.default_late_grace_hours < 0 || value.default_late_grace_hours > 168) fail(400, 'Enter valid business settings.');
+  const businessName = clean(input.businessName ?? input.business_name, 150);
+  const location = clean(input.location, 255);
+  const currency = clean(input.currency || 'PHP', 3).toUpperCase();
+  const timezone = clean(input.timezone || 'Asia/Manila', 80);
+  const defaultLateGraceHours = Number(input.defaultLateGraceHours ?? input.default_late_grace_hours ?? 0);
+  const contactPhone = clean(input.contactPhone ?? input.contact_phone ?? '', 40);
+  const contactChannels = clean(input.contactChannels ?? input.contact_channels ?? '', 100);
+  const opensAt = clean(input.opensAt ?? input.opens_at ?? '08:00', 10);
+  const closesAt = clean(input.closesAt ?? input.closes_at ?? '20:00', 10);
+  const reservationHoldMinutes = Number(input.reservationHoldMinutes ?? input.reservation_hold_minutes ?? 30);
+  const maxActiveRentalsPerCustomer = Number(input.maxActiveRentalsPerCustomer ?? input.max_active_rentals_per_customer ?? 2);
+  const announcementEnabled = input.announcementEnabled === true || input.announcementEnabled === 'true' || input.announcement_enabled === true;
+  const announcementText = clean(input.announcementText ?? input.announcement_text ?? '', 500);
+
+  if (!businessName || !location || !/^[A-Z]{3}$/.test(currency) || !timezone || !Number.isFinite(defaultLateGraceHours) || defaultLateGraceHours < 0 || defaultLateGraceHours > 168) fail(400, 'Enter valid business settings.');
+  if (!Number.isFinite(reservationHoldMinutes) || reservationHoldMinutes < 5 || reservationHoldMinutes > 1440) fail(400, 'Enter a reservation hold time between 5 and 1440 minutes.');
+  if (!Number.isFinite(maxActiveRentalsPerCustomer) || maxActiveRentalsPerCustomer < 1 || maxActiveRentalsPerCustomer > 20) fail(400, 'Enter a maximum active rentals limit between 1 and 20.');
+
+  const value = {
+    business_name: businessName,
+    location,
+    currency,
+    timezone,
+    default_late_grace_hours: defaultLateGraceHours,
+    contact_phone: contactPhone || '0992-768-5192',
+    contact_channels: contactChannels || 'Call / Text / Viber',
+    opens_at: opensAt || '08:00',
+    closes_at: closesAt || '20:00',
+    reservation_hold_minutes: reservationHoldMinutes,
+    max_active_rentals_per_customer: maxActiveRentalsPerCustomer,
+    announcement_enabled: announcementEnabled,
+    announcement_text: announcementText,
+    updated_at: now
+  };
   const ref = db.collection('settings').doc('business'), current = await ref.get(), batch = db.batch();
   batch.set(ref, value, { merge: true });
   stageAudit(batch, db, actor, 'BUSINESS_SETTINGS_UPDATED', 'SETTINGS', 'business', { before: current.exists ? auditFields(current.data(), businessFields) : null, after: auditFields(value, businessFields), now });
-  await batch.commit(); return serial(value);
+  await batch.commit(); return { ...value };
 }
 
 export async function savePaymentSettings(db, actor, input, now = new Date()) {
   const value = validateInstapayQr(input);
+  if (input.acceptCash !== undefined || input.accept_cash !== undefined) {
+    value.accept_cash = input.acceptCash === true || input.acceptCash === 'true' || input.accept_cash === true;
+  }
   const ref = db.collection('settings').doc('business'), current = await ref.get();
   const before = current.exists ? current.data() : {};
   const safeAudit = fields => ({
     qr_configured: Boolean(fields.instapay_qr_data_url),
     account_name: fields.instapay_account_name || null,
     account_number_last_four: fields.instapay_account_number ? fields.instapay_account_number.slice(-4) : null,
-    instructions: fields.instapay_instructions || null
+    instructions: fields.instapay_instructions || null,
+    accept_cash: fields.accept_cash !== false
   });
   const batch = db.batch();
   batch.set(ref, { ...value, updated_at: now }, { merge: true });
@@ -471,8 +542,12 @@ export async function savePaymentSettings(db, actor, input, now = new Date()) {
 }
 
 export async function saveTermsSettings(db, actor, input, now = new Date()) {
-  const terms_and_conditions = typeof input?.termsAndConditions === 'string' ? input.termsAndConditions.trim().slice(0, 15000) : '';
-  const rental_terms = typeof input?.rentalTerms === 'string' ? input.rentalTerms.trim().slice(0, 10000) : '';
+  const terms_and_conditions = typeof input?.termsAndConditions === 'string' ? input.termsAndConditions.trim().slice(0, 15000) : (typeof input?.terms_and_conditions === 'string' ? input.terms_and_conditions.trim().slice(0, 15000) : '');
+  const rental_terms = typeof input?.rentalTerms === 'string' ? input.rentalTerms.trim().slice(0, 10000) : (typeof input?.rental_terms === 'string' ? input.rental_terms.trim().slice(0, 10000) : '');
+  const privacy_policy = typeof input?.privacyPolicy === 'string' ? input.privacyPolicy.trim().slice(0, 15000) : (typeof input?.privacy_policy === 'string' ? input.privacy_policy.trim().slice(0, 15000) : '');
+  const refund_policy = typeof input?.refundPolicy === 'string' ? input.refundPolicy.trim().slice(0, 10000) : (typeof input?.refund_policy === 'string' ? input.refund_policy.trim().slice(0, 10000) : '');
+  const accepted_id_types = typeof input?.acceptedIdTypes === 'string' ? input.acceptedIdTypes.trim().slice(0, 2000) : (typeof input?.accepted_id_types === 'string' ? input.accepted_id_types.trim().slice(0, 2000) : '');
+
   if (!terms_and_conditions) fail(400, 'Enter valid Terms & Conditions.');
   const ref = db.collection('settings').doc('business'), current = await ref.get();
   const before = current.exists ? current.data() : {};
@@ -480,6 +555,9 @@ export async function saveTermsSettings(db, actor, input, now = new Date()) {
   const value = {
     terms_and_conditions,
     rental_terms: rental_terms || DEFAULT_RENTAL_TERMS,
+    privacy_policy: privacy_policy || before.privacy_policy || DEFAULT_PRIVACY_POLICY,
+    refund_policy: refund_policy || before.refund_policy || DEFAULT_REFUND_POLICY,
+    accepted_id_types: accepted_id_types || before.accepted_id_types || DEFAULT_ACCEPTED_IDS,
     terms_version,
     terms_updated_at: now,
     terms_updated_by: String(actor)
@@ -492,7 +570,67 @@ export async function saveTermsSettings(db, actor, input, now = new Date()) {
     now
   });
   await batch.commit();
-  return serial(value);
+  return { ...value };
+}
+
+export async function saveRulesSettings(db, actor, input, now = new Date()) {
+  const default_overtime_rate = Number(input.defaultOvertimeRate ?? input.default_overtime_rate ?? 100);
+  const lost_piece_fee = Number(input.lostPieceFee ?? input.lost_piece_fee ?? 50);
+  const security_deposit_note = clean(input.securityDepositNote ?? input.security_deposit_note ?? '', 1000);
+  const damage_policy_note = clean(input.damagePolicyNote ?? input.damage_policy_note ?? '', 1000);
+
+  if (!Number.isFinite(default_overtime_rate) || default_overtime_rate < 0) fail(400, 'Enter a valid overtime rate.');
+  if (!Number.isFinite(lost_piece_fee) || lost_piece_fee < 0) fail(400, 'Enter a valid lost piece fee.');
+
+  const ref = db.collection('settings').doc('business'), current = await ref.get();
+  const before = current.exists ? current.data() : {};
+  const value = {
+    default_overtime_rate,
+    lost_piece_fee,
+    security_deposit_note: security_deposit_note || DEFAULT_SECURITY_DEPOSIT_NOTE,
+    damage_policy_note: damage_policy_note || DEFAULT_DAMAGE_POLICY_NOTE,
+    rules_updated_at: now,
+    rules_updated_by: String(actor)
+  };
+  const batch = db.batch();
+  batch.set(ref, value, { merge: true });
+  stageAudit(batch, db, actor, 'RULES_SETTINGS_UPDATED', 'SETTINGS', 'business', {
+    before: { default_overtime_rate: before.default_overtime_rate ?? 100, lost_piece_fee: before.lost_piece_fee ?? 50 },
+    after: { default_overtime_rate, lost_piece_fee },
+    now
+  });
+  await batch.commit();
+  return { ...value };
+}
+
+export async function saveReceiptSettings(db, actor, input, now = new Date()) {
+  const receipt_header_title = clean(input.receiptHeaderTitle ?? input.receipt_header_title ?? 'RENT & PLAY', 80);
+  const receipt_branch_line = clean(input.receiptBranchLine ?? input.receipt_branch_line ?? '', 120);
+  const receipt_city_line = clean(input.receiptCityLine ?? input.receipt_city_line ?? '', 120);
+  const receipt_contact_line = clean(input.receiptContactLine ?? input.receipt_contact_line ?? '', 120);
+  const receipt_footer_note = clean(input.receiptFooterNote ?? input.receipt_footer_note ?? '', 500);
+
+  if (!receipt_header_title) fail(400, 'Enter a receipt header store title.');
+  const ref = db.collection('settings').doc('business'), current = await ref.get();
+  const before = current.exists ? current.data() : {};
+  const value = {
+    receipt_header_title,
+    receipt_branch_line,
+    receipt_city_line,
+    receipt_contact_line,
+    receipt_footer_note: receipt_footer_note || DEFAULT_RECEIPT_FOOTER,
+    receipt_updated_at: now,
+    receipt_updated_by: String(actor)
+  };
+  const batch = db.batch();
+  batch.set(ref, value, { merge: true });
+  stageAudit(batch, db, actor, 'RECEIPT_SETTINGS_UPDATED', 'SETTINGS', 'business', {
+    before: { receipt_header_title: before.receipt_header_title || null },
+    after: { receipt_header_title },
+    now
+  });
+  await batch.commit();
+  return { ...value };
 }
 
 export async function createWorkspaceUser(auth, db, actor, input, now = new Date(), { validateEmail = validateEmailFormat, sendCredentials = sendAccountCredentials } = {}) {

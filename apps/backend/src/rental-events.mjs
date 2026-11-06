@@ -69,7 +69,7 @@ export function createRentalEventHub({ heartbeatMs = 25000, maxConnectionMs = 50
         continue;
       }
       // Authenticated customer
-      const isPublicEvent = ['inventory.changed', 'category.changed', 'catalog.changed'].includes(eventType);
+      const isPublicEvent = ['inventory.changed', 'category.changed', 'catalog.changed', 'settings.changed', 'data.changed'].includes(eventType);
       const isTargetCustomer = targetCustomer && client.uid === targetCustomer;
       if (allCustomers || isTargetCustomer || isPublicEvent) {
         write(client, eventType, data);

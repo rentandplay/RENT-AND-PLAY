@@ -1,92 +1,16 @@
-// Catalog copied from AndroidFiles/lib/models/item_model.dart. Keep these
-// equipment records aligned with ItemModel.getInitialCatalog().
 export const MOBILE_CATALOG = [
-  {
-    id: 'item_bike', qrCode: 'EQUIP-002', name: 'Bicycle', category: 'Sports',
-    description: 'Durable 21-speed mountain bike with adjustable seat, helmet, and safety reflectors suitable for all terrains.',
-    rateType: 'HOURLY', rentalRate: 200, latePenalty: 200,
-    pricingProductId: 'bike', imageName: 'Bike.png', isForSale: false
-  },
-  {
-    id: 'item_pickleball', qrCode: 'EQUIP-009', name: 'Pickleball Set', category: 'Sports',
-    description: 'Complete set including 4 lightweight graphite paddles, 6 outdoor pickleballs, and a portable net system.',
-    rateType: 'HOURLY', rentalRate: 120, latePenalty: 120,
-    pricingProductId: 'pickleball-set', imageName: 'Pickleball_Set.png', isForSale: false
-  },
-  {
-    id: 'item_badminton', qrCode: 'EQUIP-001', name: 'Badminton Set', category: 'Sports',
-    description: 'Includes 4 steel rackets, 6 durable shuttlecocks, and a quick-setup net for outdoor or indoor court play.',
-    rateType: 'HOURLY', rentalRate: 100, latePenalty: 100,
-    pricingProductId: 'badminton-set', imageName: 'Badminton_Set.png', isForSale: false
-  },
-  {
-    id: 'item_basketball', qrCode: 'EQUIP-003', name: 'Basketball', category: 'Sports',
-    description: 'Official size 7 indoor/outdoor composite leather basketball with deep channels for superior grip and bounce.',
-    rateType: 'HOURLY', rentalRate: 50, latePenalty: 50,
-    pricingProductId: 'basketball', imageName: 'Basketball.png', isForSale: false
-  },
-  {
-    id: 'item_volleyball', qrCode: 'EQUIP-014', name: 'Volleyball', category: 'Sports',
-    description: 'Official regulation size 5 soft-touch leather volleyball ideal for beach or indoor court recreational play.',
-    rateType: 'HOURLY', rentalRate: 50, latePenalty: 50,
-    pricingProductId: 'volleyball', imageName: 'Volleyball.png', isForSale: false
-  },
-  {
-    id: 'item_cards_deck', qrCode: 'EQUIP-006', name: 'Deck of Cards', category: 'Cards',
-    description: 'Standard 52-card poker deck made of plastic-coated cardstock for smooth shuffling and long-lasting durability.',
-    rateType: 'FLAT', rentalRate: 50, latePenalty: 10,
-    pricingProductId: 'deck-of-cards', imageName: 'Playing_Cards.png', isForSale: true, salePrice: 150
-  },
-  {
-    id: 'item_uno', qrCode: 'EQUIP-013', name: 'Uno Cards', category: 'Cards',
-    description: 'Classic Uno card game featuring 112 cards including Wild, Draw Four, and custom rule action cards.',
-    rateType: 'FLAT', rentalRate: 100, latePenalty: 20,
-    pricingProductId: 'uno-cards', imageName: 'UNO_Cards.png', isForSale: true, salePrice: 300
-  },
-  {
-    id: 'item_bingo', qrCode: 'EQUIP-004', name: 'Bingo Set', category: 'Cards',
-    description: 'Bingo Set: Includes master board, cage, numbered balls, and reusable bingo cards for group entertainment.',
-    rateType: 'FLAT', rentalRate: 150, latePenalty: 30,
-    pricingProductId: 'bingo-cards', imageName: 'Bingo.png', isForSale: true, salePrice: 450
-  },
-  ...[
-    {
-      id: 'item_jenga', qrCode: 'EQUIP-007', name: 'Jenga',
-      description: 'Includes 54 precision-crafted hardwood blocks for building tower balance games suitable for all ages.',
-      imageName: 'Jenga.png'
-    },
-    {
-      id: 'item_scrabble', qrCode: 'EQUIP-012', name: 'Scrabble',
-      description: 'Classic Scrabble crossword game with full letter tile set, 4 tile racks, and folding game board.',
-      imageName: 'Scrabble.png'
-    },
-    {
-      id: 'item_chess', qrCode: 'EQUIP-005', name: 'Chess Set',
-      description: 'Tournament-grade weighted wooden chess set with 32 hand-carved pieces and folding wooden board.',
-      imageName: 'Chess.png'
-    }
-  ].map(item => ({
-    ...item, category: 'Board Games', rateType: 'HOURLY', rentalRate: 30,
-    latePenalty: 30, pricingProductId: item.id.replace('item_', ''), isForSale: false
-  })),
-  {
-    id: 'item_ps4', qrCode: 'EQUIP-010', name: 'PlayStation 4 Console', category: 'Tech Rentals',
-    description: 'PS4 Slim 1TB console bundled with 2 DualShock 4 wireless controllers, HDMI cable, and pre-installed top titles.',
-    rateType: 'HOURLY', rentalRate: 250, latePenalty: 250,
-    pricingProductId: 'ps4', imageName: 'PS4.png', isForSale: false
-  },
-  {
-    id: 'item_switch', qrCode: 'EQUIP-008', name: 'Nintendo Switch', category: 'Tech Rentals',
-    description: 'Nintendo Switch OLED console with Joy-Con controllers, dock, AC adapter, and protective carrying case.',
-    rateType: 'HOURLY', rentalRate: 200, latePenalty: 200,
-    pricingProductId: 'nintendo-switch', imageName: 'Nintendo_Switch.png', isForSale: false
-  },
-  {
-    id: 'item_ps5', qrCode: 'EQUIP-011', name: 'PlayStation 5 Console', category: 'Tech Rentals',
-    description: 'PS5 Disc Edition console with DualSense wireless controller, ultra-high speed SSD, and 4K graphics support.',
-    rateType: 'DAILY', rentalRate: 120, latePenalty: 120,
-    pricingProductId: 'ps5', imageName: 'PS4.png', isForSale: false
-  }
+  { id: '1', name: 'Bike', categoryId: 'sports', category: 'Sports', qrCode: 'SPORT-BIKE-001', description: 'Cruiser bike for Subdivision rides. ₱150 / 30 mins · ₱200 / hour · ₱500 / 3-hour special.', pricingProductId: 'bike', rateType: 'HOURLY', rentalRate: 200, latePenalty: 200, replacementCost: 8500, imageUrl: 'assets/images/bike.png' },
+  { id: '2', name: 'Pickleball Set', categoryId: 'sports', category: 'Sports', qrCode: 'SPORT-PBALL-002', description: 'Includes 4 paddles, 6 outdoor pickleballs, and 1 portable net. ₱120 / hour.', pricingProductId: 'pickleball-set', rateType: 'HOURLY', rentalRate: 120, latePenalty: 120, replacementCost: 2200, imageUrl: 'assets/images/pickleball_set.png' },
+  { id: '3', name: 'Badminton Set', categoryId: 'sports', category: 'Sports', qrCode: 'SPORT-BMINT-003', description: 'Includes 4 rackets, 6 shuttlecocks, and 1 net. ₱100 / hour.', pricingProductId: 'badminton-set', rateType: 'HOURLY', rentalRate: 100, latePenalty: 100, replacementCost: 1200, imageUrl: 'assets/images/badminton_set.png' },
+  { id: '4', name: 'Basketball', categoryId: 'sports', category: 'Sports', qrCode: 'SPORT-BBALL-004', description: 'Official size 7 indoor/outdoor basketball. ₱50 / hour · ₱200 / 5-hour special.', pricingProductId: 'basketball', rateType: 'HOURLY', rentalRate: 50, latePenalty: 50, replacementCost: 950, imageUrl: 'assets/images/basketball.png' },
+  { id: '5', name: 'Volleyball', categoryId: 'sports', category: 'Sports', qrCode: 'SPORT-VBALL-005', description: 'Soft-touch outdoor volleyball. ₱50 / hour · ₱200 / 5-hour special.', pricingProductId: 'volleyball', rateType: 'HOURLY', rentalRate: 50, latePenalty: 50, replacementCost: 1800, imageUrl: 'assets/images/volleyball.png' },
+  { id: '6', name: 'PS4', categoryId: 'console', category: 'Tech Rentals', qrCode: 'TECH-PS4-001', description: 'PlayStation 4 console with 2 DualShock 4 controllers and pre-installed party games. ₱250 / hour.', pricingProductId: 'ps4', rateType: 'HOURLY', rentalRate: 250, latePenalty: 250, replacementCost: 18000, imageUrl: 'assets/images/ps4.png' },
+  { id: '7', name: 'Switch', categoryId: 'console', category: 'Tech Rentals', qrCode: 'TECH-NSW-002', description: 'Nintendo Switch with dock, Joy-Con controllers, and multiplayer games. ₱200 / hour.', pricingProductId: 'nintendo-switch', rateType: 'HOURLY', rentalRate: 200, latePenalty: 200, replacementCost: 16500, imageUrl: 'assets/images/switch.png' },
+  { id: '8', name: 'PS5', categoryId: 'console', category: 'Tech Rentals', qrCode: 'TECH-PS5-003', description: 'PlayStation 5 console with 2 DualSense wireless controllers and top multiplayer titles. ₱120 / day.', pricingProductId: 'ps5', rateType: 'DAILY', rentalRate: 120, latePenalty: 120, replacementCost: 28000, imageUrl: 'assets/images/ps5.png' },
+  { id: '9', name: 'Deck of Cards', categoryId: 'cards', category: 'Cards', qrCode: 'CARD-STD-001', description: 'Standard 52-card plastic-coated playing deck. ₱50 / 5 hours · ₱150 brand new.', pricingProductId: 'deck-of-cards', rateType: 'HOURLY', rentalRate: 10, latePenalty: 10, salePrice: 150, isForSale: true, replacementCost: 150, imageUrl: 'assets/images/deck_of_cards.png' },
+  { id: '10', name: 'Uno Cards', categoryId: 'cards', category: 'Cards', qrCode: 'CARD-UNO-002', description: 'Classic Uno family card game set. ₱100 / 5 hours · ₱300 brand new.', pricingProductId: 'uno-cards', rateType: 'HOURLY', rentalRate: 20, latePenalty: 20, salePrice: 300, isForSale: true, replacementCost: 300, imageUrl: 'assets/images/uno_cards.png' },
+  { id: '11', name: 'Bingo Cards', categoryId: 'cards', category: 'Cards', qrCode: 'CARD-BINGO-003', description: 'Complete Bingo set with shaker, numbered balls, and reusable cards. ₱150 / 5 hours · ₱450 brand new.', pricingProductId: 'bingo-cards', rateType: 'HOURLY', rentalRate: 30, latePenalty: 30, salePrice: 450, isForSale: true, replacementCost: 450, imageUrl: 'assets/images/bingo_cards.png' },
+  { id: '12', name: 'Jenga', categoryId: 'board', category: 'Board Games', qrCode: 'BOARD-JENGA-001', description: '54-piece hardwood block stacking tower game. ₱150 / 5 hours · ₱250 whole stay until resort checkout.', pricingProductId: 'jenga', rateType: 'HOURLY', rentalRate: 30, latePenalty: 30, replacementCost: 600, imageUrl: 'assets/images/jenga.png' },
+  { id: '13', name: 'Scrabble', categoryId: 'board', category: 'Board Games', qrCode: 'BOARD-SCRAB-002', description: 'Classic crossword board game with letter tiles and racks. ₱150 / 5 hours · ₱250 whole stay until resort checkout.', pricingProductId: 'scrabble', rateType: 'HOURLY', rentalRate: 30, latePenalty: 30, replacementCost: 600, imageUrl: 'assets/images/scrabble.png' },
+  { id: '14', name: 'Chess', categoryId: 'board', category: 'Board Games', qrCode: 'BOARD-CHESS-003', description: 'Folding wooden tournament chess board with weighted pieces. ₱150 / 5 hours · ₱250 whole stay until resort checkout.', pricingProductId: 'chess', rateType: 'HOURLY', rentalRate: 30, latePenalty: 30, replacementCost: 600, imageUrl: 'assets/images/chess.png' }
 ];
-
-export const MOBILE_CATEGORIES = ['Sports', 'Cards', 'Board Games', 'Tech Rentals'];

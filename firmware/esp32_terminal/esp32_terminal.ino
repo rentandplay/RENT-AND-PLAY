@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -37,8 +38,9 @@
 const char* WIFI_SSID = "PLDTHOMEFIBR61930";
 const char* WIFI_PASSWORD = "PLDTWIFIwu5ft";
 
-// IP address of your laptop running the backend server (detected: 192.168.1.4)
-const char* API_BASE_URL = "http://192.168.1.4:3000/api";
+// Backend API URL (Production cloud URL on Render):
+const char* API_BASE_URL = "https://rent-and-play.onrender.com/api";
+// For local testing on this PC: const char* API_BASE_URL = "http://192.168.1.7:3000/api";
 
 // Terminal credentials provisioned in Supabase:
 const char* TERMINAL_ID = "TERM-01";
@@ -233,11 +235,21 @@ void pollPendingRequests() {
     return;
   }
 
-  WiFiClient client;
   HTTPClient http;
   String url = String(API_BASE_URL) + "/terminals/" + TERMINAL_ID + "/pending";
 
-  http.begin(client, url);
+  bool isHttps = String(API_BASE_URL).startsWith("https://");
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
+
+  if (isHttps) {
+    secureClient.setInsecure();
+    http.begin(secureClient, url);
+  } else {
+    http.begin(plainClient, url);
+  }
+
+  http.setTimeout(15000);
   http.addHeader("Authorization", String("Bearer ") + TERMINAL_KEY);
   http.addHeader("Accept", "application/json");
 
@@ -290,11 +302,21 @@ void postConfirmation() {
   currentState = STATE_CONFIRMING;
   showConfirmingScreen();
 
-  WiFiClient client;
   HTTPClient http;
   String url = String(API_BASE_URL) + "/terminals/" + TERMINAL_ID + "/confirm";
 
-  http.begin(client, url);
+  bool isHttps = String(API_BASE_URL).startsWith("https://");
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
+
+  if (isHttps) {
+    secureClient.setInsecure();
+    http.begin(secureClient, url);
+  } else {
+    http.begin(plainClient, url);
+  }
+
+  http.setTimeout(15000);
   http.addHeader("Authorization", String("Bearer ") + TERMINAL_KEY);
   http.addHeader("Content-Type", "application/json");
 

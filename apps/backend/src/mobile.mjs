@@ -1,10 +1,10 @@
 import { asDate, docData } from './firebase.mjs';
 import { inventoryList } from './inventory.mjs';
-import { equipmentRateOptions, loadPricing } from './pricing.mjs';
+import { equipmentRateOptions, loadPricing, defaultReplacementCost } from './pricing.mjs';
 import { normalizeRole } from './roles.mjs';
 import { nameError, phoneError, validationFailure } from './account-validation.mjs';
 import { pageLimit } from './query-validation.mjs';
-import { DEFAULT_TERMS_AND_CONDITIONS, DEFAULT_RENTAL_TERMS, DEFAULT_TERMS_VERSION, DEFAULT_RENTAL_TERMS_VERSION } from './terms-constants.mjs';
+import { DEFAULT_TERMS_AND_CONDITIONS, DEFAULT_RENTAL_TERMS, DEFAULT_PRIVACY_POLICY, DEFAULT_REFUND_POLICY, DEFAULT_ACCEPTED_IDS, DEFAULT_TERMS_VERSION, DEFAULT_RENTAL_TERMS_VERSION } from './terms-constants.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const money = amount => `₱${Number(amount).toFixed(2)}`;
@@ -119,6 +119,7 @@ export async function mobileCatalog(db) {
       rate_type: product ? 'RATE_SHEET' : item.rate_type,
       rental_rate: product?.overtime_rate_per_hour ?? item.rental_rate,
       late_penalty_rate: product?.overtime_rate_per_hour ?? item.late_penalty_rate,
+      replacement_cost: Number(item.replacement_cost ?? defaultReplacementCost(item)),
       pricing_product_id: hasItemSpecificRates ? null : item.pricing_product_id, rate_options: product?.rate_options || [],
       can_rent: availableQuantity > 0,
       unavailable_reason: availableQuantity > 0 ? null : 'This equipment is currently unavailable.'
@@ -137,7 +138,8 @@ export async function mobilePaymentInstructions(db) {
     account_name: settings.instapay_account_name || settings.gcash_account_name || null,
     account_number: settings.instapay_account_number || settings.gcash_account_number || null,
     instructions: settings.instapay_instructions || settings.payment_instructions || 'Pay the exact amount shown and upload a screenshot of the successful transfer.',
-    payment_method_label: 'InstaPay / GCash'
+    payment_method_label: 'InstaPay / GCash',
+    accept_cash: settings.accept_cash !== false
   };
 }
 
@@ -147,6 +149,9 @@ export async function mobileTerms(db) {
   return {
     terms_and_conditions: settings.terms_and_conditions || DEFAULT_TERMS_AND_CONDITIONS,
     rental_terms: settings.rental_terms || DEFAULT_RENTAL_TERMS,
+    privacy_policy: settings.privacy_policy || DEFAULT_PRIVACY_POLICY,
+    refund_policy: settings.refund_policy || DEFAULT_REFUND_POLICY,
+    accepted_id_types: settings.accepted_id_types || DEFAULT_ACCEPTED_IDS,
     terms_version: settings.terms_version || DEFAULT_TERMS_VERSION,
     rental_terms_version: settings.terms_version || DEFAULT_RENTAL_TERMS_VERSION,
     updated_at: settings.terms_updated_at || null

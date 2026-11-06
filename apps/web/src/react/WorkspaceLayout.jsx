@@ -506,10 +506,6 @@ export function WorkspaceShell({
     }
   };
 
-  const business = workspaceUI.business();
-  const storeName = business.business_name || 'Rent & Play';
-  const storeLocation = business.location || 'Los Baños, Laguna';
-
   const notifState = rentalNotifications.state();
   const unreadCount = notifState.unreadCount || 0;
   let notificationsSeen = '';
@@ -561,15 +557,6 @@ export function WorkspaceShell({
           >
             <BrandLogo />
           </a>
-          <div className="store">
-            <span className="store-icon">
-              <Icon name="box" />
-            </span>
-            <div>
-              <strong>{storeName}</strong>
-              <small>{storeLocation}</small>
-            </div>
-          </div>
 
           <nav>
             <button
@@ -777,7 +764,7 @@ export function WorkspaceShell({
                   <button
                     ref={notificationBellRef}
                     type="button"
-                    className="top-pill-btn top-pill-bell notification"
+                    className="top-pill-btn top-pill-bell"
                     id="notifications"
                     aria-label="View notifications"
                     aria-expanded={notificationsOpen}

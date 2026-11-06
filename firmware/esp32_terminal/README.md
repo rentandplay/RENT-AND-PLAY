@@ -52,8 +52,9 @@ Bago i-upload ang sketch, i-check ang mga constants sa taas ng `esp32_terminal.i
 const char* WIFI_SSID = "PLDTHOMEFIBR61930";       // Pangalan ng Wi-Fi
 const char* WIFI_PASSWORD = "PLDTWIFIwu5ft";       // Password ng Wi-Fi
 
-// IP address ng laptop/computer na nagpapatakbo ng backend server (port 3000):
-const char* API_BASE_URL = "http://192.168.1.4:3000/api";
+// Cloud Backend API URL (Render):
+const char* API_BASE_URL = "https://rent-and-play.onrender.com/api";
+// O kung local testing sa PC: "http://192.168.1.7:3000/api"
 
 // Provisioned Terminal Credentials sa database:
 const char* TERMINAL_ID = "TERM-01";

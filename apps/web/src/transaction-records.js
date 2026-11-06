@@ -17,6 +17,26 @@ export function chargeCell(row, { money, escape: e }) {
   const waiting = ['PENDING_ADMIN_APPROVAL', 'APPROVED'].includes(row.status), inProgress = ['ACTIVE', 'RETURN_PENDING_INSPECTION'].includes(row.status) && fee.snapshot_version;
   return `<strong>${recordedAmount(final ? fee.final_rental_charges : fee.rental_fee) ? money(final ? fee.final_rental_charges : fee.rental_fee) : 'Charges not recorded'}</strong><small>${final ? 'Final rental charges' : waiting ? 'Base rental fee' : inProgress ? 'Base fee · finalized on return' : 'Base rental fee · final charges not recorded'}</small>${!recordedAmount(fee.penalty_amount) ? waiting || inProgress ? '' : '<small class="record-missing">Penalty not recorded</small>' : `<small>Penalty ${e(money(fee.penalty_amount))}</small>`}`;
 }
+export function formatDurationHuman(minutes) {
+  const mins = Number(minutes);
+  if (!Number.isFinite(mins) || mins <= 0) return 'Not recorded';
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'}`;
+  const days = Math.floor(mins / 1440);
+  const remAfterDays = mins % 1440;
+  const hours = Math.floor(remAfterDays / 60);
+  const remMins = remAfterDays % 60;
+  const totalHours = mins / 60;
+  const totalHoursLabel = Number.isInteger(totalHours) ? `${totalHours} Hour${totalHours === 1 ? '' : 's'}` : `${totalHours.toFixed(1)} Hours`;
+  if (days > 0) {
+    const dayPart = `${days} Day${days === 1 ? '' : 's'}`;
+    const hourPart = `${hours} Hour${hours === 1 ? '' : 's'}`;
+    const minPart = remMins > 0 ? `, ${remMins} Min${remMins === 1 ? '' : 's'}` : '';
+    return `${dayPart}, ${hourPart}${minPart} (${totalHoursLabel})`;
+  }
+  const hourPart = `${hours} Hour${hours === 1 ? '' : 's'}`;
+  if (remMins === 0) return `${hourPart} (${mins} minutes)`;
+  return `${hourPart}, ${remMins} Min${remMins === 1 ? '' : 's'} (${totalHoursLabel})`;
+}
 export function renderFeeBreakdown(row, h) {
   const { money, escape: e, formatDate } = h, fee = savedCharges(row);
   const pending = ['PENDING_ADMIN_APPROVAL', 'APPROVED'].includes(row.status);
@@ -24,10 +44,19 @@ export function renderFeeBreakdown(row, h) {
   const moneyValue = (value, missing = 'Not recorded') => recordedAmount(value) ? money(value) : `<span class="record-missing">${missing}</span>`;
   const field = (label, value) => `<div><dt>${e(label)}</dt><dd>${value}</dd></div>`;
   const components = (fee.rate_components || []).map(rate => `<li>${e(rate.label)} · ${e(rate.units)} × ${moneyValue(rate.unit_amount)} = ${moneyValue(rate.total_amount)}</li>`).join('');
-  const duration = fee.billed_minutes ? `${e(fee.billed_minutes)} minutes${fee.requested_minutes && fee.requested_minutes !== fee.billed_minutes ? `<small class="record-field-note">Requested ${e(fee.requested_minutes)} minutes · ${e(fee.rate_label || 'package minimum')} applies</small>` : ''}` : 'Not recorded';
-  const overtimeRate = `${moneyValue(fee.overtime_rate)}${fee.overtime_unit_minutes ? ` per started ${e(fee.overtime_unit_minutes)} minutes` : ''}`;
-  const futureCharges = pending || awaitingInspection ? `${field('Overtime rate', overtimeRate)}${awaitingInspection && actualReturnTime(row) ? field('Physical return recorded', e(formatDate(actualReturnTime(row)))) : ''}` : `${field('Actual return time', e(formatDate(actualReturnTime(row))))}${field('Overtime units / rate', `${fee.overtime_units != null ? e(fee.overtime_units) : 'Not recorded'} / ${overtimeRate}`)}${field('Overtime amount', moneyValue(fee.overtime_fee))}${field('Penalty amount', moneyValue(fee.penalty_amount, 'Penalty not recorded'))}${field('Penalty reason', e(fee.penalty_reason || (fee.penalty_amount === 0 ? 'No penalty' : 'Not recorded')))}${field('Final rental charges', `<strong>${moneyValue(fee.final_rental_charges, 'Final charges not recorded')}</strong>`)}`;
-  return `<section class="record-section record-fees"><h3>Saved fee breakdown</h3><div class="record-charge-summary"><div><small>Base rental fee</small><strong>${moneyValue(fee.rental_fee)}</strong></div></div><dl class="record-fields">${field('Rate / package', e(fee.rate_label || 'Not recorded'))}${field('Billing duration', duration)}${field('Rental starts', pending ? 'At handoff' : e(formatDate(row.confirmed_rental_at || fee.start_at)))}${field('Due time', pending && fee.mode !== 'WHOLE_STAY' ? 'Set at handoff' : e(formatDate(row.due_at || fee.due_at)))}${field('Grace period', fee.grace_minutes != null ? `${e(fee.grace_minutes)} minutes` : 'Not recorded')}${futureCharges}</dl>${components ? `<ul class="rate-components">${components}</ul>` : ''}${fee.snapshot_version ? `<p class="record-note">Saved ${e(formatDate(fee.saved_at))}${fee.pricing_source ? ` · ${e(fee.pricing_source.replaceAll('_', ' '))}` : ''}.</p>` : '<p class="record-missing">Original pricing snapshot not recorded. Historical rates cannot be reconstructed from current pricing.</p>'}</section>`;
+  const duration = fee.billed_minutes ? `${e(formatDurationHuman(fee.billed_minutes))}${fee.requested_minutes && fee.requested_minutes !== fee.billed_minutes ? `<small class="record-field-note">Requested ${e(formatDurationHuman(fee.requested_minutes))} · ${e(fee.rate_label || 'package minimum')} applies</small>` : ''}` : 'Not recorded';
+  const startInstant = transactionTime(row.confirmed_rental_at || fee.start_at);
+  const returnInstant = transactionTime(actualReturnTime(row));
+  const actualElapsedMins = startInstant && returnInstant && returnInstant >= startInstant
+    ? Math.max(1, Math.round((returnInstant.getTime() - startInstant.getTime()) / 60000))
+    : null;
+  const actualDurationField = actualElapsedMins != null ? field('Computed actual duration', e(formatDurationHuman(actualElapsedMins))) : '';
+  const overtimeRate = `${moneyValue(fee.overtime_rate)}${fee.overtime_unit_minutes ? ` per started ${e(formatDurationHuman(fee.overtime_unit_minutes))}` : ''}`;
+  const formulaNote = recordedAmount(fee.final_rental_charges) && recordedAmount(fee.rental_fee)
+    ? `<small class="record-field-note">Total Bill = Base (${moneyValue(fee.rental_fee)})${recordedAmount(fee.overtime_fee) && fee.overtime_fee > 0 ? ` + Overtime (${moneyValue(fee.overtime_fee)})` : ''}${recordedAmount(fee.penalty_amount) && fee.penalty_amount > 0 ? ` + Penalty (${moneyValue(fee.penalty_amount)})` : ''}</small>`
+    : '';
+  const futureCharges = pending || awaitingInspection ? `${field('Overtime rate', overtimeRate)}${awaitingInspection && actualReturnTime(row) ? `${field('Physical return recorded', e(formatDate(actualReturnTime(row))))}${actualDurationField}` : ''}` : `${field('Actual return time', e(formatDate(actualReturnTime(row))))}${actualDurationField}${field('Overtime units / rate', `${fee.overtime_units != null ? e(fee.overtime_units) : 'Not recorded'} / ${overtimeRate}`)}${field('Overtime amount', moneyValue(fee.overtime_fee))}${field('Penalty amount', moneyValue(fee.penalty_amount, 'Penalty not recorded'))}${field('Penalty reason', e(fee.penalty_reason || (fee.penalty_amount === 0 ? 'No penalty' : 'Not recorded')))}${field('Final rental charges', `<strong>${moneyValue(fee.final_rental_charges, 'Final charges not recorded')}</strong>${formulaNote}`)}`;
+  return `<section class="record-section record-fees"><h3>Saved fee breakdown</h3><div class="record-charge-summary"><div><small>Base rental fee</small><strong>${moneyValue(fee.rental_fee)}</strong></div></div><dl class="record-fields">${field('Rate / package', e(fee.rate_label || 'Not recorded'))}${field('Billing duration', duration)}${field('Rental starts', pending ? 'At handoff' : e(formatDate(row.confirmed_rental_at || fee.start_at)))}${field('Due time', pending && fee.mode !== 'WHOLE_STAY' ? 'Set at handoff' : e(formatDate(row.due_at || fee.due_at)))}${field('Grace period', fee.grace_minutes != null ? `${e(formatDurationHuman(fee.grace_minutes))}` : 'Not recorded')}${futureCharges}</dl>${components ? `<ul class="rate-components">${components}</ul>` : ''}${fee.snapshot_version ? `<p class="record-note">Saved ${e(formatDate(fee.saved_at))}${fee.pricing_source ? ` · ${e(fee.pricing_source.replaceAll('_', ' '))}` : ''}.</p>` : '<p class="record-missing">Original pricing snapshot not recorded. Historical rates cannot be reconstructed from current pricing.</p>'}</section>`;
 }
 export function renderConditionSnapshots(row, model, h) {
   const { escape: e, formatDate } = h;

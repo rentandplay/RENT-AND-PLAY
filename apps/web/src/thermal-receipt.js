@@ -12,16 +12,18 @@ const date = value => {
   return Number.isFinite(parsed.getTime()) ? new Date(parsed.getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : 'Not recorded';
 };
 
-export function thermalReceiptLines(row) {
+export function thermalReceiptLines(row, settings = {}) {
   const reference = recordCode(row);
   if (!/^R-[A-Z0-9]+$/i.test(reference)) throw new Error('Refresh this rental to load its saved receipt reference.');
   const fee = row.fee_breakdown || {}, lines = [];
   const line = (text, style = {}) => lines.push({ text: clean(text), ...style });
   const field = (label, value) => line(`${label}: ${clean(value) || 'Not recorded'}`);
   const divider = () => lines.push({ text: '', separator: true });
-  line('RENT & PLAY', { bold: true, center: true, size: 26 });
-  line('Lakewoods Subdivision', { center: true });
-  line('Los Banos, Laguna', { center: true });
+  const s = settings || row.settings || {};
+  line(s.receipt_header_title || s.business_name || 'RENT & PLAY', { bold: true, center: true, size: 26 });
+  line(s.receipt_branch_line || 'Lakewoods Subdivision', { center: true });
+  line(s.receipt_city_line || s.location || 'Los Banos, Laguna', { center: true });
+  if (s.receipt_contact_line) line(s.receipt_contact_line, { center: true });
   line('RENTAL RECEIPT', { bold: true, center: true });
   line(reference, { bold: true, center: true, size: 26 });
   divider();
@@ -44,9 +46,13 @@ export function thermalReceiptLines(row) {
   field('Late rate', `${money(fee.overtime_rate)} / started ${fee.overtime_unit_minutes || 60} min`);
   field('Grace', fee.grace_minutes == null ? null : `${fee.grace_minutes} min`);
   if (row.received_at) field('Received', date(row.received_at));
-  line('Keep this rental reference.');
-  line('Timer stops when staff receives the item.');
-  line('Return is subject to inspection. Damage or missing parts may affect final charges.');
+  if (s.receipt_footer_note) {
+    line(s.receipt_footer_note);
+  } else {
+    line('Keep this rental reference.');
+    line('Timer stops when staff receives the item.');
+    line('Return is subject to inspection. Damage or missing parts may affect final charges.');
+  }
   return lines;
 }
 
@@ -66,7 +72,7 @@ export function wrapReceiptText(text, measure, width = 360) {
   return output;
 }
 
-export function renderThermalReceipt(row, measureText) {
+export function renderThermalReceipt(row, measureText, settings = {}) {
   const context = !measureText && typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
   const measure = measureText || ((text, size, bold) => {
     if (!context) return Array.from(text).length * size * .6;
@@ -74,7 +80,7 @@ export function renderThermalReceipt(row, measureText) {
     return context.measureText(text).width;
   });
   const artwork = []; let y = 12;
-  for (const line of thermalReceiptLines(row)) {
+  for (const line of thermalReceiptLines(row, settings)) {
     if (line.separator) { artwork.push(`<path d="M12 ${y + 6}H372" stroke="black" stroke-width="1"/>`); y += 16; continue; }
     const size = line.size || 20;
     for (const text of wrapReceiptText(line.text, value => measure(value, size, line.bold))) {
@@ -90,8 +96,9 @@ export function renderThermalReceipt(row, measureText) {
 
 export function openBluetoothReceipt(row, h, back, openPdf) {
   const { modal, showModal, escape: e, toast } = h;
+  const settings = h.business?.() || row.settings || {};
   let receipt;
-  try { receipt = renderThermalReceipt(row); } catch (error) { toast(error.message); return; }
+  try { receipt = renderThermalReceipt(row, null, settings); } catch (error) { toast(error.message); return; }
   const printer = getMx10Printer();
   const glyph = name => h.icon?.(name) || '';
   showModal('Print rental receipt', `<section class="receipt-print-dialog" data-thermal-receipt>

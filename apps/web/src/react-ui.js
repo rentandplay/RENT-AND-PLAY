@@ -1615,9 +1615,6 @@ function WorkspaceShell({
       });
     }
   };
-  const business = workspaceUI.business();
-  const storeName = business.business_name || "Rent & Play";
-  const storeLocation = business.location || "Los Ba\xF1os, Laguna";
   const notifState = rentalNotifications.state();
   const unreadCount = notifState.unreadCount || 0;
   let notificationsSeen = "";
@@ -1651,7 +1648,6 @@ function WorkspaceShell({
       },
       /* @__PURE__ */ React.createElement(BrandLogo, null)
     ),
-    /* @__PURE__ */ React.createElement("div", { className: "store" }, /* @__PURE__ */ React.createElement("span", { className: "store-icon" }, /* @__PURE__ */ React.createElement(Icon, { name: "box" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, storeName), /* @__PURE__ */ React.createElement("small", null, storeLocation))),
     /* @__PURE__ */ React.createElement("nav", null, /* @__PURE__ */ React.createElement(
       "button",
       {
@@ -1830,7 +1826,7 @@ function WorkspaceShell({
       {
         ref: notificationBellRef,
         type: "button",
-        className: "top-pill-btn top-pill-bell notification",
+        className: "top-pill-btn top-pill-bell",
         id: "notifications",
         "aria-label": "View notifications",
         "aria-expanded": notificationsOpen,

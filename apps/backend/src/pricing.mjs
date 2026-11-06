@@ -124,6 +124,29 @@ export async function savePricing(db,actor,input,now=new Date()) {
   return pricing;
 }
 
+export function defaultReplacementCost(item = {}) {
+  const explicit = Number(item?.replacement_cost ?? item?.replacementCost);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const prodId = String(item?.pricing_product_id || item?.pricingProductId || item?.id || '').toLowerCase();
+  const byProd = DEFAULT_PRICING.products.find(p => p.id === prodId);
+  if (byProd?.replacement_cost) return byProd.replacement_cost;
+  const name = String(item?.name || '').toLowerCase();
+  if (name.includes('ps5') || name.includes('playstation 5')) return 28000;
+  if (name.includes('ps4') || name.includes('playstation 4')) return 18000;
+  if (name.includes('switch') || name.includes('nintendo')) return 16500;
+  if (name.includes('bike') || name.includes('bicycle')) return 8500;
+  if (name.includes('pickleball')) return 2200;
+  if (name.includes('volleyball')) return 1800;
+  if (name.includes('badminton')) return 1200;
+  if (name.includes('basketball')) return 950;
+  if (name.includes('bingo')) return 450;
+  if (name.includes('uno')) return 300;
+  if (name.includes('card')) return 150;
+  if (name.includes('jenga') || name.includes('scrabble') || name.includes('chess')) return 600;
+  const rate = Number(item?.rental_rate ?? item?.rentalRate ?? 0);
+  return rate > 0 ? Math.max(500, Math.round(rate * 12)) : 1000;
+}
+
 export function equipmentRateOptions(rateType,rentalRate,customOptions=[]) {
   const baseTypes={
     HOURLY:{label:'Per hour',kind:'HOURLY',duration_minutes:60},

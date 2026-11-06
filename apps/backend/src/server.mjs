@@ -9,7 +9,7 @@ import { firebaseAuth as defaultFirebaseAuth, firebaseMessaging as defaultMessag
 import { loadDashboard, loadAnalyticsSummary } from './dashboard.mjs';
 import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, setItemQuantity, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
 import { updateProfile } from './profile.mjs';
-import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, saveTermsSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
+import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, saveTermsSettings, saveRulesSettings, saveReceiptSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
 import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, terminalPending, testTerminalPing, dispatchRentalToTerminal } from './transactions.mjs';
 import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions, mobileTerms } from './mobile.mjs';
@@ -202,6 +202,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     reviewRentalPaymentProof: (actor, id, input) => reviewRentalPaymentProof(firestore, actor, id, input, now()),
     savePaymentSettings: (actor, input) => savePaymentSettings(firestore, actor, input, now()),
     saveTermsSettings: (actor, input) => saveTermsSettings(firestore, actor, input, now()),
+    saveRulesSettings: (actor, input) => saveRulesSettings(firestore, actor, input, now()),
+    saveReceiptSettings: (actor, input) => saveReceiptSettings(firestore, actor, input, now()),
     recordRentalReceipt: (actor, id, input) => recordRentalReceipt(firestore, actor, id, input, now()),
     completeRentalReturn: (actor, id, input) => completeRentalReturn(firestore, actor, id, input, now()),
     changeAssignedUnit: (actor, id, input) => changeAssignedUnit(firestore, actor, id, input, now()),
@@ -268,6 +270,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     submitRentalPaymentProof: ['rentals', 'rental_payment_proofs', 'audit_logs', 'notification_inboxes'],
     savePaymentSettings: ['settings', 'audit_logs'],
     saveTermsSettings: ['settings', 'audit_logs'],
+    saveRulesSettings: ['settings', 'audit_logs'],
+    saveReceiptSettings: ['settings', 'audit_logs'],
     recordRentalReceipt: ['rentals', 'items', 'audit_logs', 'item_status_history', 'notification_inboxes'],
     completeRentalReturn: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records', 'notification_inboxes'],
     changeAssignedUnit: ['rentals', 'items', 'audit_logs', 'item_status_history'],
@@ -421,8 +425,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
   }
   setFirestoreWriteListener?.(writes => {
     const collections = new Set(writes.map(w => w.collection));
-    if (collections.has('items') || collections.has('item_categories') || collections.has('item_rates')) {
-      services.invalidateReadCache?.(['items', 'item_categories', 'item_rates']);
+    if (collections.has('items') || collections.has('item_categories') || collections.has('item_rates') || collections.has('settings')) {
+      services.invalidateReadCache?.(['items', 'item_categories', 'item_rates', 'settings']);
       rentalEvents.publishInventory();
     }
     if (collections.has('rentals') || collections.has('rental_payment_proofs')) {
@@ -687,7 +691,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       const financeRoute=historicalReceiptRoute || ['/api/finance/summary','/api/finance/ledger','/api/finance/rentals','/api/finance/expenses','/api/reports/daily'].includes(path);
       const terminalTestRoute = path.match(/^\/api\/terminals\/([A-Za-z0-9_-]{1,128})\/test-ping$/);
       const securitySessionsRoute = path === '/api/auth/sessions' || path === '/api/auth/sessions/revoke' || path === '/api/security/alerts';
-      const workspaceRoute = securitySessionsRoute || recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || path === '/api/settings/terms' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
+      const workspaceRoute = securitySessionsRoute || recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || path === '/api/settings/terms' || path === '/api/settings/rules' || path === '/api/settings/receipt' || path === '/api/settings/policies' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || maintenanceRoute || maintenanceStaffRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute || rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) {
         const mobileToken = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
@@ -809,7 +813,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         }
         if (inventoryQrLabelsRoute && req.method === 'GET') return send(res, 200, await services.inventoryQrLabels());
         if (path === '/api/pricing' && req.method === 'GET') return send(res, 200, await services.pricing());
-        if (path === '/api/pricing' && req.method === 'PUT') return send(res, 200, { pricing: await services.savePricing(user.id, await body(req)) });
+        if (path === '/api/pricing' && req.method === 'PUT') { const pricing = await services.savePricing(user.id, await body(req)); rentalEvents.publishInventory({ collections: ['settings', 'items'] }); return send(res, 200, { pricing }); }
         if (path === '/api/pricing/quote' && req.method === 'POST') return send(res, 200, { quote: await services.pricingQuote(await body(req)) });
         if (customerPasswordRoute) {
           if (req.method === 'PATCH') {
@@ -863,9 +867,21 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
           rentalEvents.publishDataChange('settings.changed', { collections: ['settings'] });
           return send(res, 200, { settings });
         }
-        if (path === '/api/settings/terms' && req.method === 'PATCH') {
+        if ((path === '/api/settings/terms' || path === '/api/settings/policies') && req.method === 'PATCH') {
           if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the workspace owner can change Terms & Conditions.' });
           const settings = await services.saveTermsSettings(user.id, await body(req, 100000));
+          rentalEvents.publishDataChange('settings.changed', { collections: ['settings'] });
+          return send(res, 200, { settings });
+        }
+        if (path === '/api/settings/rules' && req.method === 'PATCH') {
+          if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the workspace owner can change rental rules and penalties.' });
+          const settings = await services.saveRulesSettings(user.id, await body(req, 100000));
+          rentalEvents.publishDataChange('settings.changed', { collections: ['settings'] });
+          return send(res, 200, { settings });
+        }
+        if (path === '/api/settings/receipt' && req.method === 'PATCH') {
+          if (!isOwnerRole(user.role)) return send(res, 403, { error: 'Only the workspace owner can change receipt printer settings.' });
+          const settings = await services.saveReceiptSettings(user.id, await body(req, 100000));
           rentalEvents.publishDataChange('settings.changed', { collections: ['settings'] });
           return send(res, 200, { settings });
         }

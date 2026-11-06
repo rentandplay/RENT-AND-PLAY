@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateCustomer, loadWorkspace, createWorkspaceUser, updateCustomer, saveTermsSettings } from '../src/workspace.mjs';
+import { validateCustomer, loadWorkspace, createWorkspaceUser, updateCustomer, saveTermsSettings, saveRulesSettings, saveReceiptSettings, saveSettings } from '../src/workspace.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
 test('customer validation normalizes safe directory fields', () => {
@@ -128,3 +128,31 @@ test('saveTermsSettings rejects empty terms', async () => {
   await assert.rejects(() => saveTermsSettings(db, 'owner-uid', { termsAndConditions: '' }), error => error.status === 400);
 });
 
+
+test('saveRulesSettings and saveReceiptSettings save and record audit trail', async () => {
+  const db = memoryFirestore();
+  const rules = await saveRulesSettings(db, 'owner-uid', {
+    defaultOvertimeRate: 150,
+    lostPieceFee: 75,
+    securityDepositNote: 'Custom deposit note',
+    damagePolicyNote: 'Custom damage policy'
+  }, new Date('2026-10-20T10:00:00Z'));
+  assert.equal(rules.default_overtime_rate, 150);
+  assert.equal(rules.lost_piece_fee, 75);
+  assert.equal(rules.security_deposit_note, 'Custom deposit note');
+
+  const receipt = await saveReceiptSettings(db, 'owner-uid', {
+    receiptHeaderTitle: 'MY STORE',
+    receiptBranchLine: 'Branch 1',
+    receiptCityLine: 'City 1',
+    receiptContactLine: '09123456789',
+    receiptFooterNote: 'Custom footer note'
+  }, new Date('2026-10-20T10:00:00Z'));
+  assert.equal(receipt.receipt_header_title, 'MY STORE');
+  assert.equal(receipt.receipt_footer_note, 'Custom footer note');
+
+  const saved = db.data('settings', 'business');
+  assert.equal(saved.default_overtime_rate, 150);
+  assert.equal(saved.lost_piece_fee, 75);
+  assert.equal(saved.receipt_header_title, 'MY STORE');
+});

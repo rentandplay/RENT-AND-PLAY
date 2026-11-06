@@ -327,6 +327,7 @@ export function createInventory(h) {
               ${field('latePenalty', 'Late penalty per started hour (₱)', 'number', item?.late_penalty_rate ?? 0, 'min="0" max="9999999999.99" step="0.01"')}
             </div>
           </section>
+          <label>Declared replacement value / lost-item liability (₱)<input name="replacementCost" type="number" min="0" max="9999999999.99" step="0.01" value="${e(item?.replacement_cost ?? '')}" placeholder="e.g. 1200.00"/><small>Displayed to customers before checkout as the maximum liability if the item is lost or destroyed beyond repair.</small></label>
         </div>
         <div class="info-box" id="inv-rate-mode-help"></div>
       </section>
@@ -434,7 +435,15 @@ export function createInventory(h) {
     const updateLinkedSummary = () => {
       const product = pricingProducts.find(entry => entry.id === pricingSelect.value);
       if (!product) { linkedSummary.innerHTML = '<small>Select a pricing product to see its customer rates.</small>'; return; }
-      linkedSummary.innerHTML = `<strong>${e(product.name)}</strong><span>${product.rate_options.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`).join(' · ')}</span><small>Late penalty ${cash(product.overtime_rate_per_hour)} per started hour</small>`;
+      linkedSummary.innerHTML = `<strong>${e(product.name)}</strong><span>${product.rate_options.map(rate => `${e(rate.label)}: ${cash(rate.amount)}`).join(' · ')}</span><small>Late penalty ${cash(product.overtime_rate_per_hour)} per started hour</small><div style="margin-top:6px"><button type="button" class="secondary" id="inv-switch-custom-rate" style="padding:4px 10px;font-size:12px">Set custom rate for this item instead</button></div>`;
+      linkedSummary.querySelector('#inv-switch-custom-rate')?.addEventListener('click', () => {
+        const primary = product.rate_options.find(rate => rate.kind === 'HOURLY') || product.rate_options[0];
+        if (primary && formEl.elements.rentalRate) formEl.elements.rentalRate.value = primary.amount;
+        if (formEl.elements.latePenalty) formEl.elements.latePenalty.value = product.overtime_rate_per_hour ?? primary?.amount ?? 0;
+        rateModeSelect.value = 'traditional';
+        syncRateMode();
+        formEl.elements.rentalRate?.focus();
+      });
     };
     const syncLinkedProduct = () => {
       updateLinkedSummary();
@@ -536,6 +545,8 @@ export function createInventory(h) {
       }
       if (item && conditionSelect.disabled) values.condition = savedCondition;
       for (const key of ['rentalRate', 'latePenalty']) values[key] = Number(values[key]);
+      if (values.replacementCost !== undefined && values.replacementCost !== '') values.replacementCost = Number(values.replacementCost);
+      else delete values.replacementCost;
       values.quantity = Number(values.quantity);
       if (item) { values.scope = 'stock'; values.version = item.updated_at; values.stockVersion = item.stock_version; }
       const isNew = !item, initialTotal = item ? Number(item.total_quantity || 0) : 0;
@@ -583,7 +594,7 @@ export function createInventory(h) {
     const active = group.units.filter(isActive), archived = group.units.filter(item => !isActive(item)), reason = archiveUnavailableReason(group);
     showModal(group.name, `<div class="inv-details-modal-content">
       <section class="inv-detail-overview"><div class="inv-detail-heading"><span class="inv-detail-art">${symbol(group.category)}</span><div class="inv-detail-identity"><p>${e(group.category)} · ${active.length} unit${active.length === 1 ? '' : 's'} in stock</p>${badge(statusLabel(group.effective_status))}</div></div><p class="inv-description">${e(group.description || 'No equipment notes recorded.')}</p></section>
-      <section class="inv-detail-facts" aria-label="Equipment stock"><div><small>Stock available</small><strong>${group.available_quantity} / ${group.total_quantity}</strong><small>${e(stockBreakdown(group))}</small></div><div><small>Condition</small><strong>${e(label(group.condition_status))}</strong><small>Recorded for each physical unit</small></div><div><small>Rental rate</small><strong>${cash(displayRateAmount(group))}</strong><small>${e(displayRateUnit(group))}</small></div><div><small>Late penalty</small><strong>${cash(displayLatePenalty(group))}</strong><small>Per started hour</small></div></section>
+      <section class="inv-detail-facts" aria-label="Equipment stock"><div><small>Stock available</small><strong>${group.available_quantity} / ${group.total_quantity}</strong><small>${e(stockBreakdown(group))}</small></div><div><small>Condition</small><strong>${e(label(group.condition_status))}</strong><small>Recorded for each physical unit</small></div><div><small>Rental rate</small><strong>${cash(displayRateAmount(group))}</strong><small>${e(displayRateUnit(group))}</small></div><div><small>Late penalty</small><strong>${cash(displayLatePenalty(group))}</strong><small>Per started hour</small></div><div><small>Replacement value</small><strong>${cash(group.replacement_cost || 0)}</strong><small>Lost / damaged liability</small></div></section>
       ${priceOptions(group, { includePrimary: true }) ? `<section class="inv-detail-rate-options" aria-label="Customer rental rate options"><strong>Customer rate options</strong>${priceOptions(group, { includePrimary: true })}</section>` : ''}
       <div class="inv-detail-actions"><button type="button" class="primary" id="inv-detail-edit">Edit equipment &amp; stock</button><button type="button" class="secondary" id="inv-group-qr-save" ${active.length ? '' : 'disabled'}>Save unit QR labels (${active.length})</button>${active.length ? `<button type="button" class="inv-danger" id="inv-group-archive" title="${e(reason || 'Archive all units of this equipment')}" ${reason ? 'disabled' : ''}>Archive equipment</button>` : ''}</div><p class="inv-error" role="alert"></p>
       <section class="inv-unit-section" aria-label="Physical units"><h3>Units &amp; history</h3><p>Open a unit for its status, maintenance, and pricing history. Each unit keeps its own QR label.</p>${active.length ? unitRows(active) : '<p>No active units. Edit stock to add units, or restore an archived unit below.</p>'}${archived.length ? `<details class="inv-history"><summary>Archived / retired units <span>${archived.length}</span></summary>${unitRows(archived)}</details>` : ''}</section>
@@ -625,6 +636,7 @@ export function createInventory(h) {
           <div><small>Condition</small><strong>${label(i.condition_status)}</strong></div>
           <div><small>Rental rate</small><strong>${cash(displayRateAmount(i))}</strong><small>${e(displayRateUnit(i))}</small></div>
           <div><small>Late penalty per hour</small><strong>${cash(displayLatePenalty(i))}</strong></div>
+          <div><small>Replacement value</small><strong>${cash(i.replacement_cost || 0)}</strong><small>Lost / damaged liability</small></div>
         </section>
         ${priceOptions(i, { includePrimary: true }) ? `<section class="inv-detail-rate-options" aria-label="Customer rental rate options"><strong>Customer rate options</strong>${priceOptions(i, { includePrimary: true })}</section>` : ''}
         <div class="inv-detail-actions" aria-label="Equipment actions">

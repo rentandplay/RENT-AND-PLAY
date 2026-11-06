@@ -2,10 +2,10 @@ import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
 import { calculateDetailedAnalytics, forecastScenario } from './analytics-insights.js';
 import { renderAnalyticsReport } from './analytics-report.js';
-import { renderSettings, settingsTabs, defaultTermsAndConditions, defaultRentalTerms, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
+import { renderSettings, settingsTabs, defaultTermsAndConditions, defaultRentalTerms, defaultPrivacyPolicy, defaultRefundPolicy, defaultAcceptedIds, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
 import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
-import { actualReturnTime, chargeCell, enrichVerification, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderAdminHandoff, renderRequestHistory, savedCharges } from './transaction-records.js';
+import { actualReturnTime, chargeCell, enrichVerification, formatDurationHuman, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderAdminHandoff, renderRequestHistory, savedCharges } from './transaction-records.js';
 import { createTransactionWorkflow } from './transaction-workflow.js';
 import { createCustomerUI } from './customer-ui.js';
 import { renderWalkInReceipt } from './walk-in-receipt.js';
@@ -25,7 +25,8 @@ export function createWorkspaceUI(h) {
   let cacheVersion = 0, modelVersion = -1, loadError = '';
   let searchPage = '', pageSearches = {};
   const pageSize = 5;
-  const remote = {}; let remoteStatus='ALL', remoteFrom='', remoteTo='', remoteSearch='', remoteScheduledDay='';
+  const viewModelCache = new Map();
+  const remote = {}; let remoteStatus='ALL', remoteFrom='', remoteTo='', remoteSearch='', remoteScheduledDay='', advancedFiltersOpen = false;
   let rankingPeriod = 'all';
   const defaultRecordStatus = page => page === 'Rentals' || page === 'Maintenance' ? 'OPEN' : page === 'Returns' ? 'RETURN_PENDING_INSPECTION' : 'ALL';
   const financeUI=createFinanceUI(h);
@@ -33,13 +34,13 @@ export function createWorkspaceUI(h) {
   const planning=createRentalPlanning({...h,refresh:()=>refresh(),redraw:()=>redraw()});
   let preferences = readPreferences();
   try { preferences = readPreferences(localStorage); } catch { }
-  let settingsTab = 'business', businessDraft = null, businessDirty = false, businessSaving = false, preferencesDraft = null;
+  let settingsTab = 'business', businessDraft = null, businessDirty = false, businessSaving = false, preferencesDraft = null, businessSubTab = 'profile';
   let activeSessions = null, securityAlerts = null, securityLoading = false;
   const analyticsSelection = { period: preferences.reportPeriod, from: '', to: '', categoryId: '', itemId: '', groupBy: preferences.reportGrouping };
   const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', forecastScenario: 'baseline', recommendationType: 'all', details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
   const status = value => `<span class="badge ${e(String(value || 'unknown').toLowerCase().replaceAll('_', '-').replaceAll(' ', '-'))}">${e(String(value || 'Unknown').replaceAll('_', ' '))}</span>`;
-  const invalidate = () => { cacheVersion++; loading = null; loadError = ''; financeUI.reset();reportPayments.reset(); };
+  const invalidate = () => { cacheVersion++; loading = null; loadError = ''; viewModelCache.clear(); financeUI.reset();reportPayments.reset(); };
   const load = async (force = false) => {
     if (force) invalidate();
     if (model && modelVersion === cacheVersion && (!model.view_meta?.view || model.view_meta.view === (searchPage || 'Rentals'))) return model;
@@ -49,7 +50,12 @@ export function createWorkspaceUI(h) {
       const reportRange=view==='Reports'?analyticsRange(analyticsSelection):null;
       const rankingRange=view==='Transaction History' && rankingPeriod!=='all'?analyticsRange({period:rankingPeriod}):null;
       const request = api('/workspace?'+new URLSearchParams({view,...(reportRange&&!reportRange.error?{from:reportRange.from,to:reportRange.to}:{}),...(rankingRange?{rankingFrom:rankingRange.from,rankingTo:rankingRange.to}:{}),...(current.cursor?{cursor:current.cursor}:{}),status:remoteStatus,...(remoteFrom?{from:remoteFrom}:{}),...(remoteTo?{to:remoteTo}:{}),...(remoteSearch?{search:remoteSearch}:{}),...(remoteScheduledDay?{scheduledDay:remoteScheduledDay}:{})})).then(value => {
-        if (version === cacheVersion) { model = value; modelVersion = version; loadError = ''; }
+        if (version === cacheVersion) {
+          model = value;
+          modelVersion = version;
+          loadError = '';
+          if (value?.view_meta?.view) viewModelCache.set(value.view_meta.view, value);
+        }
         return value;
       }).catch(error => { if (version === cacheVersion) loadError = error.message; throw error; })
         .finally(() => { if (loading === request) loading = null; });
@@ -218,6 +224,64 @@ export function createWorkspaceUI(h) {
     return `<button type="button" class="primary rental-quick-action" data-rental-quick="${e(row.id)}" aria-label="${e(action.title)} for ${e(txCode(row))}" title="${e(action.title)}">${e(action.label)}</button>`;
   }
 
+  function advancedFilterDrawer(page) {
+    if (!['Customers', 'Rentals', 'Returns', 'Transaction History', 'Maintenance'].includes(page)) return '';
+    const customer = page === 'Customers', maintenance = page === 'Maintenance';
+    const options = ['ALL', ...(customer ? ['ACTIVE', 'INACTIVE'] : maintenance ? ['OPEN', 'CLOSED', 'IN_PROGRESS', 'COMPLETED', 'RETIRED'] : ['OPEN', 'PENDING_ADMIN_APPROVAL', 'APPROVED', 'ACTIVE', 'RETURN_PENDING_INSPECTION', 'COMPLETED', 'CANCELLED', 'REJECTED', 'EXPIRED'])];
+    const labels = { ALL: 'All statuses', OPEN: maintenance ? 'Open tickets' : 'Open rentals', CLOSED: 'Closed tickets', ACTIVE: customer ? 'Active customers' : 'In use', INACTIVE: 'Archived customers', PENDING_ADMIN_APPROVAL: 'Pending review', APPROVED: 'Approved', RETURN_PENDING_INSPECTION: 'Awaiting inspection', IN_PROGRESS: 'In progress', COMPLETED: 'Completed', CANCELLED: 'Cancelled', REJECTED: 'Rejected', EXPIRED: 'Expired', RETIRED: 'Retired' };
+
+    let activeFilterCount = 0;
+    if (remoteStatus && remoteStatus !== defaultRecordStatus(page)) activeFilterCount++;
+    if (remoteFrom) activeFilterCount++;
+    if (remoteTo) activeFilterCount++;
+    if (remoteSearch) activeFilterCount++;
+    const hasActiveFilters = activeFilterCount > 0;
+    const isOpen = advancedFiltersOpen;
+
+    return `<div class="advanced-filter-drawer ${isOpen ? 'open' : ''}" id="advanced-filter-drawer" ${isOpen ? '' : 'hidden'}>
+      <form class="advanced-filter-form" id="record-filter-form" aria-label="Advanced filters">
+        <div class="advanced-filter-row">
+          <label for="record-status" class="advanced-filter-field">
+            <span>Status</span>
+            <select id="record-status">
+              ${options.map(value => `<option value="${value}" ${value === remoteStatus ? 'selected' : ''}>${labels[value]}</option>`).join('')}
+            </select>
+          </label>
+          <label for="record-from" class="advanced-filter-field">
+            <span>Created from</span>
+            <input id="record-from" type="date" value="${e(remoteFrom)}"/>
+          </label>
+          <label for="record-to" class="advanced-filter-field">
+            <span>Created to</span>
+            <input id="record-to" type="date" value="${e(remoteTo)}"/>
+          </label>
+          <input type="hidden" id="record-search" value="${e(remoteSearch || search)}"/>
+          <div class="advanced-filter-buttons">
+            <button type="submit" class="primary" id="record-find">Apply</button>
+            ${hasActiveFilters ? `<button type="button" class="text-button" id="record-reset">Reset</button>` : ''}
+          </div>
+        </div>
+      </form>
+    </div>`;
+  }
+
+  function advancedFilterToggleBtn(page) {
+    let activeFilterCount = 0;
+    if (remoteStatus && remoteStatus !== defaultRecordStatus(page)) activeFilterCount++;
+    if (remoteFrom) activeFilterCount++;
+    if (remoteTo) activeFilterCount++;
+    if (remoteSearch) activeFilterCount++;
+    const hasActiveFilters = activeFilterCount > 0;
+    const isOpen = advancedFiltersOpen;
+
+    return `<button type="button" class="secondary transaction-filters-btn ${hasActiveFilters ? 'active' : ''}" id="toggle-advanced-filters" aria-expanded="${isOpen}" aria-controls="advanced-filter-drawer" title="Toggle date range and status filters">
+      ${icon('settings')}
+      <span>Filters</span>
+      ${hasActiveFilters ? `<span class="active-filter-badge">${activeFilterCount}</span>` : ''}
+      <span class="chevron-arrow">${isOpen ? '▴' : '▾'}</span>
+    </button>`;
+  }
+
   function transactions(mode) {
     const all = [...(model.transactions || [])], active = all.filter(row => row.status === "ACTIVE"), pendingRentals = all.filter(row => row.status === "PENDING_VERIFICATION"), pendingAdmin = all.filter(row => row.status === "PENDING_ADMIN_APPROVAL"), pickup = all.filter(row => row.status === "APPROVED"), inspections = all.filter(row => row.status === "RETURN_PENDING_INSPECTION");
     const returned = all.filter(txIsReturned).sort((a, b) => (txDate(b.confirmed_return_at || b.updated_at || b.created_at)?.getTime() || 0) - (txDate(a.confirmed_return_at || a.updated_at || a.created_at)?.getTime() || 0));
@@ -240,7 +304,7 @@ export function createWorkspaceUI(h) {
       const view = paged(records, mode), action = `<button type="button" class="primary" id="rental-request-add">+ Create walk-in rental</button><button type="button" class="secondary" data-find-booking>Scan rental QR</button>`;
       const message = overdue.length ? `${overdue.length} overdue rental${overdue.length === 1 ? " needs" : "s need"} follow-up today.` : returnRequested.length ? `${returnRequested.length} customer return request${returnRequested.length === 1 ? " is" : "s are"} waiting for physical receipt.` : pendingAdmin.length ? `${pendingAdmin.length} mobile request${pendingAdmin.length === 1 ? " is" : "s are"} waiting for admin review.` : pendingRentals.length ? `${pendingRentals.length} rental request${pendingRentals.length === 1 ? "" : "s"} in the saved terminal queue (hardware on standby).` : pickup.length ? `${pickup.length} approved rental${pickup.length === 1 ? " is" : "s are"} waiting for delivery or handoff.` : inspections.length ? `${inspections.length} received unit${inspections.length === 1 ? " needs" : "s need"} inspection.` : dueToday.length ? `${dueToday.length} rental${dueToday.length === 1 ? "" : "s"} due today.` : "No urgent rental follow-ups. Your open rentals are on track.";
       const filters = `<div class="transaction-filters" role="group" aria-label="Filter rentals">${txFilter(mode, "All open", active.length + pendingRentals.length + pendingAdmin.length + pickup.length + inspections.length)}${returnRequested.length ? txFilter(mode, "Return requested", returnRequested.length) : ""}${txFilter(mode, "Due today", dueToday.length)}${txFilter(mode, "Overdue", overdue.length)}${txFilter(mode, "Awaiting admin review", pendingAdmin.length)}${txFilter(mode, "Awaiting handover", pickup.length)}${txFilter(mode, "Inspection pending", inspections.length)}${pendingRentals.length ? txFilter(mode, "Awaiting confirmation", pendingRentals.length) : ""}</div>`;
-      return `<div class="module-stats transaction-stats">${txMetric("Currently out", active.length, "Confirmed rentals with customers", "box")}${txMetric("Due today", dueToday.length, "Plan return follow-ups", "clock", "amber")}${txMetric("Overdue", overdue.length, "Needs attention", "bell", "red")}${txMetric("Awaiting admin review", pendingAdmin.length, "Customer rental requests awaiting review", "box", "purple")}</div><section class="panel transaction-focus ${overdue.length || returnRequested.length ? "attention" : ""}"><span class="transaction-focus-mark">${overdue.length ? "!" : returnRequested.length ? "↩" : "✦"}</span><div><strong>${overdue.length ? "Follow up on late rentals" : returnRequested.length ? "Return pickup or receipt needed" : pendingAdmin.length ? "Mobile rental review needed" : pendingRentals.length ? "Counter confirmation needed" : "Rental desk status"}</strong><p>${e(message)}</p></div><button type="button" class="text-button" data-page="Returns">Open returns →</button></section><section class="panel admin-module transaction-table-panel rentals-table-panel"><div class="transaction-list-toolbar"><label class="module-search">${icon("search")}<input id="module-search" value="${e(search)}" placeholder="Search item, customer, or rental ID" aria-label="Search rentals"/></label><div class="transaction-heading-actions">${action}</div></div><div class="transaction-filter-toolbar">${filters}</div><div class="transaction-table-caption"><span><strong>${records.length}</strong> rental record${records.length === 1 ? "" : "s"} in this view</span><span>Sorted by what needs attention first</span></div>${records.length ? table(["EQUIPMENT / RENTAL ID", "CUSTOMER", "DUE DATE", "STATUS", "CHARGES", "ACTIONS"], view.rows.map(row => `<tr ${recordAttrs('transaction', row.id, txCode(row))}><td><strong>${e(row.item_name || "Unknown equipment")}</strong><small>${e(txCode(row))} · ${e(row.item_code || "No item code")}</small></td><td><strong>${e(row.customer_name || "Unknown customer")}</strong></td><td>${txDueCell(row)}</td><td>${status(txStatus(row))}</td><td>${chargeCell(row, h)}</td><td class="transaction-actions-cell"><div class="transaction-row-actions">${rentalQuickActionButton(row)}<button type="button" class="transaction-icon-action" data-transaction-detail="${e(row.id)}" aria-label="View details for ${e(txCode(row))}" title="View details">${icon("eye")}</button></div></td></tr>`).join("")) : empty("No rentals in this view", state.filter === "All open" ? search.trim() ? "Try another search term or clear the search to see open rentals." : "Select Create walk-in rental, or submit a request from the mobile app." : "Try another filter or search term.")}${(records.length || model.page_meta) ? view.footer : ""}</section>`;
+      return `<div class="module-stats transaction-stats">${txMetric("Currently out", active.length, "Confirmed rentals with customers", "box")}${txMetric("Due today", dueToday.length, "Plan return follow-ups", "clock", "amber")}${txMetric("Overdue", overdue.length, "Needs attention", "bell", "red")}${txMetric("Awaiting admin review", pendingAdmin.length, "Customer rental requests awaiting review", "box", "purple")}</div><section class="panel transaction-focus ${overdue.length || returnRequested.length ? "attention" : ""}"><span class="transaction-focus-mark">${overdue.length ? "!" : returnRequested.length ? "↩" : "✦"}</span><div><strong>${overdue.length ? "Follow up on late rentals" : returnRequested.length ? "Return pickup or receipt needed" : pendingAdmin.length ? "Mobile rental review needed" : pendingRentals.length ? "Counter confirmation needed" : "Rental desk status"}</strong><p>${e(message)}</p></div><button type="button" class="text-button" data-page="Returns">Open returns →</button></section><section class="panel admin-module transaction-table-panel rentals-table-panel"><div class="transaction-list-toolbar"><div class="transaction-toolbar-search-wrap"><label class="module-search">${icon("search")}<input id="module-search" value="${e(search)}" placeholder="Search item, customer, or rental ID" aria-label="Search rentals"/></label>${advancedFilterToggleBtn(mode)}</div><div class="transaction-heading-actions">${action}</div></div>${advancedFilterDrawer(mode)}<div class="transaction-filter-toolbar">${filters}</div><div class="transaction-table-caption"><span><strong>${records.length}</strong> rental record${records.length === 1 ? "" : "s"} in this view</span><span>Sorted by what needs attention first</span></div>${records.length ? table(["EQUIPMENT / RENTAL ID", "CUSTOMER", "DUE DATE", "STATUS", "CHARGES", "ACTIONS"], view.rows.map(row => `<tr ${recordAttrs('transaction', row.id, txCode(row))}><td><strong>${e(row.item_name || "Unknown equipment")}</strong><small>${e(txCode(row))} · ${e(row.item_code || "No item code")}</small></td><td><strong>${e(row.customer_name || "Unknown customer")}</strong></td><td>${txDueCell(row)}</td><td>${status(txStatus(row))}</td><td>${chargeCell(row, h)}</td><td class="transaction-actions-cell"><div class="transaction-row-actions">${rentalQuickActionButton(row)}<button type="button" class="transaction-icon-action" data-transaction-detail="${e(row.id)}" aria-label="View details for ${e(txCode(row))}" title="View details">${icon("eye")}</button></div></td></tr>`).join("")) : empty("No rentals in this view", state.filter === "All open" ? search.trim() ? "Try another search term or clear the search to see open rentals." : "Select Create walk-in rental, or submit a request from the mobile app." : "Try another filter or search term.")}${(records.length || model.page_meta) ? view.footer : ""}</section>`;
     }
     if (mode === "Returns") {
       const mobileReturns = all.filter(row => ['ACTIVE','RETURN_PENDING_INSPECTION'].includes(row.status)).sort((a, b) => {
@@ -275,7 +339,7 @@ export function createWorkspaceUI(h) {
         ? view.rows.map(row => `<tr ${recordAttrs('transaction', row.id, txCode(row))}><td><strong>${e(row.item_name || "Unknown equipment")}</strong><small>${e(txCode(row))} · ${e(row.item_code || "No item code")}</small></td><td><strong>${e(row.customer_name || "Unknown customer")}</strong></td><td>${txDueCell(row)}</td><td>${status(txStatus(row))}</td><td>${chargeCell(row, h)}</td><td class="transaction-actions-cell"><div class="transaction-row-actions"><button type="button" class="primary" data-return-action="${e(row.id)}">${row.status === 'RETURN_PENDING_INSPECTION' ? 'Inspect' : 'Receive return'}</button><button type="button" class="transaction-icon-action" data-transaction-detail="${e(row.id)}" aria-label="View details for ${e(txCode(row))}" title="View details">${icon("eye")}</button></div></td></tr>`).join("")
         : view.rows.map(row => `<tr ${recordAttrs('transaction', row.id, txCode(row))}><td><strong>${e(row.item_name || "Unknown equipment")}</strong><small>${e(txCode(row))} · ${e(row.item_code || "No item code")}</small></td><td><strong>${e(row.customer_name || "Unknown customer")}</strong></td><td>${e(formatDate(row.due_at))}</td><td><strong>${e(formatDate(actualReturnTime(row)))}</strong><small>${row.confirmed_return_at ? txIsLate(row) ? "After due time" : "On time" : "Return time not recorded"}</small></td><td>${status(txIsLate(row) ? "Late return" : "Returned")}</td><td>${chargeCell(row, h)}</td><td><button type="button" class="transaction-row-action" data-transaction-detail="${e(row.id)}">Details ${icon("arrow")}</button></td></tr>`).join("");
       const emptyMsg = isPendingView ? "No equipment currently waiting for return. When customers request returns or items are checked out, they will appear here." : state.filter === "All returns" ? "Completed returns appear here after staff records receipt and completes inspection." : "Try another return filter or search term.";
-      return `<div class="module-stats transaction-stats">${txMetric("Pending returns", mobileReturns.length, "Equipment out or returning", "box", "purple")}${txMetric("Returned today", returnedToday.length, "Completed handoffs today", "box", "green")}${txMetric("Returned this month", returnedThisMonth.length, "Completed return records", "chart")}${txMetric("Late returns", lateReturns.length, "Returned after the due time", "clock", "amber")}</div><section class="panel return-queue-panel"><div class="panel-title"><div><h3>Return desk</h3><p>Record physical receipt, inspect the unit, and confirm its return.</p></div><div class="transaction-heading-actions">${action}</div></div><div class="return-queue-list">${mobileQueue}${queueMarkup}</div></section><section class="panel admin-module transaction-table-panel returns-table-panel"><div class="panel-title"><div><h3>${isPendingView ? "Active & Pending returns" : "Completed returns"}</h3><p>${isPendingView ? "Equipment currently out with customers or requested for return. Receive and inspect units to complete the return." : "Check the actual return time against the original due time."}</p></div></div><div class="transaction-filter-toolbar">${filters}<label class="module-search">${icon("search")}<input id="module-search" value="${e(search)}" placeholder="Search item, customer, or rental ID" aria-label="Search returns"/></label></div><div class="transaction-table-caption"><span><strong>${records.length}</strong> return record${records.length === 1 ? "" : "s"} in this view</span><span>${isPendingView ? "Sorted by return priority" : "Late returns are highlighted for review"}</span></div>${records.length ? table(tableHeadings, tableRows) : empty(isPendingView ? "No pending returns" : "No completed returns found", emptyMsg)}${(records.length || model.page_meta) ? view.footer : ""}</section>`;
+      return `<div class="module-stats transaction-stats">${txMetric("Pending returns", mobileReturns.length, "Equipment out or returning", "box", "purple")}${txMetric("Returned today", returnedToday.length, "Completed handoffs today", "box", "green")}${txMetric("Returned this month", returnedThisMonth.length, "Completed return records", "chart")}${txMetric("Late returns", lateReturns.length, "Returned after the due time", "clock", "amber")}</div><section class="panel return-queue-panel"><div class="panel-title"><div><h3>Return desk</h3><p>Record physical receipt, inspect the unit, and confirm its return.</p></div><div class="transaction-heading-actions">${action}</div></div><div class="return-queue-list">${mobileQueue}${queueMarkup}</div></section><section class="panel admin-module transaction-table-panel returns-table-panel"><div class="panel-title"><div><h3>${isPendingView ? "Active & Pending returns" : "Completed returns"}</h3><p>${isPendingView ? "Equipment currently out with customers or requested for return. Receive and inspect units to complete the return." : "Check the actual return time against the original due time."}</p></div></div><div class="transaction-filter-toolbar">${filters}<div class="transaction-toolbar-search-wrap"><label class="module-search">${icon("search")}<input id="module-search" value="${e(search)}" placeholder="Search item, customer, or rental ID" aria-label="Search returns"/></label>${advancedFilterToggleBtn(mode)}</div></div>${advancedFilterDrawer(mode)}<div class="transaction-table-caption"><span><strong>${records.length}</strong> return record${records.length === 1 ? "" : "s"} in this view</span><span>${isPendingView ? "Sorted by return priority" : "Late returns are highlighted for review"}</span></div>${records.length ? table(tableHeadings, tableRows) : empty(isPendingView ? "No pending returns" : "No completed returns found", emptyMsg)}${(records.length || model.page_meta) ? view.footer : ""}</section>`;
     }
     const historyState = txState["Transaction History"];
     let records = all.filter(row => txHistoryMatches(row, historyState)).sort((a, b) => (txDate(b.confirmed_rental_at || b.created_at)?.getTime() || 0) - (txDate(a.confirmed_rental_at || a.created_at)?.getTime() || 0));
@@ -291,7 +355,7 @@ export function createWorkspaceUI(h) {
     const statuses = ["All statuses", "Active", "Pending admin review", "Awaiting handover", "Inspection pending", "Pending verification", "Returned", "Rejected", "Expired", "Cancelled"], periods = ["All time", "Last 30 days", "This month", "This year"];
     const statusSelect = `<label class="transaction-select"><span>Status</span><select id="transaction-status-filter" aria-label="Filter by status">${statuses.map(option => `<option ${historyState.status === option ? "selected" : ""}>${e(option)}</option>`).join("")}</select></label>`;
     const periodSelect = `<label class="transaction-select"><span>Date range</span><select id="transaction-period-filter" aria-label="Filter by date">${periods.map(option => `<option ${historyState.period === option ? "selected" : ""}>${e(option)}</option>`).join("")}</select></label>`;
-    return `<div class="module-stats transaction-stats">${txMetric("Loaded transactions", all.length, "Records on this table page", "chart")}${txMetric("Active on this page", active.length, "From the loaded records", "box")}${txMetric("Returned on this page", completed.length, "From the loaded records", "clock", "green")}${txMetric("Rental fees on this page", money(rentalFees), `From ${confirmed.length} confirmed rentals`, "money", "purple")}</div><div class="history-insights"><section class="panel history-insight-card"><div class="panel-title"><div><h3>Most rented equipment</h3><p>Confirmed rentals · across all pages</p></div>${rankingControls}</div><div class="popular-items">${popularMarkup}</div>${rankingNote}</section><section class="panel history-insight-card history-workflow-card"><span class="eyebrow">QUICK VIEW</span><h3>Stay ahead of the next return</h3><p>${active.length ? `${active.length} active rental${active.length === 1 ? "" : "s"} currently out` : "No active rentals right now"}${pendingRentals.length ? ` · ${pendingRentals.length} waiting for confirmation` : ""}.</p><button type="button" class="text-button" data-page="Rentals">Review active rentals →</button></section></div><section class="panel admin-module transaction-table-panel history-table-panel"><div class="transaction-list-toolbar"><label class="module-search">${icon("search")}<input id="module-search" value="${e(search)}" placeholder="Search item, customer, or rental ID" aria-label="Search transaction history"/></label><div class="transaction-heading-actions">${action}</div></div><div class="transaction-filter-toolbar history-filter-toolbar"><div class="transaction-selects">${statusSelect}${periodSelect}</div></div><div class="transaction-table-caption"><span><strong>${records.length}</strong> transaction${records.length === 1 ? "" : "s"} match your filters</span><span>Saved rental charges</span></div>${records.length ? table(["RENTAL ID", "EQUIPMENT", "CUSTOMER", "RENTED", "DUE / RETURNED", "STATUS", "CHARGES", ""], view.rows.map(row => `<tr ${recordAttrs('transaction', row.id, txCode(row))}><td><strong>${e(txCode(row))}</strong></td><td><strong>${e(row.item_name || "Unknown equipment")}</strong><small>${e(row.item_code || "No item code")}</small></td><td>${e(row.customer_name || "Unknown customer")}</td><td>${e(formatDate(row.confirmed_rental_at || row.created_at))}</td><td><strong>${e(formatDate(row.confirmed_return_at || row.due_at))}</strong><small>${row.confirmed_return_at ? "Returned" : "Due date"}</small></td><td>${status(txStatus(row))}</td><td>${chargeCell(row, h)}</td><td><button type="button" class="transaction-row-action" data-transaction-detail="${e(row.id)}">Details ${icon("arrow")}</button></td></tr>`).join("")) : empty("No matching transactions", "Adjust the status, date range, or search term to see more history.")}${(records.length || model.page_meta) ? view.footer : ""}</section>`;
+    return `<div class="module-stats transaction-stats">${txMetric("Loaded transactions", all.length, "Records on this table page", "chart")}${txMetric("Active on this page", active.length, "From the loaded records", "box")}${txMetric("Returned on this page", completed.length, "From the loaded records", "clock", "green")}${txMetric("Rental fees on this page", money(rentalFees), `From ${confirmed.length} confirmed rentals`, "money", "purple")}</div><div class="history-insights"><section class="panel history-insight-card"><div class="panel-title"><div><h3>Most rented equipment</h3><p>Confirmed rentals · across all pages</p></div>${rankingControls}</div><div class="popular-items">${popularMarkup}</div>${rankingNote}</section><section class="panel history-insight-card history-workflow-card"><span class="eyebrow">QUICK VIEW</span><h3>Stay ahead of the next return</h3><p>${active.length ? `${active.length} active rental${active.length === 1 ? "" : "s"} currently out` : "No active rentals right now"}${pendingRentals.length ? ` · ${pendingRentals.length} waiting for confirmation` : ""}.</p><button type="button" class="text-button" data-page="Rentals">Review active rentals →</button></section></div><section class="panel admin-module transaction-table-panel history-table-panel"><div class="transaction-list-toolbar"><div class="transaction-toolbar-search-wrap"><label class="module-search">${icon("search")}<input id="module-search" value="${e(search)}" placeholder="Search item, customer, or rental ID" aria-label="Search transaction history"/></label>${advancedFilterToggleBtn(mode)}</div><div class="transaction-heading-actions">${action}</div></div>${advancedFilterDrawer(mode)}<div class="transaction-filter-toolbar history-filter-toolbar"><div class="transaction-selects">${statusSelect}${periodSelect}</div></div><div class="transaction-table-caption"><span><strong>${records.length}</strong> transaction${records.length === 1 ? "" : "s"} match your filters</span><span>Saved rental charges</span></div>${records.length ? table(["RENTAL ID", "EQUIPMENT", "CUSTOMER", "RENTED", "DUE / RETURNED", "STATUS", "CHARGES", ""], view.rows.map(row => `<tr ${recordAttrs('transaction', row.id, txCode(row))}><td><strong>${e(txCode(row))}</strong></td><td><strong>${e(row.item_name || "Unknown equipment")}</strong><small>${e(row.item_code || "No item code")}</small></td><td>${e(row.customer_name || "Unknown customer")}</td><td>${e(formatDate(row.confirmed_rental_at || row.created_at))}</td><td><strong>${e(formatDate(row.confirmed_return_at || row.due_at))}</strong><small>${row.confirmed_return_at ? "Returned" : "Due date"}</small></td><td>${status(txStatus(row))}</td><td>${chargeCell(row, h)}</td><td><button type="button" class="transaction-row-action" data-transaction-detail="${e(row.id)}">Details ${icon("arrow")}</button></td></tr>`).join("")) : empty("No matching transactions", "Adjust the status, date range, or search term to see more history.")}${(records.length || model.page_meta) ? view.footer : ""}</section>`;
   }
 
   function rates() {
@@ -331,7 +395,7 @@ export function createWorkspaceUI(h) {
       try {
         const payload = { productId: productSelect.value, itemId: itemSelect.value || undefined, mode: modeSelect.value, startAt: dateIso('startAt'), actualReturnAt: dateIso('actualReturnAt') };
         if (modeSelect.value === 'WHOLE_STAY') payload.resortCheckoutAt = dateIso('resortCheckoutAt'); else payload.durationMinutes = Number(form.elements.durationMinutes.value);
-        const response = await api('/pricing/quote', { method: 'POST', body: JSON.stringify(payload) }), q = response.quote; result.innerHTML = `<h3>${e(q.product_name)} · ${e(q.rate_label)}</h3><dl><dt>Rental fee</dt><dd>${money(q.rental_fee)}</dd><dt>Overtime</dt><dd>${money(q.overtime_fee)}${q.overtime_blocks ? ` · ${q.overtime_blocks} started hour(s)` : ''}</dd><dt>Rental charges</dt><dd>${money(q.rental_charge_total)}</dd><dt>Collect now</dt><dd><strong>${money(q.total_to_collect)}</strong></dd><dt>Due time</dt><dd>${e(formatDate(q.due_at))}</dd><dt>ID</dt><dd>${q.valid_id_required ? 'Valid ID required' : 'ID not required'}</dd></dl>${q.warnings.map(w => `<p class="quote-warning">${e(w)}</p>`).join('')}<p>${e(q.reminders.bike_safety || '')}</p><p>${e(q.reminders.care_and_loss)} ${e(q.reminders.return)}</p><p>${e(q.after_hours_return_note)}</p>`; result.hidden = false; }
+        const response = await api('/pricing/quote', { method: 'POST', body: JSON.stringify(payload) }), q = response.quote; result.innerHTML = `<h3>${e(q.product_name)} · ${e(q.rate_label)}</h3><dl><dt>Billed duration</dt><dd>${e(formatDurationHuman(q.billed_minutes))}</dd><dt>Rental fee</dt><dd>${money(q.rental_fee)}</dd><dt>Overtime</dt><dd>${money(q.overtime_fee)}${q.overtime_blocks ? ` · ${q.overtime_blocks} started hour(s)` : ''}</dd><dt>Rental charges (Base + Overtime)</dt><dd>${money(q.rental_charge_total)}</dd><dt>Collect now</dt><dd><strong>${money(q.total_to_collect)}</strong></dd><dt>Due time</dt><dd>${e(formatDate(q.due_at))}</dd><dt>ID</dt><dd>${q.valid_id_required ? 'Valid ID required' : 'ID not required'}</dd></dl>${q.warnings.map(w => `<p class="quote-warning">${e(w)}</p>`).join('')}<p>${e(q.reminders.bike_safety || '')}</p><p>${e(q.reminders.care_and_loss)} ${e(q.reminders.return)}</p><p>${e(q.after_hours_return_note)}</p>`; result.hidden = false; }
       catch (problem) { error.textContent = problem.message; }
       finally { button.disabled = false; }
     };
@@ -370,7 +434,7 @@ export function createWorkspaceUI(h) {
   }
 
   function settings(user, appearance) {
-    return renderSettings({ model, user, appearance, tab: settingsTab, draft: businessDraft, dirty: businessDirty, saving: businessSaving, preferences: preferencesDraft || preferences, users: () => users(user.id), activeSessions, securityAlerts }, { escape: e, icon, formatDate });
+    return renderSettings({ model, user, appearance, tab: settingsTab, draft: businessDraft, dirty: businessDirty, saving: businessSaving, preferences: preferencesDraft || preferences, users: () => users(user.id), activeSessions, securityAlerts, businessSubTab }, { escape: e, icon, formatDate });
   }
 
   function users(currentUserId) {
@@ -409,23 +473,60 @@ export function createWorkspaceUI(h) {
     const options = ['ALL', ...(customer ? ['ACTIVE', 'INACTIVE'] : maintenance ? ['OPEN', 'CLOSED', 'IN_PROGRESS', 'COMPLETED', 'RETIRED'] : ['OPEN', 'PENDING_ADMIN_APPROVAL', 'APPROVED', 'ACTIVE', 'RETURN_PENDING_INSPECTION', 'COMPLETED', 'CANCELLED', 'REJECTED', 'EXPIRED'])];
     const labels = { ALL: 'All statuses', OPEN: maintenance ? 'Open tickets' : 'Open rentals', CLOSED: 'Closed tickets', ACTIVE: customer ? 'Active customers' : 'In use', INACTIVE: 'Archived customers', PENDING_ADMIN_APPROVAL: 'Pending review', APPROVED: 'Approved', RETURN_PENDING_INSPECTION: 'Awaiting inspection', IN_PROGRESS: 'In progress', COMPLETED: 'Completed', CANCELLED: 'Cancelled', REJECTED: 'Rejected', EXPIRED: 'Expired', RETIRED: 'Retired' };
     const placeholder = customer ? 'Customer ID or name' : maintenance ? 'Maintenance ID or equipment name' : 'Rental ID or equipment name';
-    return `<section class="panel record-server-filters" aria-labelledby="record-filters-title">
-      <div class="record-filter-heading"><div><h3 id="record-filters-title">Find records</h3><p>Filter saved ${customer ? 'customers' : maintenance ? 'maintenance records' : 'rentals'} by status, date, or reference.</p></div><button type="button" class="text-button" id="record-reset">Reset filters</button></div>
-      <form class="record-filter-fields" id="record-filter-form" aria-label="Saved record filters">
-        <label for="record-status">Status<select id="record-status">${options.map(value => `<option value="${value}" ${value === remoteStatus ? 'selected' : ''}>${labels[value]}</option>`).join('')}</select></label>
-        <label for="record-from">Created from<input id="record-from" type="date" value="${e(remoteFrom)}"/></label>
-        <label for="record-to">Created to<input id="record-to" type="date" value="${e(remoteTo)}"/></label>
-        <label for="record-search" class="record-filter-search">Search saved records<input id="record-search" type="search" value="${e(remoteSearch)}" placeholder="${placeholder}" maxlength="150"/></label>
-        <button type="submit" class="primary" id="record-find">Find records</button>
-      </form>
-      <p class="record-filter-note">Use an exact reference or the beginning of a name. The table summaries and quick filters use this page’s results.${page==='Transaction History'?' The popularity ranking uses its own period across all pages.':''}</p>
-    </section>`;
+
+    let activeFilterCount = 0;
+    if (remoteStatus && remoteStatus !== defaultRecordStatus(page)) activeFilterCount++;
+    if (remoteFrom) activeFilterCount++;
+    if (remoteTo) activeFilterCount++;
+    if (remoteSearch) activeFilterCount++;
+    const hasActiveFilters = activeFilterCount > 0;
+
+    return `<details class="panel record-server-filters" ${hasActiveFilters ? 'open' : ''} aria-labelledby="record-filters-title">
+      <summary class="record-filter-summary">
+        <div class="record-filter-summary-inner">
+          <div class="record-filter-summary-left">
+            <span class="record-filter-icon">${icon('search')}</span>
+            <div>
+              <h3 id="record-filters-title">Find records &amp; date range</h3>
+              <p class="record-filter-summary-hint">${hasActiveFilters ? `<strong class="active-filter-badge">${activeFilterCount} active filter${activeFilterCount > 1 ? 's' : ''}</strong> · showing filtered results` : `Filter saved ${customer ? 'customers' : maintenance ? 'maintenance records' : 'rentals'} by status, date range, or reference`}</p>
+            </div>
+          </div>
+          <div class="record-filter-summary-right">
+            ${hasActiveFilters ? `<button type="button" class="text-button record-summary-reset" id="record-reset">Reset filters</button>` : ''}
+            <span class="record-filter-toggle-pill">${hasActiveFilters ? 'Hide filters' : 'Advanced filters'} <span class="chevron-arrow">▾</span></span>
+          </div>
+        </div>
+      </summary>
+      <div class="record-filter-body">
+        <div class="record-filter-heading">
+          <div>
+            <p>Filter saved ${customer ? 'customers' : maintenance ? 'maintenance records' : 'rentals'} by status, date, or reference.</p>
+          </div>
+          ${!hasActiveFilters ? `<button type="button" class="text-button" id="record-reset">Reset filters</button>` : ''}
+        </div>
+        <form class="record-filter-fields" id="record-filter-form" aria-label="Saved record filters">
+          <label for="record-status">Status<select id="record-status">${options.map(value => `<option value="${value}" ${value === remoteStatus ? 'selected' : ''}>${labels[value]}</option>`).join('')}</select></label>
+          <label for="record-from">Created from<input id="record-from" type="date" value="${e(remoteFrom)}"/></label>
+          <label for="record-to">Created to<input id="record-to" type="date" value="${e(remoteTo)}"/></label>
+          <label for="record-search" class="record-filter-search">Search saved records<input id="record-search" type="search" value="${e(remoteSearch)}" placeholder="${placeholder}" maxlength="150"/></label>
+          <button type="submit" class="primary" id="record-find">Find records</button>
+        </form>
+        <p class="record-filter-note">Use an exact reference or the beginning of a name. The table summaries and quick filters use this page’s results.${page === 'Transaction History' ? ' The popularity ranking uses its own period across all pages.' : ''}</p>
+      </div>
+    </details>`;
   }
 
   function render(page, user, appearance) {
     if(page==='Payments'){searchPage=page;return financeUI.render();}
     const displayPage = page === 'Transaction History' ? 'Rental History' : page;
-    if (page !== searchPage) { if(model?.view_meta?.view && model.view_meta.view!==page)invalidate();remoteStatus=defaultRecordStatus(page);remoteFrom='';remoteTo='';remoteSearch='';remoteScheduledDay='';remote[page]={cursor:'',previous:[]};customerUI.setStatus(remoteStatus);maintenanceUI.setStatus(remoteStatus); if (searchPage) pageSearches[searchPage] = search; search = pageSearches[page] || ''; searchPage = page; }
+    if (page !== searchPage) {
+      if(model?.view_meta?.view && model.view_meta.view!==page){
+        const cached = viewModelCache.get(page);
+        if(cached && modelVersion === cacheVersion) { model = cached; }
+        else { invalidate(); }
+      }
+      remoteStatus=defaultRecordStatus(page);remoteFrom='';remoteTo='';remoteSearch='';remoteScheduledDay='';remote[page]={cursor:'',previous:[]};customerUI.setStatus(remoteStatus);maintenanceUI.setStatus(remoteStatus); if (searchPage) pageSearches[searchPage] = search; search = pageSearches[page] || ''; searchPage = page;
+    }
     const retry = '<button type="button" class="secondary" id="module-retry">Try again</button>';
     const wrongView = model?.view_meta?.view && model.view_meta.view !== page;
     const reportRange = page === 'Reports' ? analyticsRange(analyticsSelection) : null;
@@ -437,7 +538,7 @@ export function createWorkspaceUI(h) {
     const notice = modelVersion === cacheVersion ? '' : loadError
       ? `<div class="module-sync-notice connection-banner" role="alert"><span>${e(loadError)} Showing the last successfully loaded records.</span>${retry}</div>`
       : `<div class="module-sync-notice" role="status"><span class="session-spinner" aria-hidden="true"></span><span>Updating ${e(displayPage.toLowerCase())}…</span></div>`;
-    const filters = recordFilters(page);
+    const filters = ['Customers', 'Maintenance'].includes(page) ? recordFilters(page) : '';
     const fallbackPager=['Customers','Rentals','Returns','Transaction History','Maintenance'].includes(page) && model.page_meta && !content.includes('data-remote-next') ? paged([],page).footer : '';
     return notice + filters + (page==='Rentals'?planning.calendar(model.transactions,remoteScheduledDay):'') + content + fallbackPager;
   }
@@ -452,8 +553,36 @@ export function createWorkspaceUI(h) {
     document.querySelector('#history-ranking-period')?.addEventListener('change',async event=>{rankingPeriod=event.target.value;const pending=load(true).catch(()=>{});rerender();await pending;rerender();});
     planning.bind(()=>model,rerender);
     document.querySelector('#delivery-calendar-day')?.addEventListener('change',async event=>{remoteScheduledDay=event.target.value;remoteFrom='';remoteTo='';remoteSearch='';remoteStatus='OPEN';remote[page]={cursor:'',previous:[]};await load(true).catch(()=>{});rerender();});
-    document.querySelector('#record-filter-form')?.addEventListener('submit',async event=>{event.preventDefault();remoteSearch=document.querySelector('#record-search').value.trim();remote[page]={cursor:'',previous:[]};await load(true).catch(()=>{});rerender();});
-    document.querySelector('#record-reset')?.addEventListener('click',async()=>{remoteStatus=defaultRecordStatus(page);remoteFrom='';remoteTo='';remoteSearch='';remoteScheduledDay='';remote[page]={cursor:'',previous:[]};customerUI.setStatus(remoteStatus);maintenanceUI.setStatus(remoteStatus);await load(true).catch(()=>{});rerender();});
+    document.querySelector('#toggle-advanced-filters')?.addEventListener('click', () => {
+      advancedFiltersOpen = !advancedFiltersOpen;
+      rerender();
+    });
+    document.querySelector('#record-filter-form')?.addEventListener('submit',async event=>{
+      event.preventDefault();
+      const hiddenInput = document.querySelector('#record-search');
+      remoteSearch = (hiddenInput ? hiddenInput.value : search).trim();
+      remote[page]={cursor:'',previous:[]};
+      await load(true).catch(()=>{});
+      rerender();
+    });
+    const resetButtons = document.querySelectorAll ? document.querySelectorAll('#record-reset') : [document.querySelector('#record-reset')].filter(Boolean);
+    resetButtons.forEach(btn => btn.addEventListener('click', async event => {
+      event.preventDefault();
+      event.stopPropagation();
+      remoteStatus = defaultRecordStatus(page);
+      remoteFrom = '';
+      remoteTo = '';
+      remoteSearch = '';
+      remoteScheduledDay = '';
+      search = '';
+      if (document.querySelector('#record-search')) document.querySelector('#record-search').value = '';
+      if (document.querySelector('#module-search')) document.querySelector('#module-search').value = '';
+      remote[page] = { cursor: '', previous: [] };
+      customerUI.setStatus(remoteStatus);
+      maintenanceUI.setStatus(remoteStatus);
+      await load(true).catch(() => {});
+      rerender();
+    }));
     for(const field of ['status','from','to'])document.querySelector('#record-'+field)?.addEventListener('change',async event=>{if(field==='status'){remoteStatus=event.target.value;customerUI.setStatus(remoteStatus);maintenanceUI.setStatus(remoteStatus);}if(field==='from'){remoteFrom=event.target.value;remoteScheduledDay='';}if(field==='to'){remoteTo=event.target.value;remoteScheduledDay='';}remote[page]={cursor:'',previous:[]};await load(true).catch(()=>{});rerender();});
     if (page === 'Maintenance') maintenanceUI.bind();
     if(page==='Reports')reportPayments.bind(rerender);
@@ -464,7 +593,26 @@ export function createWorkspaceUI(h) {
     if ((!model || modelVersion !== cacheVersion) && !loadError) load().then(rerender).catch(problem => { if (problem.status !== 401) rerender(); });
     if (!model) return;
     workflow.bind(page, rerender, pages);
-    const searchBox = document.querySelector('#module-search'); if (searchBox) searchBox.oninput = event => { search = event.target.value; pages[page] = 0; if (page === 'ESP32 terminal') pages['Verification history'] = 0; rerender(); document.querySelector('#module-search')?.focus(); };
+    const searchBox = document.querySelector('#module-search');
+    if (searchBox) {
+      searchBox.oninput = event => {
+        search = event.target.value;
+        const hiddenSearch = document.querySelector('#record-search');
+        if (hiddenSearch) hiddenSearch.value = search;
+        pages[page] = 0;
+        if (page === 'ESP32 terminal') pages['Verification history'] = 0;
+        rerender();
+        document.querySelector('#module-search')?.focus();
+      };
+      searchBox.onkeydown = event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          remoteSearch = search.trim();
+          remote[page] = { cursor: '', previous: [] };
+          load(true).then(rerender).catch(() => rerender());
+        }
+      };
+    }
     document.querySelectorAll('[data-pager-prev]').forEach(button => button.onclick = () => { pages[button.dataset.pagerPrev] = Math.max(0, (pages[button.dataset.pagerPrev] || 0) - 1); rerender(); }); document.querySelectorAll('[data-pager-next]').forEach(button => button.onclick = () => { pages[button.dataset.pagerNext] = (pages[button.dataset.pagerNext] || 0) + 1; rerender(); });
     if (page === 'Customers') customerUI.bind(rerender, () => { search = ''; }, () => { pages.Customers = 0; });
     document.querySelector('#rate-add')?.addEventListener('click', rateForm);
@@ -501,8 +649,40 @@ export function createWorkspaceUI(h) {
         if (target !== undefined) { event.preventDefault(); switchSettingsTab(tabs[target].id); }
       };
     });
+    document.querySelectorAll('[data-business-subtab]').forEach(btn => {
+      btn.onclick = () => {
+        businessSubTab = btn.dataset.businessSubtab;
+        const container = document.querySelector('.settings-business-container');
+        if (container) container.setAttribute('data-active-subtab', businessSubTab);
+        document.querySelectorAll('[data-business-subtab]').forEach(b => {
+          b.classList.toggle('active', b.dataset.businessSubtab === businessSubTab);
+        });
+      };
+    });
+    document.querySelectorAll('[data-toggle-edit]').forEach(btn => {
+      btn.onclick = () => {
+        const card = btn.closest('.settings-card');
+        if (!card) return;
+        const isEdit = card.getAttribute('data-state') === 'edit';
+        const nextState = isEdit ? 'view' : 'edit';
+        card.setAttribute('data-state', nextState);
+        if (nextState === 'edit') {
+          const firstInput = card.querySelector('input:not([type="hidden"]), textarea, select');
+          firstInput?.focus();
+        }
+      };
+    });
+    document.querySelectorAll('[data-cancel-edit]').forEach(btn => {
+      btn.onclick = () => {
+        const card = btn.closest('.settings-card');
+        if (card) {
+          card.setAttribute('data-state', 'view');
+          card.querySelector('.settings-edit-toggle-btn')?.focus();
+        }
+      };
+    });
     const businessForm = document.querySelector('#business-form');
-    businessForm?.addEventListener('input', () => { businessDraft = Object.fromEntries(new FormData(businessForm)); businessDirty = true; businessForm.querySelector('.settings-draft-note').textContent = 'You have unsaved changes. Your draft is kept while switching tabs.'; businessForm.querySelector('#business-discard').disabled = false; });
+    businessForm?.addEventListener('input', () => { const data = Object.fromEntries(new FormData(businessForm)); data.announcementEnabled = businessForm.elements.announcementEnabled?.checked ?? false; businessDraft = data; businessDirty = true; businessForm.querySelector('.settings-draft-note').textContent = 'You have unsaved changes. Your draft is kept while switching tabs.'; businessForm.querySelector('#business-discard').disabled = false; });
     document.querySelector('#business-discard')?.addEventListener('click', async event => {
       const button = event.currentTarget;
       if (button.disabled) return;
@@ -512,7 +692,7 @@ export function createWorkspaceUI(h) {
     });
     if (businessForm) confirmSubmit(businessForm, { title: 'Save business settings?', description: 'The business name, location, and administrative defaults will be updated for the workspace.', confirmLabel: 'Yes, save settings' }, async () => {
       if (businessSaving) return;
-      const values = Object.fromEntries(new FormData(businessForm)), button = businessForm.querySelector('[type="submit"]');
+      const values = Object.fromEntries(new FormData(businessForm)); values.announcementEnabled = businessForm.elements.announcementEnabled?.checked ?? false; const button = businessForm.querySelector('[type="submit"]');
       businessSaving = true; businessDraft = values; businessForm.querySelector('fieldset').disabled = true; businessForm.querySelector('.form-error').textContent = ''; button.textContent = 'Saving…';
       try { const saved = await api('/settings', { method: 'PATCH', body: JSON.stringify(values) }); model.settings = saved.settings || saved; businessDraft = null; businessDirty = false; businessSaving = false; toast('Business settings saved.'); rerender(); }
       catch (problem) { businessSaving = false; if (businessForm.isConnected) { businessForm.querySelector('fieldset').disabled = false; button.textContent = 'Save business settings'; businessForm.querySelector('.form-error').textContent = problem.message; } else { rerender(); toast(problem.message); } }
@@ -533,7 +713,7 @@ export function createWorkspaceUI(h) {
       removeButton?.addEventListener('click', () => { imageInput.value = ''; if (fileInput) fileInput.value = ''; syncRemoveButton(); preview.innerHTML = '<p class="settings-draft-note">No owner QR configured. Customers can choose cash until one is saved.</p>'; });
       confirmSubmit(paymentForm, { title: 'Save InstaPay / GCash payment details?', description: 'Customers will use this QR for transfers and see the account details in rental checkout.', confirmLabel: 'Save payment details' }, async () => {
         const button = paymentForm.querySelector('[type="submit"]'); button.disabled = true; button.textContent = 'Saving…'; error.textContent = '';
-        try { const result = await api('/settings/payment', { method: 'PATCH', body: JSON.stringify(Object.fromEntries(new FormData(paymentForm))) }); model.settings = { ...model.settings, ...(result.settings || {}) }; toast('Owner payment instructions saved.'); rerender(); }
+        try { const paymentData = Object.fromEntries(new FormData(paymentForm)); paymentData.acceptCash = paymentForm.elements.acceptCash?.checked ?? true; const result = await api('/settings/payment', { method: 'PATCH', body: JSON.stringify(paymentData) }); model.settings = { ...model.settings, ...(result.settings || {}) }; toast('Owner payment instructions saved.'); rerender(); }
         catch (problem) { if (paymentForm.isConnected) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save payment instructions'; } else { rerender(); toast(problem.message); } }
       });
     }
@@ -548,7 +728,10 @@ export function createWorkspaceUI(h) {
           if (await confirmAction({ title: 'Restore default Terms & Conditions?', description: 'This will replace your current text with the standard rental agreement defaults. Select Save Terms & Conditions to apply.', confirmLabel: 'Yes, restore defaults' }) && button.isConnected) {
             termsForm.elements.termsAndConditions.value = defaultTermsAndConditions;
             termsForm.elements.rentalTerms.value = defaultRentalTerms;
-            toast('Default terms restored. Select Save Terms & Conditions to apply.');
+            if (termsForm.elements.privacyPolicy) termsForm.elements.privacyPolicy.value = defaultPrivacyPolicy;
+            if (termsForm.elements.refundPolicy) termsForm.elements.refundPolicy.value = defaultRefundPolicy;
+            if (termsForm.elements.acceptedIdTypes) termsForm.elements.acceptedIdTypes.value = defaultAcceptedIds;
+            toast('Default terms and policies restored. Select Save Terms & Conditions to apply.');
           }
         } finally { button.disabled = false; }
       });
@@ -563,6 +746,40 @@ export function createWorkspaceUI(h) {
           rerender();
         } catch (problem) {
           if (termsForm.isConnected) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save Terms & Conditions'; }
+          else { rerender(); toast(problem.message); }
+        }
+      });
+    }
+    const rulesForm = document.querySelector('#rules-settings-form');
+    if (rulesForm) {
+      confirmSubmit(rulesForm, { title: 'Save rental & penalty rules?', description: 'Overtime rates, missing piece penalties, and deposit instructions will be updated.', confirmLabel: 'Yes, save rules' }, async () => {
+        const button = rulesForm.querySelector('[type="submit"]'), error = rulesForm.querySelector('.form-error');
+        button.disabled = true; button.textContent = 'Saving…'; error.textContent = '';
+        try {
+          const values = Object.fromEntries(new FormData(rulesForm));
+          const result = await api('/settings/rules', { method: 'PATCH', body: JSON.stringify(values) });
+          model.settings = { ...model.settings, ...(result.settings || {}) };
+          toast('Rental & penalty rules saved.');
+          rerender();
+        } catch (problem) {
+          if (rulesForm.isConnected) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save rental & penalty rules'; }
+          else { rerender(); toast(problem.message); }
+        }
+      });
+    }
+    const receiptForm = document.querySelector('#receipt-settings-form');
+    if (receiptForm) {
+      confirmSubmit(receiptForm, { title: 'Save receipt layout & disclaimer?', description: 'The printed store header, branch contact info, and return disclaimer will update for thermal receipts.', confirmLabel: 'Yes, save layout' }, async () => {
+        const button = receiptForm.querySelector('[type="submit"]'), error = receiptForm.querySelector('.form-error');
+        button.disabled = true; button.textContent = 'Saving…'; error.textContent = '';
+        try {
+          const values = Object.fromEntries(new FormData(receiptForm));
+          const result = await api('/settings/receipt', { method: 'PATCH', body: JSON.stringify(values) });
+          model.settings = { ...model.settings, ...(result.settings || {}) };
+          toast('Thermal receipt layout saved.');
+          rerender();
+        } catch (problem) {
+          if (receiptForm.isConnected) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save receipt layout'; }
           else { rerender(); toast(problem.message); }
         }
       });
@@ -697,5 +914,5 @@ export function createWorkspaceUI(h) {
     if(!row){const result=await api('/rentals/lookup',{method:'POST',body:JSON.stringify({kind:'RENTAL',code:String(id)})});row=result.rental;model.transactions.push(row);}
     transactionDetails(row);
   }
-  return { load, refresh, invalidate, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: () => financeUI.cashDrawerForm(), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; settingsTab = 'business'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
+  return { load, refresh, invalidate, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: () => financeUI.cashDrawerForm(), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; settingsTab = 'business'; businessSubTab = 'profile'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
 }

@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import QRCode from 'qrcode';
 import {asDate,dateFields,docData,localDateTime} from './firebase.mjs';
-import {DEFAULT_PRICING} from './pricing.mjs';
+import {DEFAULT_PRICING, defaultReplacementCost} from './pricing.mjs';
 import {createMaintenance} from './maintenance.mjs';
 import {isOpenMaintenance,healthyUnit} from './maintenance-state.mjs';
 
@@ -68,7 +68,8 @@ export function validateItem(input,{codeRequired=true}={}) {
   if(pricingProductId&&!/^[a-z0-9-]{1,80}$/.test(pricingProductId))fail(400,'Choose a valid client rate sheet product.');
   if(pricingProductId&&!DEFAULT_PRICING.products.some(product=>product.id===pricingProductId))fail(400,'Choose a product from the client rate sheet.');
   if(pricingProductId&&customRateOptions.length)fail(400,'Choose either customer rate options or a shared pricing product.');
-  return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,quantity,rateType,rentalRate,latePenalty:amount(input.latePenalty,'Late penalty'),pricingProductId,customRateOptions,imageData:validateImageData(input.imageData)};
+  const rawRep=input.replacementCost??input.replacement_cost;const replacementCost=rawRep===undefined||rawRep===null||rawRep===''?undefined:amount(Number(rawRep),'Replacement cost');
+  return {code,categoryId,name,description:(input.description||'').trim(),condition:input.condition,quantity,rateType,rentalRate,latePenalty:amount(input.latePenalty,'Late penalty'),...(replacementCost!==undefined?{replacementCost}:{}),pricingProductId,customRateOptions,imageData:validateImageData(input.imageData)};
 }
 export function equipmentItemCode(sequence) {
   if(!Number.isSafeInteger(sequence)||sequence<1)fail(400,'Equipment code sequence must be a positive whole number.');
@@ -88,7 +89,7 @@ const mapItem=(item,category,rates,rentals,maintenance)=>{
   const status=String(item.status||'UNAVAILABLE').toUpperCase();
   const maintenanceCount=openMaintenance(maintenance).length;
   const effectiveStatus=item.is_active===false?(status==='RETIRED'?'RETIRED':'INACTIVE'):status==='AVAILABLE'&&(open>0||item.reserved_rental_id)?'RESERVED_PENDING':status==='AVAILABLE'&&(maintenanceCount||!healthyUnit(item))?'UNDER_MAINTENANCE':status;
-  return serialize({...item,id:String(item.id),stock_group_id:String(item.stock_group_id||item.id),status,category_id:String(item.category_id),category:category?.name||item.category||'Uncategorized',rate_type:rate.rate_type??null,rental_rate:rate.rental_rate??null,late_penalty_rate:rate.late_penalty_rate??null,pricing_product_id:item.pricing_product_id||null,open_rentals:open,open_maintenance:maintenanceCount,effective_status:effectiveStatus});
+  return serialize({...item,id:String(item.id),stock_group_id:String(item.stock_group_id||item.id),status,category_id:String(item.category_id),category:category?.name||item.category||'Uncategorized',rate_type:rate.rate_type??null,rental_rate:rate.rental_rate??null,late_penalty_rate:rate.late_penalty_rate??null,replacement_cost:Number(item.replacement_cost??defaultReplacementCost({...item,rental_rate:rate.rental_rate??0})),pricing_product_id:item.pricing_product_id||null,open_rentals:open,open_maintenance:maintenanceCount,effective_status:effectiveStatus});
 };
 
 export async function inventoryList(db) {
@@ -102,7 +103,11 @@ export async function inventoryList(db) {
   ]);
   const items=rows(itemSnap),categories=rows(categorySnap),rates=rows(rateSnap),rentals=rows(rentalSnap),maintenance=rows(maintenanceSnap);
   const byId=new Map(categories.map(category=>[category.id,category]));
-  const mapped=items.map(item=>mapItem(item,byId.get(String(item.category_id)),rates.filter(r=>String(r.item_id)===item.id),rentals.filter(r=>String(r.item_id??r.itemId)===item.id),maintenance.filter(r=>String(r.item_id)===item.id)));
+  const ratesByItem = new Map(), rentalsByItem = new Map(), maintenanceByItem = new Map();
+  for (const r of rates) { const k = String(r.item_id); let list = ratesByItem.get(k); if (!list) ratesByItem.set(k, (list = [])); list.push(r); }
+  for (const r of rentals) { const k = String(r.item_id ?? r.itemId); let list = rentalsByItem.get(k); if (!list) rentalsByItem.set(k, (list = [])); list.push(r); }
+  for (const m of maintenance) { const k = String(m.item_id); let list = maintenanceByItem.get(k); if (!list) maintenanceByItem.set(k, (list = [])); list.push(m); }
+  const mapped=items.map(item=>mapItem(item,byId.get(String(item.category_id)),ratesByItem.get(String(item.id))||[],rentalsByItem.get(String(item.id))||[],maintenanceByItem.get(String(item.id))||[]));
   const groups=new Map();
   for(const item of mapped){const key=item.stock_group_id||item.id;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
   for(const units of groups.values()){
@@ -216,7 +221,7 @@ export async function createItem(db,actor,input) {
     available.forEach((chosen,index)=>{
       const id=itemRefs[index].id,generatedCode=chosen.code;
       tx.create(codeRefs[candidates.indexOf(chosen)],{item_id:id,stock_group_id:stockGroupId,created_at:now});
-      tx.create(itemRefs[index],{stock_group_id:stockGroupId,item_code:generatedCode,qrCode:generatedCode,category_id:item.categoryId,name:item.name,description:item.description,pricing_product_id:item.pricingProductId,custom_rate_options_version:2,...(item.customRateOptions?.length?{custom_rate_options:item.customRateOptions}:{}),...(item.imageData?{image_data:item.imageData}:{}),qr_token:generatedCode,condition_status:item.condition,status:'AVAILABLE',is_active:true,created_at:now,updated_at:now});
+      tx.create(itemRefs[index],{stock_group_id:stockGroupId,item_code:generatedCode,qrCode:generatedCode,category_id:item.categoryId,name:item.name,description:item.description,pricing_product_id:item.pricingProductId,custom_rate_options_version:2,...(item.replacementCost!==undefined?{replacement_cost:item.replacementCost}:{}),...(item.customRateOptions?.length?{custom_rate_options:item.customRateOptions}:{}),...(item.imageData?{image_data:item.imageData}:{}),qr_token:generatedCode,condition_status:item.condition,status:'AVAILABLE',is_active:true,created_at:now,updated_at:now});
       tx.create(rateRefs[index],rateRecord(actor,id,item,now));
       const {imageData,quantity,...auditItem}=item,history=statusRecord(db,actor,id,null,'AVAILABLE','CREATED',now),log=audit(db,actor,id,'ITEM_CREATED',null,{...auditItem,stock_group_id:stockGroupId,code:generatedCode,imageAdded:!!imageData},now);
       tx.create(history.ref,history.data);tx.create(log.ref,log.data);
@@ -270,6 +275,7 @@ async function saveStockGroup(db,actor,id,input,next=null) {
         if(String(current.status).toUpperCase()==='AVAILABLE'&&!['GOOD','FAIR'].includes(condition)&&!openMaintenance(rows(maintenanceSnap)).length)fail(400,'Start maintenance before marking equipment damaged or needing inspection.');
         const rateRows=rows(ratesSnap),rate=currentRate(rateRows),rateChanged=!rate||rate.rate_type!==next.rateType||Number(rate.rental_rate)!==next.rentalRate||Number(rate.late_penalty_rate)!==next.latePenalty||JSON.stringify(next.customRateOptions||[])!==JSON.stringify(current.custom_rate_options||[]);
         const changes={stock_group_id:stockGroupId,category_id:next.categoryId,name:next.name,description:next.description,pricing_product_id:next.pricingProductId,custom_rate_options:next.customRateOptions||[],custom_rate_options_version:2,condition_status:condition,updated_at:now};
+        if(next.replacementCost!==undefined)changes.replacement_cost=next.replacementCost;
         if(next.imageData!==undefined)changes.image_data=next.imageData;
         return {...entry,rateRows,rateChanged,changes};
       }));
@@ -360,6 +366,7 @@ export async function updateItem(db,actor,id,input) {
     const splitFromGroup=hasSiblings&&(next.name!==current.name||next.categoryId!==String(current.category_id)||next.pricingProductId!==(current.pricing_product_id||null)||rateChanged||next.imageData!==undefined&&(next.imageData||null)!==(current.image_data||null));
     if(rateChanged){for(const old of rows(ratesSnap).filter(r=>r.is_active!==false))tx.update(db.collection('item_rates').doc(old.id),{is_active:false,effective_to:now});tx.create(db.collection('item_rates').doc(),rateRecord(actor,id,next,now));}
     const changes={category_id:next.categoryId,name:next.name,description:next.description,pricing_product_id:next.pricingProductId,custom_rate_options:next.customRateOptions||[],custom_rate_options_version:2,condition_status:next.condition,updated_at:now};
+    if(next.replacementCost!==undefined)changes.replacement_cost=next.replacementCost;
     if(splitFromGroup)changes.stock_group_id=splitStockGroupId;
     if(next.imageData!==undefined)changes.image_data=next.imageData;
     tx.update(itemRef,changes);

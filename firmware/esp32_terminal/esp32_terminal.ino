@@ -33,6 +33,9 @@
 #define LED1_PIN         27
 #define LED2_PIN         14
 
+// Fairy Lights (LED String): D25 (via current-limiting resistor)
+#define FAIRY_LIGHT_PIN  25
+
 // =============================================================================
 // 2. NETWORK & TERMINAL CONFIGURATION
 // =============================================================================
@@ -75,11 +78,13 @@ int currentInspectionRevision = 0;
 unsigned long lastPollTime = 0;
 const unsigned long POLL_INTERVAL_MS = 3000;
 
-// Button debouncing (Active LOW: unpressed = HIGH, pressed = LOW)
-int lastButtonReading = HIGH;
-int stableButtonState = HIGH;
-unsigned long lastDebounceTime = 0;
-const unsigned long DEBOUNCE_DELAY_MS = 40;
+// Button state with Hardware Interrupt support (Active LOW)
+volatile bool buttonTriggered = false;
+unsigned long lastButtonPressTime = 0;
+
+void IRAM_ATTR handleButtonInterrupt() {
+  buttonTriggered = true;
+}
 
 // =============================================================================
 // 4. BUZZER & LED FEEDBACK
@@ -94,35 +99,70 @@ void beep(int frequencyHz, int durationMs) {
 
 void soundStartup() {
   digitalWrite(LED1_PIN, HIGH);
-  beep(1000, 120);
-  delay(50);
+  digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+  digitalWrite(ACTIVE_BUZZER, HIGH);
+  tone(PASSIVE_BUZZER, 1000, 150);
+  delay(150);
+  digitalWrite(ACTIVE_BUZZER, LOW);
+  noTone(PASSIVE_BUZZER);
+  delay(60);
   digitalWrite(LED2_PIN, HIGH);
-  beep(1500, 150);
+  digitalWrite(ACTIVE_BUZZER, HIGH);
+  tone(PASSIVE_BUZZER, 1500, 200);
+  delay(200);
+  digitalWrite(ACTIVE_BUZZER, LOW);
+  noTone(PASSIVE_BUZZER);
   digitalWrite(LED1_PIN, LOW);
   digitalWrite(LED2_PIN, LOW);
+  digitalWrite(FAIRY_LIGHT_PIN, LOW);
 }
 
 void soundAlert() {
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 3; i++) {
     digitalWrite(LED1_PIN, HIGH);
-    beep(2000, 180);
+    digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+    digitalWrite(ACTIVE_BUZZER, HIGH);
+    tone(PASSIVE_BUZZER, 1800, 150);
+    delay(150);
+    digitalWrite(ACTIVE_BUZZER, LOW);
+    noTone(PASSIVE_BUZZER);
     digitalWrite(LED1_PIN, LOW);
-    delay(80);
+    digitalWrite(FAIRY_LIGHT_PIN, LOW);
+    delay(100);
   }
   digitalWrite(LED1_PIN, HIGH);
+  digitalWrite(FAIRY_LIGHT_PIN, HIGH);
 }
 
 void soundSuccess() {
   digitalWrite(LED1_PIN, LOW);
   digitalWrite(LED2_PIN, HIGH);
-  beep(1200, 120);
-  delay(60);
-  beep(1800, 250);
+  // Melodic victory chime synced with Fairy Lights (C4, E4, G4, C5)
+  int melody[] = { 262, 330, 392, 523 };
+  int duration[] = { 150, 150, 150, 350 };
+  for (int i = 0; i < 4; i++) {
+    digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+    digitalWrite(ACTIVE_BUZZER, HIGH);
+    tone(PASSIVE_BUZZER, melody[i], duration[i]);
+    delay(duration[i]);
+    digitalWrite(ACTIVE_BUZZER, LOW);
+    noTone(PASSIVE_BUZZER);
+    digitalWrite(FAIRY_LIGHT_PIN, LOW);
+    delay(70);
+  }
+  for (int k = 0; k < 2; k++) {
+    digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+    delay(80);
+    digitalWrite(FAIRY_LIGHT_PIN, LOW);
+    delay(80);
+  }
+  digitalWrite(FAIRY_LIGHT_PIN, LOW);
 }
 
 void soundError() {
   digitalWrite(LED1_PIN, HIGH);
   digitalWrite(LED2_PIN, LOW);
+  digitalWrite(FAIRY_LIGHT_PIN, LOW);
   beep(400, 400);
   digitalWrite(LED1_PIN, LOW);
 }
@@ -289,6 +329,7 @@ void pollPendingRequests() {
           currentState = STATE_IDLE;
           digitalWrite(LED1_PIN, LOW);
           digitalWrite(LED2_PIN, LOW);
+          digitalWrite(FAIRY_LIGHT_PIN, LOW);
           showIdleScreen();
         }
       }
@@ -340,6 +381,7 @@ void postConfirmation() {
     showSuccessScreen();
     delay(2500);
     digitalWrite(LED2_PIN, LOW);
+    digitalWrite(FAIRY_LIGHT_PIN, LOW);
     currentState = STATE_IDLE;
     showIdleScreen();
   } else {
@@ -364,13 +406,16 @@ void setup() {
   delay(500);
   Serial.println("\n[BOOT] Rent & Play ESP32 Terminal Initializing...");
 
-  pinMode(BUTTON_PIN, INPUT); // GPIO35 requires the external pull-up described above.
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonInterrupt, FALLING);
   pinMode(ACTIVE_BUZZER, OUTPUT);
   pinMode(PASSIVE_BUZZER, OUTPUT);
   pinMode(LED1_PIN, OUTPUT);
   pinMode(LED2_PIN, OUTPUT);
+  pinMode(FAIRY_LIGHT_PIN, OUTPUT);
 
   digitalWrite(ACTIVE_BUZZER, LOW);
+  digitalWrite(FAIRY_LIGHT_PIN, LOW);
   digitalWrite(LED1_PIN, LOW);
   digitalWrite(LED2_PIN, LOW);
   noTone(PASSIVE_BUZZER);
@@ -418,48 +463,42 @@ void loop() {
     return;
   }
 
-  // 2. Poll backend every 3s in IDLE or PENDING_CONFIRMATION state (keeps heartbeat alive & syncs queue)
+  // 2. Poll backend: every 3s in IDLE; every 10s in PENDING to avoid network delays during button click
+  unsigned long now = millis();
+  unsigned long interval = (currentState == STATE_PENDING_CONFIRMATION) ? 10000 : POLL_INTERVAL_MS;
   if (currentState == STATE_IDLE || currentState == STATE_PENDING_CONFIRMATION) {
-    unsigned long now = millis();
-    if (now - lastPollTime >= POLL_INTERVAL_MS) {
+    if (now - lastPollTime >= interval) {
       lastPollTime = now;
       pollPendingRequests();
     }
   }
 
-  // 3. Handle Physical Button (GPIO 35 Active LOW)
-  int reading = digitalRead(BUTTON_PIN);
+  // 3. Handle Physical Button (GPIO 35) via Hardware Interrupt OR direct pin check
+  bool isPressed = buttonTriggered || (digitalRead(BUTTON_PIN) == LOW);
+  buttonTriggered = false; // Reset interrupt latch
 
-  if (reading != lastButtonReading) {
-    lastDebounceTime = millis();
-  }
-  lastButtonReading = reading;
+  if (isPressed && (now - lastButtonPressTime > 250)) {
+    lastButtonPressTime = now;
+    Serial.println("[BUTTON] Physical click detected on GPIO 35!");
 
-  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY_MS) {
-    if (reading != stableButtonState) {
-      stableButtonState = reading;
+    // Immediate audible feedback on click
+    digitalWrite(ACTIVE_BUZZER, HIGH);
+    tone(PASSIVE_BUZZER, 1200, 80);
+    delay(80);
+    digitalWrite(ACTIVE_BUZZER, LOW);
+    noTone(PASSIVE_BUZZER);
 
-      // Button pressed (LOW)
-      if (stableButtonState == LOW) {
-        Serial.println("[BUTTON] Physical button pressed (GPIO 35 LOW)!");
-        beep(1000, 120); // Immediate audible click feedback
-
-        // If currently idle, poll immediately in case a request was just dispatched on the web
-        if (currentState == STATE_IDLE) {
-          pollPendingRequests();
-        }
-
-        if (currentState == STATE_PENDING_CONFIRMATION && currentRequestId.length() > 0) {
-          Serial.println("[BUTTON] Confirming pending verification request...");
-          digitalWrite(LED1_PIN, LOW);
-          digitalWrite(LED2_PIN, HIGH);
-          postConfirmation();
-        } else {
-          Serial.println("[BUTTON] No pending verification request in queue right now.");
-        }
-      }
+    if (currentState == STATE_PENDING_CONFIRMATION && currentRequestId.length() > 0) {
+      Serial.println("[BUTTON] Confirming pending verification request on cloud...");
+      digitalWrite(LED1_PIN, LOW);
+      digitalWrite(LED2_PIN, HIGH);
+      digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+      postConfirmation();
+    } else if (currentState == STATE_IDLE) {
+      Serial.println("[BUTTON] Terminal is idle, manual polling triggered.");
+      pollPendingRequests();
     }
   }
 
-  delay(15);
+  delay(20);
 }

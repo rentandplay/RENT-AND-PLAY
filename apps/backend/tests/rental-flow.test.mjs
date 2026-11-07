@@ -307,6 +307,8 @@ test('ESP32 stays visible as historical configuration while hardware endpoints c
   try {
     assert.equal((await fetch(base + '/terminals/device/pending')).status, 409);
     assert.equal((await fetch(base + '/terminals/device/confirm', { method: 'POST' })).status, 409);
+    assert.equal((await fetch(base + '/rentals/sample/terminal-dispatch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 409);
+    assert.equal(db.records('verification_requests').length, 0);
     const legacy = await fetch(base + '/rentals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(legacy.status, 409);
     assert.equal(db.records('rentals').length, 0);

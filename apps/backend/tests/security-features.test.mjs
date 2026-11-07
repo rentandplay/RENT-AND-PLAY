@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FirebaseSessions } from '../src/auth.mjs';
 import { inspectPaymentImage } from '../src/payment-proof.mjs';
-import { createBooking, reviewBooking, prepareRentalDelivery, verifyReleaseCodes, rentalTicket, rentalPaymentProof } from '../src/rental-flow.mjs';
+import { createBooking, reviewBooking, prepareRentalDelivery, verifyReleaseCodes, rentalTicket, rentalPaymentProof, reviewRentalPaymentProof } from '../src/rental-flow.mjs';
 import { listSecurityAlerts } from '../src/notifications.mjs';
 import { DEFAULT_PRICING } from '../src/pricing.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
@@ -126,6 +126,8 @@ test('Payment Proof Tampering & Duplicate Detection flags duplicate screenshots,
 
   const alerts = await listSecurityAlerts(db, admin);
   assert.ok(alerts.alerts.some(alert => alert.type === 'SECURITY_PAYMENT_PROOF_FLAGGED'));
+  await reviewRentalPaymentProof(db, admin, firstBooking.rental.id, { action: 'VERIFY' }, after(2));
+  await assert.rejects(reviewRentalPaymentProof(db, admin, duplicateBooking.rental.id, { action: 'VERIFY' }, after(2)), error => error.status === 409 && /already been verified/.test(error.message));
 });
 
 test('Time-based Rolling QR & 6-digit TOTP PIN verify within window and trigger security alert when expired/tampered', async () => {

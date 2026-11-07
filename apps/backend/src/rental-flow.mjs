@@ -1,3 +1,4 @@
+import { withinBusinessHours } from './business-hours.mjs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { allocateCustomerCode } from './customer-codes.mjs';
 import QRCode from 'qrcode';
@@ -234,7 +235,7 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
       db.collection('settings').doc('business').get(),
       db.collection('rental_payment_proofs').get()
     ]);
-    if (!settings.exists || !settings.data().instapay_qr_data_url) fail(409, 'QR payment is not available yet. Choose cash or contact the owner.');
+    if (!settings.exists || !(settings.data().instapay_qr_data_url || settings.data().gcash_qr_data_url)) fail(409, 'QR payment is not available yet. Choose cash or contact the owner.');
     proofSecurity = evaluatePaymentProofSecurity(rows(existingProofsSnap), paymentProof, rentalRef.id);
   }
   const proofRef = paymentProof ? record(db, 'rental_payment_proofs', rentalRef.id) : null;
@@ -246,6 +247,14 @@ export async function createBooking(db, actor, input, now = new Date(), { staff 
       if (saved.request_source !== requestSource || walkIn && saved.fulfillment_mode !== fulfillment) fail(409, 'This operation key belongs to a different rental flow.');
       if ((stockGroupId ? saved.stock_group_id !== stockGroupId : saved.item_id !== requestedItemId) || saved.customer_id !== customerId || saved.delivery_location !== location || saved.payment_method !== paymentMethod || saved.booking_mode !== (input.mode || 'TIMED') || saved.fee_breakdown?.requested_minutes !== Number(input.inputDurationMinutes ?? input.durationMinutes) && saved.booking_mode === 'TIMED' || saved.resort_checkout_input !== (input.resortCheckoutAt || null)) fail(409, 'This operation key belongs to different rental details.');
       return { rental: saved, duplicate: true };
+    }
+    if (!staff) {
+      const settingsDoc = await tx.get(db.collection('settings').doc('business'));
+      const settings = settingsDoc.exists ? settingsDoc.data() : {};
+      if (settings.terms_version && input.rentalTermsVersion !== settings.terms_version) fail(409, 'Rental terms changed. Review and accept the current agreement before submitting.');
+      if (paymentMethod === 'CASH' && settings.accept_cash === false) fail(409, 'Cash payments are currently disabled. Choose QR payment.');
+      if (paymentMethod === 'QR' && !(settings.instapay_qr_data_url || settings.gcash_qr_data_url)) fail(409, 'Electronic checkout is temporarily disabled. Please contact counter staff.');
+      if (!withinBusinessHours(start || now, settings)) fail(409, `Shop is currently closed. Schedule your handoff during operating hours (${settings.opens_at || '08:00'} - ${settings.closes_at || '20:00'}).`);
     }
     const [customerDoc,selected]=await Promise.all([tx.get(record(db,'customers',customerId)),selectRentableUnit(tx,db,requestedItemId,stockGroupId,input,now,start)]);
     if (!selected) fail(409, 'This equipment is currently unavailable. Refresh the catalog to see the latest stock.');
@@ -479,6 +488,9 @@ export async function reviewRentalPaymentProof(db, actor, id, input, now = new D
     }
     if (!itemDoc.exists || itemDoc.data().is_active === false || (!rental.scheduled_start_at && (!['AVAILABLE', 'RESERVED_PENDING'].includes(itemDoc.data().status) || itemDoc.data().reserved_rental_id !== rentalId))) fail(409, 'This equipment is no longer reserved for this rental request.');
     if (rental.scheduled_start_at) assertCalendarFree(rows(await rentalsForItem(tx,db,itemDoc.id)),asDate(rental.scheduled_start_at),asDate(rental.scheduled_end_at),now,rentalId);
+    const verifiedProofs = rows(await tx.get(db.collection('rental_payment_proofs').where('status', '==', 'VERIFIED')));
+    const duplicateCheck = evaluatePaymentProofSecurity(verifiedProofs, proof, rentalId);
+    if (duplicateCheck.security_flags.some(flag => ['DUPLICATE_REFERENCE', 'DUPLICATE_IMAGE_HASH'].includes(flag.code))) fail(409, 'This transfer reference or payment screenshot has already been verified for another rental. Ask the customer for a different proof.');
     const expectedAmount = round(Number(rental.rental_fee || 0));
     if (!money(expectedAmount)) fail(409, 'The saved rental total is invalid. Review the price before approving payment.');
     const changes = {
@@ -586,7 +598,7 @@ export async function releaseBooking(db, actor, id, input, now = new Date()) {
     const savePayment = await planLedgerEntry(tx,db,actor,rental,{key:`handoff:${id}:${key}`,amount:payment.rental_paid_amount-Number(rental.rental_paid_amount||0),method:rental.payment_method,source:'IN_PERSON_HANDOFF'},now);
     savePayment();
     const condition = inspectionRecord(tx, db, actor, id, itemId, input.inspection, 'RELEASE', now);
-    const changes = { status: 'ACTIVE', delivery_status: 'HANDED_OFF', delivery_handoff: { handed_off_at: now, handed_off_by: actorId(actor), verification_method: verification.verification_method, qr_mode: verification.qr_mode, manual_reason: verification.manual_reason }, ...payment, handoff_verification: { verification_method: verification.verification_method, manual_reason: verification.manual_reason }, release_operation_key: key, start_at: now, due_at: due, confirmed_rental_at: now, confirmed_rental_by: actorId(actor), payment_confirmed_by_admin: true, fee_breakdown: { ...fee, start_at: now, due_at: due }, release_condition: condition, release_condition_record_id: condition.id, updated_at: now };
+    const changes = { status: 'ACTIVE', delivery_status: 'HANDED_OFF', delivery_handoff: { handed_off_at: now, handed_off_by: actorId(actor), verification_method: verification.verification_method, qr_mode: verification.qr_mode, manual_reason: verification.manual_reason }, ...payment, handoff_verification: { customer_verified: true, physical_id_verified: input.physicalIdVerified === true, verification_method: verification.verification_method, manual_reason: verification.manual_reason }, release_operation_key: key, start_at: now, due_at: due, confirmed_rental_at: now, confirmed_rental_by: actorId(actor), payment_confirmed_by_admin: true, fee_breakdown: { ...fee, start_at: now, due_at: due }, release_condition: condition, release_condition_record_id: condition.id, updated_at: now };
     Object.assign(changes, paymentSummary(rental, changes));
     if (rental.request_source === 'WALK_IN') changes.rental_terms_acceptance = { version: MOBILE_RENTAL_TERMS_VERSION, acceptance_method: 'STAFF_WITNESSED', accepted_at: now, accepted_by: rental.customer_id, witnessed_by: actorId(actor), rental_fee: rental.rental_fee, billed_minutes: fee.billed_minutes, late_fee_rate: fee.overtime_rate, late_fee_unit_minutes: fee.overtime_unit_minutes, grace_minutes: fee.grace_minutes, due_at: due, fulfillment_mode: rental.fulfillment_mode, delivery_location: rental.delivery_location };
     tx.update(rentalDoc.ref, changes); tx.update(itemDoc.ref, { status: 'RENTED', condition_status: condition.condition, reserved_rental_id: null, current_rental_id: id, updated_at: now });

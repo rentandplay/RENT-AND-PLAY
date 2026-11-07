@@ -34,6 +34,6 @@ export const pageInfo = Object.freeze({
   'ESP32 terminal': ['Counter hardware station', 'Monitor real-time terminal status, pending handoffs, and verification history.', 'chip'],
   Reports: ['See how your business is doing', 'Explore rental performance, equipment use, forecasts, and practical next steps.', 'chart'],
   Payments: ['Payments & expenses', 'Follow cash and QR receipts, refunds, expenses and daily cash totals.', 'money'],
-  Settings: ['Make this workspace yours', 'Manage business details, appearance, and your workspace preferences.', 'settings'],
+  Settings: ['Workspace administration', 'Business configuration, staff access, and personal preferences.', 'settings'],
   Profile: ['Your workspace account', 'Keep your name and sign-in details up to date.', 'users']
 });

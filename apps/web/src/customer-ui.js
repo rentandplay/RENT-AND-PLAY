@@ -276,7 +276,14 @@ export function createCustomerUI(h) {
     document.querySelectorAll('[data-customer-delete]').forEach(button => button.onclick = () => { const row = rows().find(item => String(item.customer.id) === button.dataset.customerDelete); if (row) void deleteCustomer(row.customer, button); });
     document.querySelectorAll('[data-customer-detail]').forEach(button => button.onclick = () => details(button.dataset.customerDetail));
     bindRecordLinks(document, { customer: id => details(id) });
-    document.querySelectorAll('[data-customer-filter]').forEach(button => button.onclick = () => { state.status = button.dataset.customerFilter; h.onRecordScope?.({all:'ALL',active:'ACTIVE',archived:'INACTIVE'}[state.status]); update(); document.getElementById(`customer-filter-${state.status}`)?.focus(); });
+    document.querySelectorAll('[data-customer-filter]').forEach(button => button.onclick = () => {
+      state.status = button.dataset.customerFilter;
+      if (model()?.page_meta?.kind === 'customers') {
+        h.onRecordScope?.({all:'ALL',active:'ACTIVE',archived:'INACTIVE'}[state.status]);
+      }
+      update();
+      document.getElementById(`customer-filter-${state.status}`)?.focus();
+    });
     document.querySelector('#customer-activity')?.addEventListener('change', event => { state.activity = event.target.value; update(); });
     document.querySelector('#customer-sort')?.addEventListener('change', event => { state.sort = event.target.value; update(); });
     document.querySelectorAll('[data-customer-clear]').forEach(button => button.onclick = () => { Object.assign(state, { status: 'all', activity: 'all', sort: 'name' }); clearSearch(); update(); });

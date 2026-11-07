@@ -4,7 +4,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import net from 'node:net';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { readFile, writeFile, unlink } from 'node:fs/promises';
+import { readFile, writeFile, unlink, stat } from 'node:fs/promises';
 import { pageRoutes } from '../src/workspace-navigation.js';
 
 const appRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -55,6 +55,15 @@ test('VS Code can open the ready web server and every browser module loads', asy
         }
       }
       assert.ok(visited.size > 1, 'Follow imported modules from the actual app entry');
+      const asset = await fetch(`${origin}/src/react-ui.js`);
+      const etag = asset.headers.get('etag'); await asset.arrayBuffer();
+      assert.ok(etag, 'Browser assets expose a content validator');
+      const bundleFile = new URL('../src/react-ui.js', import.meta.url);
+      const bundleBefore = await stat(bundleFile);
+      const unchanged = await fetch(`${origin}/src/react-ui.js`, { headers: { 'If-None-Match': etag } });
+      assert.equal(unchanged.status, 304, 'Unchanged bundles do not download again');
+      assert.equal((await unchanged.text()).length, 0);
+      assert.equal((await stat(bundleFile)).mtimeMs, bundleBefore.mtimeMs, 'Unchanged React sources do not rebuild on every request');
       if (mode === 'development') {
         const probePath = `/src/startup-probe-${process.pid}.js`;
         const probeFile = new URL(`../${probePath.slice(1)}`, import.meta.url);

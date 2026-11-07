@@ -51,7 +51,7 @@ export async function createExpense(db, actor, input, now = new Date()) {
   });
 }
 
-export async function financeSummary(db, { from, to } = {}, now = new Date()) {
+export async function financeSummary(db, { from, to, counter = false } = {}, now = new Date()) {
   from ||= businessDay(new Date(now.getTime() - 29 * 86400000)); to ||= businessDay(now);
   dateRange(from,to);
   const days = []; for (let at = Date.parse(from); at <= Date.parse(to); at += 86400000) days.push(new Date(at).toISOString().slice(0,10));
@@ -65,7 +65,21 @@ export async function financeSummary(db, { from, to } = {}, now = new Date()) {
   const rentalDays = await db.collection('rental_financial_daily').where('business_day','>=',from).where('business_day','<=',to).get();
   const rentalKeys = ['rentals','charges','saved_paid','saved_refunded','balance_due','refund_due','unposted_paid','unposted_count','unknown_payments','unknown_charges'];
   const rentalTotals = Object.fromEntries(rentalKeys.map(key => [key, round(rentalDays.docs.reduce((sum, doc) => sum + Number(doc.data()[key] || 0), 0))]));
-  return serializeLedger({ from, to, daily, totals, rental_totals: rentalTotals, basis: 'Receipt totals use the date money was received. Rental balances and saved payments use rentals created in the selected period. Saved payments without a receipt date appear in rental payments until their original receipt is confirmed.' });
+  let counterSummary;
+  if (counter === true || counter === 'true') {
+    const [rentalDocs, terminalDocs] = await Promise.all([
+      db.collection('rentals').where('status', 'in', ['ACTIVE', 'RENTED', 'active', 'rented']).get(),
+      db.collection('terminals').get()
+    ]);
+    const active = rentalDocs.docs.map(docData).filter(row => !row.received_at);
+    counterSummary = {
+      active_units: active.length,
+      due_today: active.filter(row => { const due = asDate(row.due_at || row.dueDate); return due && businessDay(due) === businessDay(now); }).length,
+      overdue: active.filter(row => { const due = asDate(row.due_at || row.dueDate); return due && due < now; }).length,
+      station_status: terminalDocs.docs.some(doc => { const terminal = doc.data(), seen = asDate(terminal.last_seen_at || terminal.last_seen || terminal.last_heartbeat_at); return terminal.is_active !== false && terminal.status === 'ONLINE' && seen && now - seen >= 0 && now - seen < 25000; }) ? 'ONLINE' : 'STANDBY'
+    };
+  }
+  return serializeLedger({ ...(counterSummary ? { counter: counterSummary } : {}), from, to, daily, totals, rental_totals: rentalTotals, basis: 'Receipt totals use the date money was received. Rental balances and saved payments use rentals created in the selected period. Saved payments without a receipt date appear in rental payments until their original receipt is confirmed.' });
 }
 
 export async function ledgerPage(db, options = {}) {

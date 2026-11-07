@@ -21,7 +21,8 @@
 #define OLED_SCL 22
 
 // Verified Hardware Pinouts:
-// Push Button: D35 (Active LOW with INPUT_PULLUP)
+// Push button: GPIO35 to GND (active LOW). Add a 10k external pull-up
+// from GPIO35 to 3.3V: classic ESP32 GPIO34-39 have no internal pull-ups.
 #define BUTTON_PIN       35
 
 // Buzzers: Active Buzzer on D32, Passive Buzzer on D23
@@ -363,7 +364,7 @@ void setup() {
   delay(500);
   Serial.println("\n[BOOT] Rent & Play ESP32 Terminal Initializing...");
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, INPUT); // GPIO35 requires the external pull-up described above.
   pinMode(ACTIVE_BUZZER, OUTPUT);
   pinMode(PASSIVE_BUZZER, OUTPUT);
   pinMode(LED1_PIN, OUTPUT);

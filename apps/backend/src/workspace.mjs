@@ -1,3 +1,4 @@
+import { validBusinessTime } from './business-hours.mjs';
 import { asDate, docData, localDateTime } from './firebase.mjs';
 import { loadPricing, savePricing as persistPricing } from './pricing.mjs';
 import { publicTerminal, serializeTransaction } from './transactions.mjs';
@@ -65,9 +66,14 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   // their complete ticket history while skipping web-only administration logs.
   const mobileCollections = new Set(['customers', 'rentals', 'items', 'maintenance_records']);
   const kind = view === 'Customers' ? 'customers' : view === 'Maintenance' ? 'maintenance' : ['Rentals','Returns','Transaction History'].includes(view) ? 'rentals' : null;
-  const page = kind ? await recordPage(db,kind,{...filters,status:filters.status || (view==='Rentals'?'OPEN':view==='Returns'?'RETURN_PENDING_INSPECTION':undefined)}) : null;
+  const pagePromise = kind ? recordPage(db,kind,{...filters,status:filters.status || (view==='Rentals'?'OPEN':view==='Returns'?'RETURN_PENDING_INSPECTION':undefined)}) : Promise.resolve(null);
+  const viewCollections = view === 'Settings' ? new Set() : view === 'Rates & Fees' ? new Set(['items', 'item_categories', 'item_rates']) : null;
   const readCollection = async name => {
-    if (page && name === {customers:'customers',rentals:'rentals',maintenance:'maintenance_records'}[kind]) return {docs:page.records.map(row=>({id:row.id,data:()=>row}))};
+    if (viewCollections && !viewCollections.has(name)) return { docs: [] };
+    if (kind && name === {customers:'customers',rentals:'rentals',maintenance:'maintenance_records'}[kind]) {
+      const page = await pagePromise;
+      return { docs: page.records.map(row => ({ id: row.id, data: () => row })) };
+    }
     let query = db.collection(name);
     if (view) {
       if (name === 'rentals') {
@@ -83,19 +89,26 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
     }
     return query.get();
   };
-  const [snapshots, auditSnapshot] = await Promise.all([
+  // Start independent database reads together instead of adding several network round trips.
+  const [snapshots, auditSnapshot, settingsDoc, pricing, usersSnapshot, page] = await Promise.all([
     Promise.all(names.map(name => !mobile || mobileCollections.has(name) ? readCollection(name) : Promise.resolve({ docs: [] }))),
-    !mobile && isStaffRole(role) && (!view || ['Reports','Settings'].includes(view)) ? auditQuery.get() : Promise.resolve({ docs: [] })
+    !mobile && isStaffRole(role) && (!view || view === 'Reports') ? auditQuery.get() : Promise.resolve({ docs: [] }),
+    db.collection('settings').doc('business').get(),
+    mobile ? Promise.resolve({}) : loadPricing(db, { allowInvalidFallback: true }),
+    role === 'OWNER' && !mobile && (!view || view === 'Settings') ? db.collection('users').get() : Promise.resolve({ docs: [] }),
+    pagePromise
   ]);
   const source = Object.fromEntries(names.map((name, index) => [name, rows(snapshots[index])]));
-  const rentalRanking=view==='Transaction History'?await equipmentRentalRanking(db,source.items,{from:filters.rankingFrom,to:filters.rankingTo},now):null;
+  const rankingPromise = view === 'Transaction History' ? equipmentRentalRanking(db,source.items,{from:filters.rankingFrom,to:filters.rankingTo},now) : Promise.resolve(null);
+  // These pages use stock metadata; equipment photos load from Inventory when opened.
+  if (view && !mobile) source.items = source.items.map(({ image_data, image_data_url, ...item }) => item);
   source.audit_logs = auditSnapshot.docs.map(docData);
   const itemMap = new Map(source.items.map(item => [item.id, item]));
   const customerMap = new Map(source.customers.map(customer => [customer.id, customer]));
-  if(view === 'Customers' || !view){
-    const summaries=await Promise.all(source.customers.map(customer=>db.collection('customer_report_summaries').doc(customer.id).get()));
-    source.customers.forEach((customer,index)=>{if(summaries[index].exists)customer.rental_summary=summaries[index].data();});
-  }
+  const summariesPromise = view === 'Customers' || !view
+    ? Promise.all(source.customers.map(customer => db.collection('customer_report_summaries').doc(customer.id).get())).then(summaries => {
+      source.customers.forEach((customer, index) => { if (summaries[index].exists) customer.rental_summary = summaries[index].data(); });
+    }) : Promise.resolve();
   const transactions = source.rentals.map(record => {
     const rawStatus = String(record.status || '').toUpperCase();
     const status = rawStatus === 'PENDING_ESP32_RENT' ? 'PENDING_ADMIN_APPROVAL' : rawStatus === 'ACTIVE' ? 'ACTIVE' : rawStatus === 'COMPLETED' ? 'COMPLETED' : rawStatus;
@@ -124,10 +137,6 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   }).sort((a, b) => (asDate(b.created_at) || 0) - (asDate(a.created_at) || 0));
   const maintenance = source.maintenance_records.map(record => ({ ...record, item_name: itemMap.get(String(record.item_id))?.name || record.item_name || 'Equipment history', item_code: itemMap.get(String(record.item_id))?.item_code || record.item_code || '' })).sort((a, b) => (asDate(b.started_at) || 0) - (asDate(a.started_at) || 0));
   const rates = source.item_rates.map(rate => ({ ...rate, item_name: itemMap.get(String(rate.item_id))?.name || 'Unknown equipment', item_code: itemMap.get(String(rate.item_id))?.item_code || '' })).sort((a, b) => (asDate(b.effective_from) || 0) - (asDate(a.effective_from) || 0));
-  const [settingsDoc, pricing] = await Promise.all([
-    mobile ? Promise.resolve({ exists: false }) : db.collection('settings').doc('business').get(),
-    mobile ? Promise.resolve({}) : loadPricing(db, { allowInvalidFallback: true })
-  ]);
   const settings = settingsDoc.exists ? settingsDoc.data() : { business_name: 'Rent & Play', location: 'Los Baños, Laguna', currency: 'PHP', timezone: 'Asia/Manila', default_late_grace_hours: 0 };
   if (!settings.terms_and_conditions) settings.terms_and_conditions = DEFAULT_TERMS_AND_CONDITIONS;
   if (!settings.rental_terms) settings.rental_terms = DEFAULT_RENTAL_TERMS;
@@ -154,7 +163,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   let users = [];
   const userProfiles = new Map();
   if (role === 'OWNER' && !mobile && (!view || view==='Settings')) {
-    users = rows(await db.collection('users').get()).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(user => serial({ ...user, role: String(user.id) === String(ownerUid) ? 'OWNER' : normalizeRole(user.role) || user.role }));
+    users = rows(usersSnapshot).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(user => serial({ ...user, role: String(user.id) === String(ownerUid) ? 'OWNER' : normalizeRole(user.role) || user.role }));
     for (const user of users) userProfiles.set(String(user.id), user);
   }
   // Keep legacy customer/profile records and audit actor labels current. These
@@ -162,12 +171,12 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   // workspace refreshes reuse them instead of rereading each profile.
   const neededProfileIds = new Set([
     ...source.customers.map(customer => customer.auth_uid).filter(Boolean).map(String),
-    ...source.audit_logs.map(log => log.user_id).filter(Boolean).map(String)
+    ...source.audit_logs.filter(log => !log.actor_name && !['SYSTEM', 'TERMINAL'].includes(log.actor_type)).map(log => log.user_id).filter(Boolean).map(String)
   ]);
-  await Promise.all([...neededProfileIds].filter(id => !userProfiles.has(id)).map(async id => {
+  const [rentalRanking] = await Promise.all([rankingPromise, summariesPromise, ...[...neededProfileIds].filter(id => !userProfiles.has(id)).map(async id => {
     const profile = await db.collection('users').doc(id).get();
     if (profile.exists) userProfiles.set(id, { id, ...profile.data() });
-  }));
+  })]);
   const userNames = new Map([...userProfiles].map(([id, user]) => [String(id), user.full_name || user.name || '']));
   const terminalNames = new Map(source.terminals.map(terminal => [String(terminal.id), terminal.name || terminal.terminal_code]));
   const auditLabel = log => {
@@ -186,11 +195,11 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
     return '';
   };
   const auditLogs = isStaffRole(role) ? source.audit_logs.map(log => serial({
-    id: log.id, actor_type: log.actor_type || 'USER',
+    id: log.id, audit_code: log.audit_code, actor_type: log.actor_type || 'USER',
     actor_name: log.actor_name || (log.actor_type === 'SYSTEM' ? 'System' : log.actor_type === 'TERMINAL' ? terminalNames.get(String(log.user_id)) || 'Terminal' : userNames.get(String(log.user_id)) || 'Unknown user'),
     action: log.action || 'UNKNOWN_ACTION', entity_type: log.entity_type || '', entity_id: log.entity_id || '', entity_label: auditLabel(log), created_at: log.created_at || null
   })).sort((a, b) => (asDate(b.created_at) || 0) - (asDate(a.created_at) || 0)).slice(0, 200) : [];
-  const statusHistory = source.item_status_history.map(({ id, item_id, old_status, new_status, changed_at }) => serial({ id, item_id, old_status, new_status, changed_at }));
+  const statusHistory = source.item_status_history.map(({ id, history_code, item_id, old_status, new_status, changed_at }) => serial({ id, history_code, item_id, old_status, new_status, changed_at }));
   // Staff may still have customer records from an earlier role. Keep those
   // records available for rental history without listing staff as customers.
   const customers = source.customers.filter(customer => {
@@ -204,6 +213,39 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
       : customer;
   });
   return { view_meta: { view, from: filters.from || null, to: filters.to || null }, rental_ranking: rentalRanking, customers: customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, page_meta:page ? {kind,nextCursor:page.nextCursor,limit:page.limit} : null, refreshedAt: now.toISOString() };
+}
+
+export async function syncMissingCustomerProfiles(db, now = new Date()) {
+  const [usersSnap, customersSnap] = await Promise.all([
+    db.collection('users').get(),
+    db.collection('customers').get()
+  ]);
+  const customerAuthUids = new Set(
+    customersSnap.docs.map(doc => doc.data()?.auth_uid || doc.id).filter(Boolean)
+  );
+  const missing = usersSnap.docs.filter(doc => {
+    const data = doc.data();
+    return normalizeRole(data?.role) === 'CUSTOMER' && data?.is_active !== false && !customerAuthUids.has(doc.id);
+  });
+  if (missing.length === 0) return 0;
+  for (const userDoc of missing) {
+    const data = userDoc.data();
+    const customerCode = await allocateCustomerCode(db, now);
+    const fullName = (data.full_name || data.name || data.email?.split('@')[0] || 'Customer').trim();
+    await db.collection('customers').doc(userDoc.id).set({
+      full_name: fullName,
+      search_name: fullName.toLowerCase().replace(/\s+/g, ' '),
+      customer_code: customerCode,
+      email: data.email || null,
+      phone: data.phone || null,
+      address: null,
+      auth_uid: userDoc.id,
+      is_active: true,
+      created_at: data.created_at || now,
+      updated_at: now
+    });
+  }
+  return missing.length;
 }
 
 export async function createCustomer(db, actor, input, now = new Date()) {
@@ -494,6 +536,8 @@ export async function saveSettings(db, actor, input, now = new Date()) {
   const announcementEnabled = input.announcementEnabled === true || input.announcementEnabled === 'true' || input.announcement_enabled === true;
   const announcementText = clean(input.announcementText ?? input.announcement_text ?? '', 500);
 
+  if (!validBusinessTime(opensAt) || !validBusinessTime(closesAt)) fail(400, 'Enter opening and closing times in HH:mm format.');
+  try { new Intl.DateTimeFormat('en', { timeZone: timezone }).format(now); } catch { fail(400, 'Choose a valid business timezone.'); }
   if (!businessName || !location || !/^[A-Z]{3}$/.test(currency) || !timezone || !Number.isFinite(defaultLateGraceHours) || defaultLateGraceHours < 0 || defaultLateGraceHours > 168) fail(400, 'Enter valid business settings.');
   if (!Number.isFinite(reservationHoldMinutes) || reservationHoldMinutes < 5 || reservationHoldMinutes > 1440) fail(400, 'Enter a reservation hold time between 5 and 1440 minutes.');
   if (!Number.isFinite(maxActiveRentalsPerCustomer) || maxActiveRentalsPerCustomer < 1 || maxActiveRentalsPerCustomer > 20) fail(400, 'Enter a maximum active rentals limit between 1 and 20.');

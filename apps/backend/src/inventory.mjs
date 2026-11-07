@@ -377,6 +377,7 @@ export async function updateItem(db,actor,id,input) {
 }
 
 export async function itemAction(db,actor,id,input) {
+  if (input && typeof input === 'object') input = { ...input, action: ({ MAINTENANCE: 'maintenance', RETIRE: 'archive', RESTORE: 'restore' })[input.action] || input.action };
   id=idValue(id);if(!input||!['maintenance','complete-maintenance','archive','restore'].includes(input.action))fail(400,'Choose a valid inventory action.');
   if(input.action==='maintenance')return createMaintenance(db,actor,{...input,itemId:id});
   if(input.action==='complete-maintenance')fail(409,'Open the maintenance ticket, send the repaired unit for inspection, and complete its safety checklist.');

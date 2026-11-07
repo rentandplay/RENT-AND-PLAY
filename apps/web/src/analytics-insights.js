@@ -74,18 +74,11 @@ function backtest(trend, groupBy, today, coverageStart) {
     rentalErrorRate: sum(rows, 'actualRentals') > 0 ? rentals.reduce((a, b) => a + b, 0) / sum(rows, 'actualRentals') : null };
 }
 
-function recommendationsFor(result, groups, comparison, weekdays = []) {
+function recommendationsFor(result, groups, comparison) {
   const actions = [], t = result.totals;
   const add = (id, type, priority, title, action, basis, threshold, extra = {}) => actions.push({ id, type, priority, title, action, basis, threshold, ...extra });
   if (t.overdueNow > 0) add('overdue-now', 'Operations', 'high', 'Follow up on overdue equipment', 'Review overdue rentals, confirm their return arrangements, and keep their units unavailable until the return is recorded.', `${t.overdueNow} active rental${t.overdueNow === 1 ? '' : 's'} currently past the due time. This is current activity across all dates in your equipment filters.`, 'Appears when at least one active rental is overdue now.', { page: 'Rentals', review: 'Today' });
   else if (t.dueRentals >= 5 && t.overdueRate >= .2) add('late-returns', 'Operations', 'medium', 'Improve return reminders', 'Review reminder timing and the return handoff process. Start with rentals that were returned late.', `${t.overdueRentals} of ${t.dueRentals} rentals due in this period were late (${Math.round(t.overdueRate * 100)}%).`, 'At least 5 due rentals and a late rate of 20% or higher.', { page: 'Returns', review: 'This week' });
-  const weekendRentals = weekdays.slice(5, 7).reduce((total, row) => total + Number(row.rentals || 0), 0);
-  const weekdayRentals = weekdays.slice(0, 4).reduce((total, row) => total + Number(row.rentals || 0), 0);
-  const activeGroups = groups.filter(row => row.known && row.active);
-  const topActive = [...activeGroups].sort((a, b) => b.rentals - a.rentals)[0];
-  const lowActive = [...activeGroups].sort((a, b) => a.rentals - b.rentals || a.name.localeCompare(b.name))[0];
-  if (t.rentals >= 3 && topActive && (weekendRentals >= Math.ceil(t.rentals * .35) || topActive.rentals >= 3)) add('weekend-stock-expansion', 'Inventory & Capacity', 'medium', `Add 2–3 units of ${topActive.name} for peak weekend demand`, `Prepare or add 2–3 extra units of ${topActive.name} before Saturday–Sunday peak hours to prevent stockouts and missed bookings.`, `${topActive.name} led demand with ${topActive.rentals} confirmed rental${topActive.rentals === 1 ? '' : 's'} across ${topActive.unitCount} active unit${topActive.unitCount === 1 ? '' : 's'}; weekend rentals (Sat–Sun) accounted for ${weekendRentals} of ${t.rentals} rentals (${Math.round(weekendRentals / Math.max(1, t.rentals) * 100)}%).`, 'Triggered when weekend share reaches 35%+ or a top equipment group has concentrated repeat demand.', { itemId: topActive.id, itemName: topActive.name, review: 'Before this weekend' });
-  if (t.rentals >= 3 && lowActive && (weekdayRentals <= weekendRentals * 1.5 || lowActive.rentals <= 2)) add('weekday-promo', 'Pricing & Promo', 'medium', `Offer a 20% weekday discount promo on ${lowActive.name}`, `Run a 20% weekday discount promo (Mon–Thu) or bundle rate on ${lowActive.name} to increase off-peak utilization during slower weekdays.`, `${lowActive.name} recorded ${lowActive.rentals} confirmed rental${lowActive.rentals === 1 ? '' : 's'} (${lowActive.unitCount} active unit${lowActive.unitCount === 1 ? '' : 's'}); Mon–Thu weekday volume was ${weekdayRentals} rental${weekdayRentals === 1 ? '' : 's'} vs ${weekendRentals} on weekends.`, 'Triggered when active equipment shows lower weekday utilization relative to weekend demand.', { itemId: lowActive.id, itemName: lowActive.name, review: 'Before next Monday' });
   if (t.verificationCount >= 5 && t.verificationP95Seconds >= 60) add('handoff-delay', 'Operations', 'medium', 'Check slow counter confirmations', 'Compare the operator queue with terminal connectivity, then test a complete handoff. Timing includes operator and queue wait.', `${t.verificationCount} confirmations measured; the 95th percentile was ${Math.round(t.verificationP95Seconds)} seconds.`, 'At least 5 timed confirmations and a P95 of 60 seconds or more.', { page: 'ESP32 terminal', review: 'This week' });
   for (const row of groups.filter(row => row.known && row.repeatServiceUnits > 0).slice(0, 2)) add(`service-${row.stockGroupId}`, 'Reliability', 'medium', `Review service patterns for ${row.name}`, 'Read the unit maintenance notes to distinguish preventive inspections from recurring repairs. Prioritize units that repeatedly need service.', `${row.maintenanceCount} service records across ${row.totalUnits} unit${row.totalUnits === 1 ? '' : 's'}; ${row.downtimeHours.toFixed(1)} hours of downtime. Inspections are included.`, 'At least one physical unit had 2 or more service records in this period.', { itemId: row.id, itemName: row.name, review: 'This week' });
   for (const row of groups.filter(row => row.known && row.active && row.rentals >= 5 && row.utilization >= .5).slice(0, 2)) add(`capacity-${row.stockGroupId}`, 'Equipment', 'medium', `Review capacity for ${row.name}`, 'Check rental overlaps and the availability of each unit before considering more stock. Use the forecast to plan busy periods.', `${row.rentals} confirmed rentals; ${Math.round(row.utilization * 100)}% of observed calendar unit-hours rented across ${row.unitCount} active unit${row.unitCount === 1 ? '' : 's'}.`, 'At least 5 rentals and 50% calendar-hour utilization. This alone does not prove unmet demand.', { itemId: row.id, itemName: row.name, review: 'Before the next busy period' });
@@ -105,7 +98,7 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   if (result.error) return result;
   const groups = groupEquipmentPerformance(result.performance, data.items || [], data.categories || []), comparison = comparisonFor(data, selection, result, now);
   const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(label => ({ label, rentals: 0, fees: 0 }));
-  const hours = ['6–8 AM', '8–10 AM', '10–12 PM', '12–2 PM', '2–4 PM', '4–6 PM', '6 PM+'].map(label => ({ label, rentals: 0, fees: 0 }));
+  const hours = ['12–6 AM', '6–8 AM', '8–10 AM', '10 AM–12 PM', '12–2 PM', '2–4 PM', '4–6 PM', '6 PM–12 AM'].map(label => ({ label, rentals: 0, fees: 0 }));
   for (const rental of result.confirmed) {
     const day = new Date(manilaDateKey(rental.confirmed_rental_at) + 'T00:00:00Z').getUTCDay(), row = weekdays[(day + 6) % 7];
     const amount = Number(rental.rental_fee), validAmount = Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : 0;
@@ -113,7 +106,7 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
     const parsed = recordDate(rental.confirmed_rental_at);
     if (parsed) {
       const manilaHour = new Date(parsed.getTime() + 8 * 3600000).getUTCHours();
-      const hourIndex = manilaHour < 8 ? 0 : manilaHour < 10 ? 1 : manilaHour < 12 ? 2 : manilaHour < 14 ? 3 : manilaHour < 16 ? 4 : manilaHour < 18 ? 5 : 6;
+      const hourIndex = manilaHour < 6 ? 0 : manilaHour < 8 ? 1 : manilaHour < 10 ? 2 : manilaHour < 12 ? 3 : manilaHour < 14 ? 4 : manilaHour < 16 ? 5 : manilaHour < 18 ? 6 : 7;
       hours[hourIndex].rentals++; hours[hourIndex].fees += validAmount;
     }
   }
@@ -131,7 +124,7 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   const demandMix = groups.filter(row => mix.has(row.stockGroupId)).map(row => ({ ...row, historyRentals: mix.get(row.stockGroupId), share: mixTotal ? mix.get(row.stockGroupId) / mixTotal : 0, expectedRentals: mixTotal ? expectedRentals * mix.get(row.stockGroupId) / mixTotal : 0 })).sort((a, b) => b.expectedRentals - a.expectedRentals);
   return { ...result, comparison, groups, weekdays, peakWeekday, hours, peakHour, fleetUnits, topEquipment, idleEquipment, demandMix,
     forecast: { ...result.forecast, backtest: backtest(result.trend, result.groupBy, manilaDateKey(now), result.forecast.coverageStart), retrospective: result.range.to < manilaDateKey(now) },
-    recommendations: recommendationsFor(result, groups, comparison, weekdays) };
+    recommendations: recommendationsFor(result, groups, comparison) };
 }
 
 export function forecastScenario(forecast, scenario = 'baseline') {

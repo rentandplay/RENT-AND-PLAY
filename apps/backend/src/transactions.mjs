@@ -1,3 +1,4 @@
+import { verifyTransactionQrCode } from './rental-flow.mjs';
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import { allocateRecordCodes } from './record-codes.mjs';
 import { healthyUnit, unitHasMaintenance } from './maintenance-state.mjs';
@@ -614,6 +615,8 @@ export async function testTerminalPing(db, actor, terminalId, now = new Date()) 
 export async function dispatchRentalToTerminal(db, actor, rentalId, input = {}, now = new Date(), ttlSeconds = 600) {
   if (!input || typeof input !== 'object') fail(400, 'Terminal dispatch details are required.');
   const id = idValue(rentalId);
+  const dispatchKey = input.requestKey == null ? null : String(input.requestKey);
+  if (dispatchKey && !/^[a-f0-9]{32}$/.test(dispatchKey)) fail(400, 'A valid terminal operation key is required.');
   const requestRef = db.collection('verification_requests').doc();
   const result = await db.runTransaction(async tx => {
     const rentalDoc = await tx.get(ref(db, 'rentals', id));
@@ -637,6 +640,8 @@ export async function dispatchRentalToTerminal(db, actor, rentalId, input = {}, 
     if (!/^[a-f0-9]{64}$/.test(terminal.auth_token_hash || '')) fail(409, 'Configure the terminal device credential before requesting a handoff.');
 
     const existingSnap = await tx.get(db.collection('verification_requests').where('rental_id', '==', id));
+    const previous = dispatchKey && existingSnap.docs.find(doc => doc.data().dispatch_operation_key === dispatchKey);
+    if (previous) return { rental, request: { id: previous.id, ...previous.data() } };
     for (const oldDoc of existingSnap.docs) {
       if (oldDoc.data().status === 'PENDING') {
         tx.update(oldDoc.ref, { status: 'EXPIRED', expired_at: now, final_reason: 'Superseded by a new terminal dispatch.' });
@@ -660,6 +665,7 @@ export async function dispatchRentalToTerminal(db, actor, rentalId, input = {}, 
       const request = {
         ...requestRecord(id, String(itemId), terminal, 'RETURN', now, ttlSeconds),
         request_code: requestCode,
+        dispatch_operation_key: dispatchKey,
         terminal_mode: 'RETURN',
         rental_code: rental.rental_code || id,
         item_name: item.name || rental.item_name || 'Equipment',
@@ -708,9 +714,8 @@ export async function dispatchRentalToTerminal(db, actor, rentalId, input = {}, 
 
     if (requestedMode === 'HANDOVER') {
       const txCode = text(input.transactionCode, 256, 'Customer transaction QR');
-      if (!(txCode === rental.booking_qr_token || manual && [rental.id, rental.rental_code, rental.legacy_rental_code].filter(Boolean).includes(txCode))) {
-        fail(409, 'This QR does not match this customer rental request. Scan the rental QR shown in My Rentals.');
-      }
+      const ticketCheck = verifyTransactionQrCode(txCode, { id, ...rental }, now, { manual });
+      if (!ticketCheck.valid) fail(409, ticketCheck.message);
       if (input.customerVerified !== true) fail(400, 'Verify that the person receiving the equipment matches the rental customer.');
       if (rental.request_source === 'WALK_IN' && input.customerTermsAcknowledged !== true) fail(400, 'Confirm that the customer agreed to the duration, total, late fees, and return terms before handover.');
       const baseFee = Number(rental.rental_fee ?? 0);
@@ -724,6 +729,7 @@ export async function dispatchRentalToTerminal(db, actor, rentalId, input = {}, 
     const request = {
       ...requestRecord(id, String(itemId), terminal, 'RENTAL', now, ttlSeconds),
       request_code: requestCode,
+      dispatch_operation_key: dispatchKey,
       terminal_mode: requestedMode,
       rental_code: rental.rental_code || id,
       item_name: item.name || rental.item_name || 'Equipment',

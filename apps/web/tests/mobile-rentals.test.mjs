@@ -22,6 +22,7 @@ test('staff first records physical receipt, then submits inspection and penalty 
   const modal = { open: false, close() { this.open = false; }, querySelector: () => form };
   const field = value => ({ value, querySelector: () => ({ disabled: false }) });
   const makeForm = () => ({
+    isConnected: true, reportValidity: () => true, addEventListener: (_event, callback) => { submit = () => callback({ preventDefault() {} }); },
     elements: { inventoryCode: field('rp-qr-bike'), physicalReceiptConfirmed: field('on'), condition: field('GOOD'), result: field('AVAILABLE'), inspectionNotes: field('All parts checked.'), accessoriesChecked: field('on'), penaltyAmount: field('0'), penaltyReason: field('') },
     querySelectorAll: () => [],
     querySelector: selector => ['[data-inspection-photos]', '[data-photo-preview]'].includes(selector) ? null : { disabled: false, textContent: '', onclick: null },

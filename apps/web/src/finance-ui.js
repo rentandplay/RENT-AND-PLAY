@@ -227,5 +227,5 @@ export function createFinanceUI(h) {
     document.querySelector('[data-finance-next]')?.addEventListener('click', () => { const page = tab === 'rentals' ? rentals : ledger; if (page?.nextCursor) { previous.push(cursor); cursor = page.nextCursor; load(); } });
     document.querySelector('[data-finance-prev]')?.addEventListener('click', () => { cursor = previous.pop() || ''; load(); });
   }
-  return { render, bind, cashDrawerForm, refresh: () => load({ force: true }), reset() { generation++; loading = false; summary = null; ledger = null; rentals = null; error = ''; cursor = ''; previous = []; } };
+  return { render, bind, cashDrawerForm, prefetch: () => !summary && !loading ? load() : Promise.resolve(), refresh: () => load({ force: true }), reset() { generation++; loading = false; summary = null; ledger = null; rentals = null; error = ''; cursor = ''; previous = []; } };
 }

@@ -3,7 +3,7 @@ import { updateMaintenance } from '../src/maintenance.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { authenticateTerminal, createRentalRequest, createReturnRequest, createExpirySweep, dispatchRentalToTerminal, expireVerificationRequests, finalCharges, publicTerminal, resolveTerminalRequest, saveRequestInspection, startExpiryWorker, terminalPending, validatePenalty } from '../src/transactions.mjs';
-import { createBooking, recordRentalReceipt } from '../src/rental-flow.mjs';
+import { createBooking, recordRentalReceipt, createRollingQrPayload } from '../src/rental-flow.mjs';
 import { DEFAULT_PRICING, savePricing } from '../src/pricing.mjs';
 import { itemAction } from '../src/inventory.mjs';
 import { localDateTime } from '../src/firebase.mjs';
@@ -279,4 +279,38 @@ test('dispatchRentalToTerminal bridges walk-in handover, resort shop dispatch, a
   assert.equal(dispatchedRental.status, 'APPROVED');
   assert.equal(dispatchedRental.delivery_status, 'OUT_FOR_DELIVERY'); assert.equal(dispatchedRental.latest_terminal_request_status, 'CONFIRMED');
   assert.equal(dispatchedRental.start_at, null);
+});
+
+
+test('terminal handover accepts current customer rolling QR/PIN and rejects expired or mismatched tickets', async () => {
+  for (const type of ['rolling_qr_token', 'rolling_pin']) {
+    const db = fixture();
+    const { rental } = await createBooking(db, actor, { itemId: 'item-1', customerId: 'customer-1', durationMinutes: 60, requestKey: 'e'.repeat(32) }, requestTime, { staff: true });
+    const input = { terminalId: 'terminal-1', mode: 'HANDOVER', inventoryCode: 'BIKE-001', customerVerified: true, paymentVerified: true, inspection: { ...inspection, accessoriesChecked: true } };
+    const stale = createRollingQrPayload(rental.booking_qr_token, new Date(requestTime.getTime() - 600000));
+    await assert.rejects(dispatchRentalToTerminal(db, actor, rental.id, { ...input, transactionCode: stale[type] }, requestTime), error => error.status === 409);
+    const other = createRollingQrPayload('rp-rental-another-customer', requestTime);
+    await assert.rejects(dispatchRentalToTerminal(db, actor, rental.id, { ...input, transactionCode: other[type] }, requestTime), error => error.status === 409);
+    const ticket = createRollingQrPayload(rental.booking_qr_token, requestTime);
+    const sent = await dispatchRentalToTerminal(db, actor, rental.id, { ...input, transactionCode: ticket[type] }, requestTime);
+    assert.equal(db.data('rentals', rental.id).start_at, null, 'sending to terminal does not start the timer');
+    await confirm(db, sent.request);
+    assert.equal(db.data('rentals', rental.id).status, 'ACTIVE');
+  }
+});
+
+
+test('retrying a keyed terminal dispatch preserves the pending code and replays its confirmed result', async () => {
+  const db = fixture();
+  const { rental } = await createBooking(db, actor, { itemId: 'item-1', customerId: 'customer-1', durationMinutes: 60, requestKey: 'a'.repeat(32) }, requestTime, { staff: true });
+  const input = { requestKey: 'b'.repeat(32), terminalId: 'terminal-1', mode: 'HANDOVER', inventoryCode: 'BIKE-001', transactionCode: rental.booking_qr_token, customerVerified: true, paymentVerified: true, inspection: { ...inspection, accessoriesChecked: true } };
+  const first = await dispatchRentalToTerminal(db, actor, rental.id, input, requestTime);
+  const retried = await dispatchRentalToTerminal(db, actor, rental.id, input, requestTime);
+  assert.equal(retried.request.id, first.request.id);
+  assert.equal(retried.request.verification_code, first.request.verification_code);
+  assert.equal(db.records('verification_requests').length, 1);
+  await confirm(db, first.request);
+  const after = await dispatchRentalToTerminal(db, actor, rental.id, input, requestTime);
+  assert.equal(after.request.status, 'CONFIRMED'); assert.equal(after.rental.status, 'ACTIVE');
+  assert.equal(db.records('verification_requests').length, 1);
 });

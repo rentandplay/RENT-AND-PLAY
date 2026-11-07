@@ -6,6 +6,68 @@ export const settingsTabs = isOwner => [
   { id: 'account', label: 'Account & security', icon: 'out' }
 ];
 
+export const businessSettingsSections = [
+  { id: 'profile', label: 'Profile & hours', note: 'Contact and rental service' },
+  { id: 'payment', label: 'Payments & QR', note: 'Cash and transfer details' },
+  { id: 'rules', label: 'Rates & rules', note: 'Fees, deposits and liability' },
+  { id: 'terms', label: 'Terms & policies', note: 'Customer agreements' },
+  { id: 'receipt', label: 'Receipt layout', note: 'Printed header and footer' }
+];
+
+export function bindBusinessSettingsNavigation(root, onChange = () => {}) {
+  const container = root.querySelector('.settings-business-container');
+  if (!container) return;
+  const buttons = [...container.querySelectorAll('[data-business-subtab]')];
+  const picker = container.querySelector('#settings-business-section');
+  const select = value => {
+    if (!businessSettingsSections.some(row => row.id === value)) return;
+    container.dataset.activeSubtab = value;
+    buttons.forEach(button => {
+      if (button.dataset.businessSubtab === value) button.setAttribute('aria-current', 'true');
+      else button.removeAttribute('aria-current');
+    });
+    container.querySelectorAll('[data-subtab]').forEach(section => { section.hidden = section.dataset.subtab !== value; });
+    if (picker) [...picker.options].find(option => option.value === value).selected = true;
+    onChange(value);
+  };
+  buttons.forEach((button, index) => {
+    button.onclick = () => select(button.dataset.businessSubtab);
+    button.onkeydown = event => {
+      let target;
+      if (event.key === 'ArrowDown') target = (index + 1) % buttons.length;
+      if (event.key === 'ArrowUp') target = (index + buttons.length - 1) % buttons.length;
+      if (event.key === 'Home') target = 0;
+      if (event.key === 'End') target = buttons.length - 1;
+      if (target != null) { event.preventDefault(); select(buttons[target].dataset.businessSubtab); buttons[target].focus(); }
+    };
+  });
+  if (picker) picker.onchange = () => select(picker.value);
+}
+
+export function bindAnnouncementSettingsPreview(form) {
+  const preview = form.querySelector('[data-announcement-preview]');
+  if (!preview) return;
+  const sync = () => {
+    const enabled = form.querySelector('[name="announcementEnabled"]')?.checked;
+    const message = form.querySelector('[name="announcementText"]')?.value.trim() || '';
+    preview.hidden = !enabled || !message;
+    preview.querySelector('[data-announcement-message]').textContent = message;
+  };
+  form.addEventListener('input', sync);
+  form.addEventListener('change', sync);
+  form.addEventListener('reset', () => queueMicrotask(sync));
+  sync();
+}
+
+export function bindReceiptSettingsPreview(form) {
+  const preview = form.closest('.settings-edit-view');
+  const sync = () => preview.querySelectorAll('[data-receipt-value]').forEach(element => {
+    element.textContent = form.querySelector(`[name="${element.dataset.receiptValue}"]`)?.value || '';
+  });
+  form.addEventListener('input', sync);
+  form.addEventListener('reset', () => queueMicrotask(sync));
+}
+
 export const defaultTermsAndConditions = `1. Account details
 Provide accurate name and contact details, and keep your password and verification codes private. Use your account for your own rental requests.
 
@@ -127,16 +189,34 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
   if (active === 'business') {
     const qrImage = s.instapay_qr_data_url || s.gcash_qr_data_url || '';
 
+    const receiptPreview = `<figure class="settings-receipt-preview"><figcaption>Receipt preview <span>55 mm continuous paper · Example only</span></figcaption><div class="settings-receipt-preview-ticket">
+            <div class="ticket-header">
+              <strong data-receipt-value="receiptHeaderTitle">${e(s.receipt_header_title || s.business_name || 'RENT & PLAY')}</strong>
+              <small data-receipt-value="receiptBranchLine">${e(s.receipt_branch_line || 'Lakewoods Subdivision')}</small>
+              <small data-receipt-value="receiptCityLine">${e(s.receipt_city_line || s.location || 'Los Baños, Laguna')}</small>
+              <small data-receipt-value="receiptContactLine">${e(s.receipt_contact_line || (s.contact_phone ? 'Contact: ' + s.contact_phone : 'Contact: 0992-768-5192'))}</small>
+            </div>
+            <div class="ticket-divider">- - - - - - - - - - - - - - - -</div>
+            <div class="ticket-sample">
+              <span>Equipment rental</span>
+              <span>PHP 000.00</span>
+            </div>
+            <div class="ticket-divider">- - - - - - - - - - - - - - - -</div>
+            <div class="ticket-footer">
+              <small data-receipt-value="receiptFooterNote">${e(s.receipt_footer_note || defaultReceiptFooter)}</small>
+            </div>
+          </div></figure>`;
+
     // 1. BUSINESS PROFILE & OPERATIONAL SCHEDULE
     const sectionProfile = `<section class="panel settings-card" data-subtab="profile" data-state="${dirty || saving ? 'edit' : 'view'}">
       <div class="settings-card-header">
         <div class="settings-section-title">
-          <span class="eyebrow">BUSINESS PROFILE &amp; SCHEDULE</span>
-          <h3>Your rental workspace &amp; operating hours</h3>
+          <span class="eyebrow">BUSINESS SETTINGS</span>
+          <h3>Business profile</h3>
           <p>${owner ? 'Business details, operating hours, and booking hold rules are shared with staff and customers.' : 'Workspace details and schedules are managed by the owner.'}</p>
         </div>
         ${owner ? `<div class="settings-card-actions">
-          <button type="button" class="secondary small-btn settings-edit-toggle-btn" data-toggle-edit="profile">
+          <button type="button" class="secondary small-btn settings-edit-toggle-btn" id="business-edit-profile" data-toggle-edit="profile" aria-controls="business-editor-profile" aria-expanded="${dirty || saving ? 'true' : 'false'}">
             <span class="view-state-label">${icon('settings')} <span>Edit settings</span></span>
             <span class="edit-state-label"><span>Close editor</span></span>
           </button>
@@ -144,31 +224,33 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
       </div>
 
       <div class="settings-summary-view">
-        <dl class="settings-account-details">
-          <div><dt>Business name</dt><dd>${e(values.businessName)}</dd></div>
-          <div><dt>Hub / Location</dt><dd>${e(values.location)}</dd></div>
-          <div><dt>Operating hours</dt><dd>${e(values.opensAt)} – ${e(values.closesAt)} <small class="settings-tag">Daily</small></dd></div>
-          <div><dt>Customer contact phone</dt><dd>${e(values.contactPhone)}</dd></div>
-          <div><dt>Support channels</dt><dd>${e(values.contactChannels)}</dd></div>
-          <div><dt>Reservation hold window</dt><dd>${e(values.reservationHoldMinutes)} minutes</dd></div>
-          <div><dt>Late grace period</dt><dd>${e(values.defaultLateGraceHours)} hours</dd></div>
-          <div><dt>Max active rentals</dt><dd>${e(values.maxActiveRentalsPerCustomer)} per customer</dd></div>
-          <div><dt>Currency &amp; Timezone</dt><dd>${e(values.currency)} (${e(values.timezone)})</dd></div>
-          <div style="grid-column: 1 / -1;">
-            <dt>Live broadcast announcement</dt>
-            <dd>${values.announcementEnabled ? `<span class="settings-status-pill pill-active">Active</span> <span class="settings-announcement-inline">${e(values.announcementText)}</span>` : '<span class="settings-status-pill pill-muted">Inactive / Off</span>'}</dd>
-          </div>
-        </dl>
+        <div class="settings-summary-groups">
+          <section class="settings-detail-group"><h4>Business details</h4><dl class="settings-detail-list">
+            <div><dt>Business name</dt><dd>${e(values.businessName)}</dd></div>
+            <div><dt>Location</dt><dd>${e(values.location)}</dd></div>
+            <div><dt>Contact phone</dt><dd>${e(values.contactPhone)}</dd></div>
+            <div><dt>Contact channels</dt><dd>${e(values.contactChannels)}</dd></div>
+          </dl></section>
+          <section class="settings-detail-group"><h4>Rental service</h4><dl class="settings-detail-list">
+            <div><dt>Operating hours</dt><dd>${e(values.opensAt)} – ${e(values.closesAt)} <span class="settings-inline-note">Daily</span></dd></div>
+            <div><dt>Approval hold</dt><dd>${e(values.reservationHoldMinutes)} minutes</dd></div>
+            <div><dt>Late grace period</dt><dd>${e(values.defaultLateGraceHours)} hours</dd></div>
+            <div><dt>Active rental limit</dt><dd>${e(values.maxActiveRentalsPerCustomer)} per customer</dd></div>
+          </dl></section>
+        </div>
+        <div class="settings-regional"><span>Regional defaults</span><strong>${e(values.currency)}</strong><span>·</span><strong>${e(values.timezone)}</strong></div>
+        <section class="settings-announcement"><div><h4>Customer announcement</h4><p>${values.announcementEnabled ? e(values.announcementText) : 'No announcement is currently shown to customers.'}</p></div><span class="settings-status-pill ${values.announcementEnabled ? 'pill-active' : 'pill-muted'}">${values.announcementEnabled ? 'Visible' : 'Off'}</span></section>
         ${owner ? '' : '<div class="info-box">Only owners can edit business settings.</div>'}
       </div>
 
-      ${owner ? `<div class="settings-edit-view">
+      ${owner ? `<div class="settings-edit-view" id="business-editor-profile">
         <form id="business-form" class="admin-form"><fieldset ${saving ? 'disabled' : ''}>
-          <div class="form-grid">
+          <h4>Business details</h4><div class="form-grid">
             <label>Business name<input name="businessName" value="${e(values.businessName)}" maxlength="150" required/></label>
             <label>Hub / Location<input name="location" value="${e(values.location)}" maxlength="255" required/></label>
             <label>Customer contact phone<input name="contactPhone" value="${e(values.contactPhone)}" maxlength="40" placeholder="0992-768-5192"/></label>
             <label>Support &amp; order channels<input name="contactChannels" value="${e(values.contactChannels)}" maxlength="100" placeholder="Call / Text / Viber"/></label>
+          </div><h4>Hours &amp; rental limits</h4><div class="form-grid">
             <label>Opening time<input name="opensAt" type="time" value="${e(values.opensAt)}" required/><small>Walk-in desk &amp; customer booking opens.</small></label>
             <label>Closing time<input name="closesAt" type="time" value="${e(values.closesAt)}" required/><small>Daily rental service closing time.</small></label>
             <label>Reservation hold window (minutes)<input name="reservationHoldMinutes" type="number" min="5" max="1440" value="${e(values.reservationHoldMinutes)}" required/><small>Approved reservation hold duration before expiration.</small></label>
@@ -187,6 +269,7 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
           <label>Banner message
             <textarea name="announcementText" rows="2" maxlength="500" placeholder="e.g. Notice: Rainy weather advisory - outdoor bike and racket rentals may be temporarily suspended.">${e(values.announcementText)}</textarea>
           </label>
+          <aside class="settings-announcement" data-announcement-preview aria-live="polite" hidden><div><h4>Mobile banner preview</h4><p data-announcement-message></p></div></aside>
           <p class="settings-draft-note" role="status">${saving ? 'Saving changes…' : dirty ? 'You have unsaved changes. Your draft is kept while switching tabs.' : 'Changes apply after you select Save business settings.'}</p>
           <p class="form-error" role="alert"></p>
           <div class="settings-form-footer">
@@ -203,11 +286,11 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
       <div class="settings-card-header">
         <div class="settings-section-title">
           <span class="eyebrow">CUSTOMER PAYMENTS</span>
-          <h3>InstaPay / GCash QR &amp; Cash Options</h3>
-          <p>${owner ? 'Customers can pay via InstaPay or GCash QR transfer, upload their transfer screenshot, or pay cash at handover.' : 'Active payment credentials used by customers at checkout.'}</p>
+          <h3>Payment methods</h3>
+          <p>${owner ? 'Choose the payment details customers see at checkout and handover.' : 'Active payment credentials used by customers at checkout.'}</p>
         </div>
         ${owner ? `<div class="settings-card-actions">
-          <button type="button" class="secondary small-btn settings-edit-toggle-btn" data-toggle-edit="payment">
+          <button type="button" class="secondary small-btn settings-edit-toggle-btn" id="business-edit-payment" data-toggle-edit="payment" aria-controls="business-editor-payment" aria-expanded="false">
             <span class="view-state-label">${icon('settings')} <span>Edit payment options</span></span>
             <span class="edit-state-label"><span>Close editor</span></span>
           </button>
@@ -220,16 +303,16 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
             <div><dt>Account name</dt><dd>${e(s.instapay_account_name || s.gcash_account_name || 'Not configured')}</dd></div>
             <div><dt>Account / GCash number</dt><dd>${e(s.instapay_account_number || s.gcash_account_number || 'Not configured')}</dd></div>
             <div><dt>Cash accepted</dt><dd>${s.accept_cash !== false ? '<span class="settings-status-pill pill-active">Accepted at handover</span>' : '<span class="settings-status-pill pill-muted">Disabled (Electronic only)</span>'}</dd></div>
-            <div><dt>Payment instructions</dt><dd>${e(s.instapay_instructions || 'Standard checkout instructions')}</dd></div>
+            <div class="settings-detail-wide"><dt>Payment instructions</dt><dd>${e(s.instapay_instructions || 'Standard checkout instructions')}</dd></div>
           </dl>
           <div class="settings-qr-card-preview">
-            <strong>Customer QR code</strong>
-            ${qrImage ? `<div class="settings-qr-thumb-wrap"><img class="rental-payment-qr-preview" alt="Saved owner InstaPay / GCash QR" src="${e(qrImage)}"/><span class="settings-status-pill pill-active">Active QR</span></div>` : '<div class="settings-qr-empty"><span>No QR uploaded</span><small>Cash only</small></div>'}
+            <strong>Checkout QR code</strong><p>InstaPay / GCash</p>
+            ${qrImage ? `<div class="settings-qr-thumb-wrap"><img class="rental-payment-qr-preview" alt="Saved owner InstaPay / GCash QR" src="${e(qrImage)}"/><span class="settings-status-pill pill-active">Active QR</span></div>` : `<div class="settings-qr-empty"><span>No QR uploaded</span><small>${s.accept_cash !== false ? 'Cash payments are available' : 'Add a QR to enable transfers'}</small></div>`}
           </div>
         </div>
       </div>
 
-      ${owner ? `<div class="settings-edit-view">
+      ${owner ? `<div class="settings-edit-view" id="business-editor-payment">
         <form id="payment-settings-form" class="admin-form"><input type="hidden" name="imageDataUrl" value="${e(qrImage)}"/>
           <div class="form-grid">
             <label>Account name<input name="accountName" value="${e(s.instapay_account_name || s.gcash_account_name || '')}" maxlength="120" autocomplete="off"/></label>
@@ -257,11 +340,11 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
       <div class="settings-card-header">
         <div class="settings-section-title">
           <span class="eyebrow">RATES, PENALTIES &amp; LIABILITY</span>
-          <h3>Overtime penalties, missing parts &amp; security deposits</h3>
-          <p>${owner ? 'Define default hourly overtime rates, missing component fees, and security deposit instructions.' : 'Rental rules and penalties are managed by the owner.'}</p>
+          <h3>Rates &amp; rental rules</h3>
+          <p>${owner ? 'Set the default fees and instructions used for equipment handover and returns.' : 'Rental rules and penalties are managed by the owner.'}</p>
         </div>
         ${owner ? `<div class="settings-card-actions">
-          <button type="button" class="secondary small-btn settings-edit-toggle-btn" data-toggle-edit="rules">
+          <button type="button" class="secondary small-btn settings-edit-toggle-btn" id="business-edit-rules" data-toggle-edit="rules" aria-controls="business-editor-rules" aria-expanded="false">
             <span class="view-state-label">${icon('settings')} <span>Edit rates &amp; rules</span></span>
             <span class="edit-state-label"><span>Close editor</span></span>
           </button>
@@ -272,12 +355,12 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
         <dl class="settings-account-details">
           <div><dt>Default overtime rate</dt><dd>PHP ${e(s.default_overtime_rate ?? 100)} / hr</dd></div>
           <div><dt>Standard lost piece fee</dt><dd>PHP ${e(s.lost_piece_fee ?? 50)}</dd></div>
-          <div><dt>Security deposit policy note</dt><dd>${e(s.security_deposit_note || defaultSecurityDepositNote)}</dd></div>
-          <div><dt>Equipment damage &amp; replacement liability disclaimer</dt><dd>${e(s.damage_policy_note || defaultDamagePolicyNote)}</dd></div>
+          <div class="settings-detail-wide"><dt>Security deposit policy</dt><dd>${e(s.security_deposit_note || defaultSecurityDepositNote)}</dd></div>
+          <div class="settings-detail-wide"><dt>Damage &amp; replacement policy</dt><dd>${e(s.damage_policy_note || defaultDamagePolicyNote)}</dd></div>
         </dl>
       </div>
 
-      ${owner ? `<div class="settings-edit-view">
+      ${owner ? `<div class="settings-edit-view" id="business-editor-rules">
         <form id="rules-settings-form" class="admin-form">
           <div class="form-grid">
             <label>Default overtime rate (PHP / started hour)<input name="defaultOvertimeRate" type="number" min="0" max="5000" step="10" value="${e(s.default_overtime_rate ?? 100)}" required/><small>Base hourly penalty applied after the late grace period.</small></label>
@@ -305,11 +388,11 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
       <div class="settings-card-header">
         <div class="settings-section-title">
           <span class="eyebrow">LEGAL &amp; POLICIES</span>
-          <h3>Terms &amp; Conditions</h3>
+          <h3>Terms &amp; policies</h3>
           <p>${owner ? 'Set the terms and rental policies presented to customers during sign-up and rental checkout.' : 'Workspace terms and conditions are managed by the owner.'}</p>
         </div>
         ${owner ? `<div class="settings-card-actions">
-          <button type="button" class="secondary small-btn settings-edit-toggle-btn" data-toggle-edit="terms">
+          <button type="button" class="secondary small-btn settings-edit-toggle-btn" id="business-edit-terms" data-toggle-edit="terms" aria-controls="business-editor-terms" aria-expanded="false">
             <span class="view-state-label">${icon('settings')} <span>Edit terms &amp; policies</span></span>
             <span class="edit-state-label"><span>Close editor</span></span>
           </button>
@@ -317,47 +400,17 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
       </div>
 
       <div class="settings-summary-view">
-        <div class="settings-terms-grid">
-          <div class="settings-term-item">
-            <div class="settings-term-item-head">
-              <strong>General Terms &amp; Conditions</strong>
-              <span class="settings-status-pill pill-active">Account Registration</span>
-            </div>
-            <p class="settings-term-snippet">${e(s.terms_and_conditions || defaultTermsAndConditions)}</p>
-          </div>
-          <div class="settings-term-item">
-            <div class="settings-term-item-head">
-              <strong>Rental Checkout Terms</strong>
-              <span class="settings-status-pill pill-active">Checkout Agreement</span>
-            </div>
-            <p class="settings-term-snippet">${e(s.rental_terms || defaultRentalTerms)}</p>
-          </div>
-          <div class="settings-term-item">
-            <div class="settings-term-item-head">
-              <strong>Privacy Policy</strong>
-              <span class="settings-status-pill pill-active">Data Privacy Act</span>
-            </div>
-            <p class="settings-term-snippet">${e(s.privacy_policy || defaultPrivacyPolicy)}</p>
-          </div>
-          <div class="settings-term-item">
-            <div class="settings-term-item-head">
-              <strong>Cancellation &amp; Refund Policy</strong>
-              <span class="settings-status-pill pill-active">Refund Rules</span>
-            </div>
-            <p class="settings-term-snippet">${e(s.refund_policy || defaultRefundPolicy)}</p>
-          </div>
-          <div class="settings-term-item full-width">
-            <div class="settings-term-item-head">
-              <strong>Accepted Valid Identification Types</strong>
-              <span class="settings-status-pill pill-active">Verification</span>
-            </div>
-            <p class="settings-term-snippet">${e(s.accepted_id_types || defaultAcceptedIds)}</p>
-          </div>
-        </div>
+        <div class="settings-policy-list">${[
+          ['General Terms & Conditions', 'Shown during account registration', s.terms_and_conditions || defaultTermsAndConditions],
+          ['Rental checkout terms', 'Shown before a rental request is submitted', s.rental_terms || defaultRentalTerms],
+          ['Privacy policy', 'How customer information is handled', s.privacy_policy || defaultPrivacyPolicy],
+          ['Cancellation & refund policy', 'Cancellations, refunds and deposits', s.refund_policy || defaultRefundPolicy],
+          ['Accepted identification', 'Documents accepted at equipment handover', s.accepted_id_types || defaultAcceptedIds]
+        ].map(([name, note, text]) => `<details class="settings-policy-item"><summary><span><strong>${e(name)}</strong><small>${e(note)}</small></span><span class="settings-policy-chevron" aria-hidden="true">+</span></summary><div class="settings-policy-text">${e(text)}</div></details>`).join('')}</div>
         ${owner ? '' : '<div class="info-box">Only owners can edit Terms & Conditions.</div>'}
       </div>
 
-      ${owner ? `<div class="settings-edit-view">
+      ${owner ? `<div class="settings-edit-view" id="business-editor-terms">
         <form id="terms-settings-form" class="admin-form">
           <label>General Terms &amp; Conditions (Account Registration)
             <textarea name="termsAndConditions" rows="8" placeholder="Enter terms &amp; conditions for account registration..." required>${e(s.terms_and_conditions || defaultTermsAndConditions)}</textarea>
@@ -394,11 +447,11 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
       <div class="settings-card-header">
         <div class="settings-section-title">
           <span class="eyebrow">RECEIPT PRINTER (MX10)</span>
-          <h3>55mm continuous roll header &amp; footer</h3>
+          <h3>Receipt layout</h3>
           <p>${owner ? 'Customize the store header, branch contact info, and return reminders printed on customer thermal receipts.' : 'Thermal receipt settings are managed by the owner.'}</p>
         </div>
         ${owner ? `<div class="settings-card-actions">
-          <button type="button" class="secondary small-btn settings-edit-toggle-btn" data-toggle-edit="receipt">
+          <button type="button" class="secondary small-btn settings-edit-toggle-btn" id="business-edit-receipt" data-toggle-edit="receipt" aria-controls="business-editor-receipt" aria-expanded="false">
             <span class="view-state-label">${icon('settings')} <span>Edit receipt layout</span></span>
             <span class="edit-state-label"><span>Close editor</span></span>
           </button>
@@ -411,31 +464,15 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
             <div><dt>Receipt title</dt><dd>${e(s.receipt_header_title || s.business_name || 'RENT & PLAY')}</dd></div>
             <div><dt>Branch</dt><dd>${e(s.receipt_branch_line || 'Lakewoods Subdivision')}</dd></div>
             <div><dt>City</dt><dd>${e(s.receipt_city_line || s.location || 'Los Baños, Laguna')}</dd></div>
-            <div><dt>Contact line</dt><dd>${e(s.receipt_contact_line || 'Not set')}</dd></div>
+            <div><dt>Contact line</dt><dd>${e(s.receipt_contact_line || (s.contact_phone ? 'Contact: ' + s.contact_phone : 'Contact: 0992-768-5192'))}</dd></div>
             <div style="grid-column: 1 / -1;"><dt>Footer disclaimer</dt><dd style="font-weight: 500; font-size: 12px; line-height: 1.6; color: var(--text-muted);">${e(s.receipt_footer_note || defaultReceiptFooter)}</dd></div>
           </dl>
-          <div class="settings-receipt-preview-ticket">
-            <div class="ticket-header">
-              <strong>${e(s.receipt_header_title || s.business_name || 'RENT & PLAY')}</strong>
-              <small>${e(s.receipt_branch_line || 'Lakewoods Subdivision')}</small>
-              <small>${e(s.receipt_city_line || s.location || 'Los Baños, Laguna')}</small>
-              <small>${e(s.receipt_contact_line || (s.contact_phone ? 'Contact: ' + s.contact_phone : 'Contact: 0992-768-5192'))}</small>
-            </div>
-            <div class="ticket-divider">- - - - - - - - - - - - - - - -</div>
-            <div class="ticket-sample">
-              <span>1x PS5 Console (2h)</span>
-              <span>PHP 200.00</span>
-            </div>
-            <div class="ticket-divider">- - - - - - - - - - - - - - - -</div>
-            <div class="ticket-footer">
-              <small>${e(s.receipt_footer_note || defaultReceiptFooter)}</small>
-            </div>
-          </div>
+          ${receiptPreview}
         </div>
       </div>
 
-      ${owner ? `<div class="settings-edit-view">
-        <form id="receipt-settings-form" class="admin-form">
+      ${owner ? `<div class="settings-edit-view" id="business-editor-receipt">
+        <div class="settings-receipt-editor-layout"><form id="receipt-settings-form" class="admin-form">
           <div class="form-grid">
             <label>Receipt header title<input name="receiptHeaderTitle" value="${e(s.receipt_header_title || s.business_name || 'RENT & PLAY')}" maxlength="80" required/></label>
             <label>Branch / subtitle line<input name="receiptBranchLine" value="${e(s.receipt_branch_line || 'Lakewoods Subdivision')}" maxlength="120"/></label>
@@ -451,47 +488,30 @@ export function renderSettings({ model, user, appearance, tab, draft, dirty, sav
             <button type="button" class="secondary" data-cancel-edit="receipt">Cancel</button>
             <button class="primary" type="submit">Save receipt layout</button>
           </div>
-        </form>
+        </form>${receiptPreview}</div>
       </div>` : ''}
     </section>`;
 
-    const activeSub = ['profile', 'payment', 'rules', 'terms', 'receipt'].includes(businessSubTab) ? businessSubTab : 'profile';
+    const activeSub = businessSettingsSections.some(row => row.id === businessSubTab) ? businessSubTab : 'profile';
+    const sections = { profile: sectionProfile, payment: sectionPayment, rules: sectionRules, terms: sectionTerms, receipt: sectionReceipt };
     content = `<div class="settings-business-container" data-active-subtab="${activeSub}">
-      <div class="settings-subnav" aria-label="Business settings subsections">
-        <button type="button" class="settings-subnav-btn ${activeSub === 'profile' ? 'active' : ''}" data-business-subtab="profile">
-          <span>Schedule &amp; Hub</span>
-        </button>
-        <button type="button" class="settings-subnav-btn ${activeSub === 'payment' ? 'active' : ''}" data-business-subtab="payment">
-          <span>Payments &amp; QR</span>
-        </button>
-        <button type="button" class="settings-subnav-btn ${activeSub === 'rules' ? 'active' : ''}" data-business-subtab="rules">
-          <span>Rates &amp; Rules</span>
-        </button>
-        <button type="button" class="settings-subnav-btn ${activeSub === 'terms' ? 'active' : ''}" data-business-subtab="terms">
-          <span>Terms &amp; Policies</span>
-        </button>
-        <button type="button" class="settings-subnav-btn ${activeSub === 'receipt' ? 'active' : ''}" data-business-subtab="receipt">
-          <span>Thermal Receipt</span>
-        </button>
-      </div>
-      <div class="settings-cards-stack">
-        ${sectionProfile}
-        ${sectionPayment}
-        ${sectionRules}
-        ${sectionTerms}
-        ${sectionReceipt}
-      </div>
+      <aside class="settings-business-rail">
+        <nav class="settings-business-menu" aria-label="Business settings sections">${businessSettingsSections.map(row => `<button type="button" id="business-section-${row.id}" data-business-subtab="${row.id}" aria-controls="business-content-${row.id}" ${activeSub === row.id ? 'aria-current="true"' : ''}><strong>${e(row.label)}</strong><small>${e(row.note)}</small></button>`).join('')}</nav>
+        <p class="settings-rail-note">${owner ? 'Changes are saved for everyone in your workspace.' : 'The owner manages these settings.'}</p>
+      </aside>
+      <div class="settings-business-picker"><label for="settings-business-section">Business section</label><select id="settings-business-section">${businessSettingsSections.map(row => `<option value="${row.id}" ${activeSub === row.id ? 'selected' : ''}>${e(row.label)}</option>`).join('')}</select></div>
+      <div class="settings-cards-stack">${businessSettingsSections.map(row => sections[row.id].replace('data-subtab="' + row.id + '"', `id="business-content-${row.id}" aria-labelledby="business-section-${row.id}" ${activeSub === row.id ? '' : 'hidden'} data-subtab="${row.id}"`)).join('')}</div>
     </div>`;
   }
 
-  if (active === 'appearance') content = `<section class="panel settings-card">${appearance}<div class="settings-tip"><strong>Personal to this browser</strong><p>Your appearance choice is remembered on this device. It does not change another staff member’s screen.</p></div></section>`;
-  if (active === 'preferences') content = `<section class="panel settings-card">${title('YOUR WORKFLOW', 'Workspace preferences', 'Saved on this browser. These options do not change business data or other devices.')}<form id="preferences-form" class="admin-form"><label class="settings-checkbox-row"><input name="autoRefresh" type="checkbox" ${preferences.autoRefresh ? 'checked' : ''}/><span>Automatically refresh workspace data<small>Check for updates every 2 minutes while the page is visible. Paused in Settings and while editing. Manual Refresh is always available.</small></span></label><div class="settings-divider"></div><h4>Default analytics view</h4><p>Use these defaults when opening Reports in a new session. You can still adjust filters inside Reports.</p><div class="form-grid"><label>Default period<select name="reportPeriod">${options([['7d', 'Last 7 days'], ['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['365d', 'Last 365 days']], preferences.reportPeriod)}</select></label><label>Default trend grouping<select name="reportGrouping">${options([['auto', 'Automatic'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']], preferences.reportGrouping)}</select></label></div><p class="form-error" role="alert"></p><div class="settings-form-footer"><button type="button" id="preferences-reset" class="secondary">Restore defaults</button><button type="submit" class="primary">Save preferences</button></div></form></section>`;
+  if (active === 'appearance') content = `<section class="panel settings-card settings-personal-card">${title('DISPLAY', 'Appearance', 'Choose how this workspace looks on your device.')}${appearance}<div class="settings-tip"><strong>Personal to this browser</strong><p>Your appearance choice is remembered on this device. It does not change another staff member’s screen.</p></div></section>`;
+  if (active === 'preferences') content = `<section class="panel settings-card">${title('WORKFLOW', 'Workspace preferences', 'Saved on this browser. These options do not change business data or other devices.')}<form id="preferences-form" class="admin-form"><label class="settings-checkbox-row"><input name="autoRefresh" type="checkbox" ${preferences.autoRefresh ? 'checked' : ''}/><span>Automatically refresh workspace data<small>Check for updates every 2 minutes while the page is visible. Paused in Settings and while editing. Manual Refresh is always available.</small></span></label><div class="settings-divider"></div><h4>Default analytics view</h4><p>Use these defaults when opening Reports in a new session. You can still adjust filters inside Reports.</p><div class="form-grid"><label>Default period<select name="reportPeriod">${options([['7d', 'Last 7 days'], ['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['365d', 'Last 365 days']], preferences.reportPeriod)}</select></label><label>Default trend grouping<select name="reportGrouping">${options([['auto', 'Automatic'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']], preferences.reportGrouping)}</select></label></div><p class="form-error" role="alert"></p><div class="settings-form-footer"><button type="button" id="preferences-reset" class="secondary">Restore defaults</button><button type="submit" class="primary">Save preferences</button></div></form></section>`;
   if (active === 'users') content = `${users()}<div class="settings-tip"><strong>Customer accounts are managed separately</strong><p>This list contains staff accounts only: Operators and Owners. Manage customer profiles and mobile app access in the Customers section. Each account uses its own email and password.</p></div>`;
   if (active === 'account') {
     const roleLabel = owner ? 'Owner' : isAdmin ? 'Operator' : 'Customer';
-    content = `<section class="panel settings-card">${title('ACCOUNT & SECURITY', 'Your account', 'Review your signed-in account and keep your access secure.')}<dl class="settings-account-details"><div><dt>Name</dt><dd>${e(user.name)}</dd></div><div><dt>Email</dt><dd>${e(user.email)}</dd></div><div><dt>Workspace role</dt><dd>${roleLabel}</dd></div><div><dt>Sign-in provider</dt><dd>Firebase Authentication</dd></div></dl><div class="settings-action-row"><div><h4>Profile details</h4><p>Update your name and personal profile information.</p></div><button class="secondary" data-page="Profile">View profile</button></div><div class="settings-action-row"><div><h4>Password reset</h4><p>Send a reset link to <strong>${e(user.email)}</strong>. Complete the password change in your email.</p></div><button class="secondary" id="settings-password-reset">Send reset email</button></div><p class="settings-security-status" role="status"></p><div class="settings-tip"><strong>On a shared computer?</strong><p>Sign out from the account menu when you finish. Your password is never shown on this page.</p></div></section>
-    <section class="panel settings-card" id="settings-active-sessions-card">${title('ACTIVE SESSIONS MANAGEMENT', 'Signed-in devices & browsers', 'Monitor active browsers signed into your account and revoke access from other devices immediately.')}<div data-active-sessions-list>${activeSessions ? renderActiveSessionsList(activeSessions, { escape: e, formatDate }) : '<p class="settings-draft-note">Loading active sessions…</p>'}</div><div class="settings-form-footer"><button type="button" class="secondary" id="settings-refresh-sessions">Refresh sessions</button><button type="button" class="secondary" id="settings-revoke-other-sessions">Sign out of all other devices</button></div></section>
-    <section class="panel settings-card" id="settings-security-alerts-card">${title('REAL-TIME SECURITY ALERTS', 'Security & anti-fraud monitor', 'Live feed of blocked brute-force logins, duplicate or edited payment proofs, and rolling QR verification failures.')}<div data-security-alerts-list>${securityAlerts ? renderSecurityAlertsList(securityAlerts, { escape: e, formatDate }) : '<p class="settings-draft-note">Loading recent security alerts…</p>'}</div></section>`;
+    content = `<section class="panel settings-card">${title('ACCOUNT & SECURITY', 'Your account', 'Review your signed-in account and keep your access secure.')}<dl class="settings-account-details"><div><dt>Name</dt><dd>${e(user.name)}</dd></div><div><dt>Email</dt><dd>${e(user.email)}</dd></div><div><dt>Workspace role</dt><dd>${roleLabel}</dd></div><div><dt>Sign-in method</dt><dd>Email &amp; password</dd></div></dl><div class="settings-action-row"><div><h4>Profile details</h4><p>Update your name and personal profile information.</p></div><button class="secondary" data-page="Profile">View profile</button></div><div class="settings-action-row"><div><h4>Password reset</h4><p>Send a reset link to <strong>${e(user.email)}</strong>. Complete the password change in your email.</p></div><button class="secondary" id="settings-password-reset">Send reset email</button></div><p class="settings-security-status" role="status"></p><div class="settings-tip"><strong>On a shared computer?</strong><p>Sign out from the account menu when you finish. Your password is never shown on this page.</p></div></section>
+    <section class="panel settings-card" id="settings-active-sessions-card">${title('SESSIONS', 'Signed-in devices', 'Monitor active browsers signed into your account and revoke access from other devices immediately.')}<div data-active-sessions-list>${activeSessions ? renderActiveSessionsList(activeSessions, { escape: e, formatDate }) : '<p class="settings-draft-note">Loading active sessions…</p>'}</div><div class="settings-form-footer"><button type="button" class="secondary" id="settings-refresh-sessions">Refresh sessions</button><button type="button" class="secondary" id="settings-revoke-other-sessions">Sign out of all other devices</button></div></section>
+    <section class="panel settings-card" id="settings-security-alerts-card">${title('ACTIVITY', 'Security alerts', 'Live feed of blocked brute-force logins, duplicate or edited payment proofs, and rolling QR verification failures.')}<div data-security-alerts-list>${securityAlerts ? renderSecurityAlertsList(securityAlerts, { escape: e, formatDate }) : '<p class="settings-draft-note">Loading recent security alerts…</p>'}</div></section>`;
   }
-  return `<div class="settings-tabs" role="tablist" aria-label="Settings sections" aria-orientation="horizontal">${tabs.map(row => `<button type="button" role="tab" id="settings-tab-${row.id}" data-settings-tab="${row.id}" aria-controls="settings-panel-${row.id}" aria-selected="${row.id === active}" tabindex="${row.id === active ? 0 : -1}">${icon(row.icon)}<span>${row.label}</span></button>`).join('')}</div><div class="settings-tab-panel" role="tabpanel" id="settings-panel-${active}" aria-labelledby="settings-tab-${active}" tabindex="0">${content}</div>`;
+  return `<div class="settings-workspace"><div class="settings-tabs" role="tablist" aria-label="Settings sections" aria-orientation="horizontal">${tabs.map(row => `<button type="button" role="tab" id="settings-tab-${row.id}" data-settings-tab="${row.id}" aria-controls="settings-panel-${row.id}" aria-selected="${row.id === active}" tabindex="${row.id === active ? 0 : -1}">${icon(row.icon)}<span>${row.label}</span></button>`).join('')}</div><div class="settings-tab-panel" role="tabpanel" id="settings-panel-${active}" aria-labelledby="settings-tab-${active}" tabindex="0">${content}</div></div>`;
 }

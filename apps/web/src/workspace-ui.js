@@ -1,8 +1,9 @@
 import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
 import { calculateDetailedAnalytics, forecastScenario } from './analytics-insights.js';
+import { bindAnalyticsCharts } from './analytics-charts.js';
 import { renderAnalyticsReport } from './analytics-report.js';
-import { renderSettings, settingsTabs, defaultTermsAndConditions, defaultRentalTerms, defaultPrivacyPolicy, defaultRefundPolicy, defaultAcceptedIds, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
+import { renderSettings, settingsTabs, bindBusinessSettingsNavigation, bindReceiptSettingsPreview, bindAnnouncementSettingsPreview, defaultTermsAndConditions, defaultRentalTerms, defaultPrivacyPolicy, defaultRefundPolicy, defaultAcceptedIds, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
 import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
 import { actualReturnTime, chargeCell, enrichVerification, formatDurationHuman, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderAdminHandoff, renderRequestHistory, savedCharges } from './transaction-records.js';
@@ -21,11 +22,16 @@ import { bindAccountValidation, nameError, emailError, passwordError, passwordMa
 
 export function createWorkspaceUI(h) {
   const { api, escape: e, showModal, modal, toast, money, formatDate, icon, confirmAction, confirmSubmit } = h;
-  let model = null, loading = null, search = '', redraw = () => { }, pages = {};
+  let model = null, modelKey = '', search = '', redraw = () => { }, pages = {};
   let cacheVersion = 0, modelVersion = -1, loadError = '';
   let searchPage = '', pageSearches = {};
   const pageSize = 5;
-  const viewModelCache = new Map();
+  // Page snapshots live only for this signed-in session. Never discard them on navigation.
+  const viewModelCache = new Map(), pendingLoads = new Map();
+  const snapshotTtlMs = 30000, snapshotLimit = 24;
+  const clock = h.nowMs || Date.now;
+  let preloadEpoch = 0, preloadTask = null;
+  const cancelPreload = () => { preloadEpoch++; preloadTask = null; };
   const remote = {}; let remoteStatus='ALL', remoteFrom='', remoteTo='', remoteSearch='', remoteScheduledDay='', advancedFiltersOpen = false;
   let rankingPeriod = 'all';
   const defaultRecordStatus = page => page === 'Rentals' || page === 'Maintenance' ? 'OPEN' : page === 'Returns' ? 'RETURN_PENDING_INSPECTION' : 'ALL';
@@ -40,28 +46,78 @@ export function createWorkspaceUI(h) {
   const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', forecastScenario: 'baseline', recommendationType: 'all', details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
   const status = value => `<span class="badge ${e(String(value || 'unknown').toLowerCase().replaceAll('_', '-').replaceAll(' ', '-'))}">${e(String(value || 'Unknown').replaceAll('_', ' '))}</span>`;
-  const invalidate = () => { cacheVersion++; loading = null; loadError = ''; viewModelCache.clear(); financeUI.reset();reportPayments.reset(); };
+  const invalidate = () => { cancelPreload(); cacheVersion++; loadError = ''; financeUI.reset(); reportPayments.reset(); };
+  const workspaceRequest = (view = searchPage || 'Rentals') => {
+    const active = view === searchPage;
+    const current = active ? remote[view] ||= { cursor: '', previous: [] } : { cursor: '' };
+    const reportRange = view === 'Reports' ? analyticsRange(analyticsSelection) : null;
+    const rankingRange = view === 'Transaction History' && rankingPeriod !== 'all' ? analyticsRange({ period: rankingPeriod }) : null;
+    return '/workspace?' + new URLSearchParams({ view,
+      ...(reportRange && !reportRange.error ? { from: reportRange.from, to: reportRange.to } : {}),
+      ...(rankingRange ? { rankingFrom: rankingRange.from, rankingTo: rankingRange.to } : {}),
+      ...(current.cursor ? { cursor: current.cursor } : {}), status: active ? remoteStatus : defaultRecordStatus(view),
+      ...(active && remoteFrom ? { from: remoteFrom } : {}), ...(active && remoteTo ? { to: remoteTo } : {}),
+      ...(active && remoteSearch ? { search: remoteSearch } : {}), ...(active && remoteScheduledDay ? { scheduledDay: remoteScheduledDay } : {})
+    });
+  };
+  const readWorkspace = async key => {
+    const version = cacheVersion, cached = viewModelCache.get(key);
+    if (cached && cached.version === version && clock() - cached.loadedAt < snapshotTtlMs) {
+      if (workspaceRequest() === key) { model = cached.value; modelKey = key; modelVersion = version; loadError = ''; }
+      return cached.value;
+    }
+    const existing = pendingLoads.get(key);
+    if (existing?.version === version) return existing.promise;
+    if (workspaceRequest() === key) loadError = '';
+    const request = { version, promise: null };
+    request.promise = api(key).then(value => {
+      if (version === cacheVersion) {
+        viewModelCache.delete(key);
+        viewModelCache.set(key, { value, version, loadedAt: clock() });
+        while (viewModelCache.size > snapshotLimit) viewModelCache.delete(viewModelCache.keys().next().value);
+        // A late response may warm its own page, but cannot replace the active page.
+        if (workspaceRequest() === key) { model = value; modelKey = key; modelVersion = version; loadError = ''; }
+      }
+      return value;
+    }).catch(error => { if (version === cacheVersion && workspaceRequest() === key) loadError = error.message; throw error; })
+      .finally(() => { if (pendingLoads.get(key) === request) pendingLoads.delete(key); });
+    pendingLoads.set(key, request);
+    return request.promise;
+  };
   const load = async (force = false) => {
     if (force) invalidate();
-    if (model && modelVersion === cacheVersion && (!model.view_meta?.view || model.view_meta.view === (searchPage || 'Rentals'))) return model;
-    if (!loading) {
-      const version = cacheVersion;
-      const view=searchPage || 'Rentals', current=remote[view] ||= {cursor:'',previous:[]};
-      const reportRange=view==='Reports'?analyticsRange(analyticsSelection):null;
-      const rankingRange=view==='Transaction History' && rankingPeriod!=='all'?analyticsRange({period:rankingPeriod}):null;
-      const request = api('/workspace?'+new URLSearchParams({view,...(reportRange&&!reportRange.error?{from:reportRange.from,to:reportRange.to}:{}),...(rankingRange?{rankingFrom:rankingRange.from,rankingTo:rankingRange.to}:{}),...(current.cursor?{cursor:current.cursor}:{}),status:remoteStatus,...(remoteFrom?{from:remoteFrom}:{}),...(remoteTo?{to:remoteTo}:{}),...(remoteSearch?{search:remoteSearch}:{}),...(remoteScheduledDay?{scheduledDay:remoteScheduledDay}:{})})).then(value => {
-        if (version === cacheVersion) {
-          model = value;
-          modelVersion = version;
-          loadError = '';
-          if (value?.view_meta?.view) viewModelCache.set(value.view_meta.view, value);
-        }
-        return value;
-      }).catch(error => { if (version === cacheVersion) loadError = error.message; throw error; })
-        .finally(() => { if (loading === request) loading = null; });
-      loading = request;
-    }
-    return loading;
+    // Retain compatibility with older unscoped workspace responses.
+    if (!force && model && !model.view_meta?.view && modelVersion === cacheVersion) return model;
+    return readWorkspace(workspaceRequest());
+  };
+  const prefetch = page => {
+    if (!['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings', 'ESP32 terminal'].includes(page)) return Promise.resolve();
+    if (pendingLoads.size >= 2) return Promise.resolve();
+    return readWorkspace(workspaceRequest(page)).catch(() => {});
+  };
+  const preloadPages = ({ skipViews = [] } = {}) => {
+    if (preloadTask) return preloadTask;
+    const epoch = ++preloadEpoch, version = cacheVersion;
+    const queue = ['Reports', 'Rentals', 'Customers', 'Returns', 'Rates & Fees', 'Maintenance', 'Payments', 'Settings', 'Transaction History', 'ESP32 terminal'].filter(page => !skipViews.includes(page));
+    const valid = () => epoch === preloadEpoch && version === cacheVersion;
+    const idle = h.whenIdle || (() => new Promise(resolve => {
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(resolve, { timeout: 250 });
+      else setTimeout(resolve, 0);
+    }));
+    const worker = async () => {
+      while (queue.length && valid()) {
+        await idle();
+        // Leave room for interactive navigation and share its in-flight request.
+        while (pendingLoads.size >= 2 && valid()) await Promise.race([...pendingLoads.values()].map(entry => entry.promise.catch(() => {})));
+        if (!valid()) return;
+        const page = queue.shift();
+        if (page === 'Payments') await financeUI.prefetch();
+        else if (page) await readWorkspace(workspaceRequest(page)).catch(() => {});
+      }
+    };
+    const task = Promise.all([worker(), worker()]).finally(() => { if (preloadTask === task) preloadTask = null; });
+    preloadTask = task;
+    return task;
   };
   const refresh = async () => {
     if(searchPage==='Payments'){await financeUI.refresh();return true;}
@@ -70,7 +126,7 @@ export function createWorkspaceUI(h) {
     return previous !== JSON.stringify(Object.fromEntries(Object.entries(next).filter(([key]) => key !== 'refreshedAt')));
   };
   const workflow = createTransactionWorkflow({ ...h, model: () => model, refresh, redraw: () => redraw(), transactionDetails });
-  const setRecordScope=async value=>{remoteStatus=value;remote[searchPage]={cursor:'',previous:[]};await load(true).catch(()=>{});redraw();};
+  const setRecordScope=async value=>{if(remoteStatus===value)return;remoteStatus=value;remote[searchPage]={cursor:'',previous:[]};await load(false).catch(()=>{});redraw();};
   const customerUI = createCustomerUI({ ...h, model: () => model, refresh, transactionDetails, onRecordScope:setRecordScope });
   const maintenanceUI = createMaintenanceUI({ ...h, model: () => model, refresh, redraw: () => redraw(), resetPage: () => { pages.Maintenance = 0; }, onRecordScope:setRecordScope, transactionDetails });
   const recordDetails = createRecordDetails({ ...h, model: () => model, transactionDetails, maintenanceDetails: maintenanceUI.details });
@@ -298,8 +354,8 @@ export function createWorkspaceUI(h) {
       if (state.filter === "Inspection pending") records = inspections;
       if (state.filter === "Return requested") records = returnRequested;
       records = records.filter(txSearch).sort((a, b) => {
-        const rank = row => row.status === "PENDING_ADMIN_APPROVAL" ? -3 : (row.status === "ACTIVE" && row.latest_return_request_status === "PENDING_ADMIN_APPROVAL") ? -2.5 : row.status === "RETURN_PENDING_INSPECTION" ? -2 : row.status === "PENDING_VERIFICATION" ? -1 : txStatus(row) === "Overdue" ? 0 : txStatus(row) === "Due today" ? 1 : 2;
-        return rank(a) - rank(b) || (txDate(a.due_at)?.getTime() || 0) - (txDate(b.due_at)?.getTime() || 0);
+        const rank = row => row.status === "PENDING_ADMIN_APPROVAL" ? -5 : (row.status === "APPROVED" ? -4 : (row.status === "ACTIVE" && row.latest_return_request_status === "PENDING_ADMIN_APPROVAL") ? -3 : row.status === "RETURN_PENDING_INSPECTION" ? -2 : row.status === "PENDING_VERIFICATION" ? -1 : txStatus(row) === "Overdue" ? 0 : txStatus(row) === "Due today" ? 1 : 2);
+        return rank(a) - rank(b) || (txDate(b.created_at || b.updated_at)?.getTime() || 0) - (txDate(a.created_at || a.updated_at)?.getTime() || 0);
       });
       const view = paged(records, mode), action = `<button type="button" class="primary" id="rental-request-add">+ Create walk-in rental</button><button type="button" class="secondary" data-find-booking>Scan rental QR</button>`;
       const message = overdue.length ? `${overdue.length} overdue rental${overdue.length === 1 ? " needs" : "s need"} follow-up today.` : returnRequested.length ? `${returnRequested.length} customer return request${returnRequested.length === 1 ? " is" : "s are"} waiting for physical receipt.` : pendingAdmin.length ? `${pendingAdmin.length} mobile request${pendingAdmin.length === 1 ? " is" : "s are"} waiting for admin review.` : pendingRentals.length ? `${pendingRentals.length} rental request${pendingRentals.length === 1 ? "" : "s"} in the saved terminal queue (hardware on standby).` : pickup.length ? `${pickup.length} approved rental${pickup.length === 1 ? " is" : "s are"} waiting for delivery or handoff.` : inspections.length ? `${inspections.length} received unit${inspections.length === 1 ? " needs" : "s need"} inspection.` : dueToday.length ? `${dueToday.length} rental${dueToday.length === 1 ? "" : "s"} due today.` : "No urgent rental follow-ups. Your open rentals are on track.";
@@ -520,13 +576,16 @@ export function createWorkspaceUI(h) {
     if(page==='Payments'){searchPage=page;return financeUI.render();}
     const displayPage = page === 'Transaction History' ? 'Rental History' : page;
     if (page !== searchPage) {
-      if(model?.view_meta?.view && model.view_meta.view!==page){
-        const cached = viewModelCache.get(page);
-        if(cached && modelVersion === cacheVersion) { model = cached; }
-        else { invalidate(); }
-      }
+      if (searchPage) loadError = '';
       remoteStatus=defaultRecordStatus(page);remoteFrom='';remoteTo='';remoteSearch='';remoteScheduledDay='';remote[page]={cursor:'',previous:[]};customerUI.setStatus(remoteStatus);maintenanceUI.setStatus(remoteStatus); if (searchPage) pageSearches[searchPage] = search; search = pageSearches[page] || ''; searchPage = page;
     }
+    const key = workspaceRequest(), cached = viewModelCache.get(key);
+    if (cached) {
+      model = cached.value; modelKey = key;
+      modelVersion = cached.version === cacheVersion && clock() - cached.loadedAt < snapshotTtlMs ? cacheVersion : -1;
+    }
+    // Unscoped legacy payloads are still supported by the mobile/shared controller tests.
+    const wrongRequest = model?.view_meta?.view && modelKey !== key;
     const retry = '<button type="button" class="secondary" id="module-retry">Try again</button>';
     const wrongView = model?.view_meta?.view && model.view_meta.view !== page;
     const reportRange = page === 'Reports' ? analyticsRange(analyticsSelection) : null;
@@ -535,12 +594,19 @@ export function createWorkspaceUI(h) {
       ? `<section class="panel module-load-error" role="alert">${icon('chip')}<h3>Couldn’t load this page</h3><p>${e(loadError)}</p>${retry}</section>`
       : `<section class="panel module-loading" role="status" aria-busy="true"><span class="session-spinner" aria-hidden="true"></span><p>Loading ${e(displayPage.toLowerCase())}…</p></section>`;
     const content = page === 'ESP32 terminal' ? workflow.verificationPage(search, { paged, table, status, empty }) : page === 'Customers' ? customers() : ['Rentals', 'Returns', 'Transaction History'].includes(page) ? transactions(page) : page === 'Rates & Fees' ? rates() : page === 'Maintenance' ? maintenance() : page === 'Reports' ? reports() : page === 'Settings' ? settings(user, appearance) : '';
-    const notice = modelVersion === cacheVersion ? '' : loadError
+    const notice = modelVersion === cacheVersion || cached?.version === cacheVersion && !loadError ? '' : loadError
       ? `<div class="module-sync-notice connection-banner" role="alert"><span>${e(loadError)} Showing the last successfully loaded records.</span>${retry}</div>`
       : `<div class="module-sync-notice" role="status"><span class="session-spinner" aria-hidden="true"></span><span>Updating ${e(displayPage.toLowerCase())}…</span></div>`;
     const filters = ['Customers', 'Maintenance'].includes(page) ? recordFilters(page) : '';
     const fallbackPager=['Customers','Rentals','Returns','Transaction History','Maintenance'].includes(page) && model.page_meta && !content.includes('data-remote-next') ? paged([],page).footer : '';
     return notice + filters + (page==='Rentals'?planning.calendar(model.transactions,remoteScheduledDay):'') + content + fallbackPager;
+  }
+
+  function syncIfNeeded(page, rerender) {
+    if (page === 'Payments') return;
+    if ((!model || modelKey !== workspaceRequest() || modelVersion !== cacheVersion) && !loadError) {
+      load().then(rerender).catch(problem => { if (problem.status !== 401) rerender(); });
+    }
   }
 
   function bind(page, user, rerender) {
@@ -590,7 +656,7 @@ export function createWorkspaceUI(h) {
       event.currentTarget.disabled = true; event.currentTarget.textContent = 'Retrying…';
       load(true).then(rerender).catch(() => rerender());
     });
-    if ((!model || modelVersion !== cacheVersion) && !loadError) load().then(rerender).catch(problem => { if (problem.status !== 401) rerender(); });
+    syncIfNeeded(page, rerender);
     if (!model) return;
     workflow.bind(page, rerender, pages);
     const searchBox = document.querySelector('#module-search');
@@ -649,16 +715,7 @@ export function createWorkspaceUI(h) {
         if (target !== undefined) { event.preventDefault(); switchSettingsTab(tabs[target].id); }
       };
     });
-    document.querySelectorAll('[data-business-subtab]').forEach(btn => {
-      btn.onclick = () => {
-        businessSubTab = btn.dataset.businessSubtab;
-        const container = document.querySelector('.settings-business-container');
-        if (container) container.setAttribute('data-active-subtab', businessSubTab);
-        document.querySelectorAll('[data-business-subtab]').forEach(b => {
-          b.classList.toggle('active', b.dataset.businessSubtab === businessSubTab);
-        });
-      };
-    });
+    bindBusinessSettingsNavigation(document, value => { businessSubTab = value; });
     document.querySelectorAll('[data-toggle-edit]').forEach(btn => {
       btn.onclick = () => {
         const card = btn.closest('.settings-card');
@@ -666,6 +723,7 @@ export function createWorkspaceUI(h) {
         const isEdit = card.getAttribute('data-state') === 'edit';
         const nextState = isEdit ? 'view' : 'edit';
         card.setAttribute('data-state', nextState);
+        btn.setAttribute('aria-expanded', String(nextState === 'edit'));
         if (nextState === 'edit') {
           const firstInput = card.querySelector('input:not([type="hidden"]), textarea, select');
           firstInput?.focus();
@@ -676,12 +734,26 @@ export function createWorkspaceUI(h) {
       btn.onclick = () => {
         const card = btn.closest('.settings-card');
         if (card) {
+          card.querySelector('form')?.reset?.();
+          const error = card.querySelector('.form-error');
+          if (error) error.textContent = '';
+          if (card.dataset.subtab === 'profile') {
+            businessDraft = null; businessDirty = false;
+            const note = card.querySelector('.settings-draft-note');
+            if (note) note.textContent = 'Changes apply after you select Save business settings.';
+            const discard = card.querySelector('#business-discard');
+            if (discard) discard.disabled = true;
+          }
           card.setAttribute('data-state', 'view');
-          card.querySelector('.settings-edit-toggle-btn')?.focus();
+          const toggle = card.querySelector('.settings-edit-toggle-btn');
+          toggle?.setAttribute('aria-expanded', 'false');
+          toggle?.focus();
+          if (card.dataset.subtab === 'profile') rerender();
         }
       };
     });
     const businessForm = document.querySelector('#business-form');
+    if (businessForm) bindAnnouncementSettingsPreview(businessForm);
     businessForm?.addEventListener('input', () => { const data = Object.fromEntries(new FormData(businessForm)); data.announcementEnabled = businessForm.elements.announcementEnabled?.checked ?? false; businessDraft = data; businessDirty = true; businessForm.querySelector('.settings-draft-note').textContent = 'You have unsaved changes. Your draft is kept while switching tabs.'; businessForm.querySelector('#business-discard').disabled = false; });
     document.querySelector('#business-discard')?.addEventListener('click', async event => {
       const button = event.currentTarget;
@@ -702,6 +774,13 @@ export function createWorkspaceUI(h) {
       const imageInput = paymentForm.elements.imageDataUrl, fileInput = paymentForm.querySelector('[data-payment-qr]'), preview = paymentForm.querySelector('[data-payment-qr-preview]'), removeButton = paymentForm.querySelector('[data-payment-qr-remove]'), error = paymentForm.querySelector('.form-error');
       const syncRemoveButton = () => { if (removeButton) removeButton.hidden = !imageInput.value.trim(); };
       syncRemoveButton();
+      paymentForm.addEventListener('reset', () => queueMicrotask(() => {
+        syncRemoveButton();
+        if (imageInput.value.trim()) {
+          const image = new Image(); image.className = 'rental-payment-qr-preview';
+          image.alt = 'Saved owner InstaPay / GCash QR'; image.src = imageInput.value; preview.replaceChildren(image);
+        } else preview.innerHTML = '<p class="settings-draft-note">No owner QR configured. Customers can choose cash until one is saved.</p>';
+      }));
       fileInput?.addEventListener('change', () => {
         const file = fileInput.files?.[0]; if (!file) return;
         if (file.size > 500000) { fileInput.value = ''; error.textContent = 'The QR image must be 500 KB or smaller.'; return; }
@@ -769,6 +848,7 @@ export function createWorkspaceUI(h) {
     }
     const receiptForm = document.querySelector('#receipt-settings-form');
     if (receiptForm) {
+      bindReceiptSettingsPreview(receiptForm);
       confirmSubmit(receiptForm, { title: 'Save receipt layout & disclaimer?', description: 'The printed store header, branch contact info, and return disclaimer will update for thermal receipts.', confirmLabel: 'Yes, save layout' }, async () => {
         const button = receiptForm.querySelector('[type="submit"]'), error = receiptForm.querySelector('.form-error');
         button.disabled = true; button.textContent = 'Saving…'; error.textContent = '';
@@ -874,8 +954,15 @@ export function createWorkspaceUI(h) {
       } catch (problem) { toast(problem.message); }
       finally { button.disabled = false; }
     });
-    const updateAnalytics = () => { for (const key of Object.keys(pages)) if (key.startsWith('analytics-')) pages[key] = 0; if(!analyticsRange(analyticsSelection).error){load(true).then(rerender).catch(()=>rerender());} rerender(); };
-    const selectAnalyticsTab = section => { reportView.section = normalizeReportSection(section); const route = reportPathForSection(reportView.section); if (location.pathname !== route) history.pushState({ page: 'Reports' }, '', route); rerender(); document.querySelector(`[data-analytics-tab="${reportView.section}"]`)?.focus(); };
+    bindAnalyticsCharts();
+    for (const [attribute, property] of [['demand', 'demandView'], ['ranking', 'rankingMetric']]) {
+      document.querySelectorAll(`[data-analytics-${attribute}]`).forEach(button => button.onclick = () => {
+        const value = button.getAttribute(`data-analytics-${attribute}`); reportView[property] = value; rerender();
+        document.querySelector(`[data-analytics-${attribute}="${value}"]`)?.focus();
+      });
+    }
+    const updateAnalytics = () => { for (const key of Object.keys(pages)) if (key.startsWith('analytics-')) pages[key] = 0; if(!analyticsRange(analyticsSelection).error){load().then(rerender).catch(()=>rerender());} rerender(); };
+    const selectAnalyticsTab = section => { reportView.section = normalizeReportSection(section); h.onReportSectionChange?.(reportView.section); const route = reportPathForSection(reportView.section); if (location.pathname !== route) history.pushState({ page: 'Reports' }, '', route); rerender(); document.querySelector(`[data-analytics-tab="${reportView.section}"]`)?.focus(); };
     const analyticsTabs = [...document.querySelectorAll('[data-analytics-tab]')];
     analyticsTabs.forEach(button => {
       button.onclick = () => selectAnalyticsTab(button.dataset.analyticsTab);
@@ -914,5 +1001,5 @@ export function createWorkspaceUI(h) {
     if(!row){const result=await api('/rentals/lookup',{method:'POST',body:JSON.stringify({kind:'RENTAL',code:String(id)})});row=result.rental;model.transactions.push(row);}
     transactionDetails(row);
   }
-  return { load, refresh, invalidate, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: () => financeUI.cashDrawerForm(), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; settingsTab = 'business'; businessSubTab = 'profile'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
+  return { load, refresh, invalidate, prefetch, preloadPages, cancelPreload, syncIfNeeded, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: () => financeUI.cashDrawerForm(), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); viewModelCache.clear(); pendingLoads.clear(); modelKey = ''; model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; settingsTab = 'business'; businessSubTab = 'profile'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
 }

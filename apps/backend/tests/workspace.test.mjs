@@ -2,6 +2,66 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateCustomer, loadWorkspace, createWorkspaceUser, updateCustomer, saveTermsSettings, saveRulesSettings, saveReceiptSettings, saveSettings } from '../src/workspace.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
+import { createRecordCodeService } from '../src/record-codes.mjs';
+
+function observeReads(database, onRead) {
+  const wrap = (reference, label) => new Proxy(reference, { get(target, property) {
+    if (property === 'get') return async () => { await onRead(label); return target.get(); };
+    if (['where', 'limit', 'orderBy', 'startAfter'].includes(property)) return (...args) => wrap(target[property](...args), label);
+    if (property === 'doc') return id => wrap(target.doc(id), `${label}/${id}`);
+    return target[property];
+  } });
+  return { collection: name => wrap(database.collection(name), name) };
+}
+
+test('workspace starts settings and stock reads while the record page is still pending', async () => {
+  const reads = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const db = observeReads(memoryFirestore(), async name => { reads.push(name); await gate; });
+  const pending = loadWorkspace(db, 'OWNER', new Date(), { view: 'Customers' });
+  await new Promise(resolve => setImmediate(resolve));
+  for (const name of ['customers', 'items', 'settings/business', 'settings/pricing']) assert.ok(reads.includes(name), `${name} must start before the first read finishes`);
+  release(); await pending;
+});
+
+test('Settings and Rates fetch their own dependencies rather than rental history collections', async () => {
+  for (const view of ['Settings', 'Rates & Fees']) {
+    const reads = [];
+    const db = observeReads(memoryFirestore(), name => { reads.push(name); });
+    const result = await loadWorkspace(db, 'OWNER', new Date(), { view });
+    for (const name of ['rentals', 'verification_requests', 'item_status_history', 'item_condition_records', 'maintenance_records', 'audit_logs']) assert.ok(!reads.includes(name), `${view} does not need ${name}`);
+    assert.ok(result.pricing.products.length > 0);
+    assert.ok(reads.includes('settings/business'));
+    assert.equal(reads.includes('users'), view === 'Settings');
+  }
+});
+
+test('web workspace omits equipment photo payloads while preserving analytics metadata and mobile images', async () => {
+  const db = memoryFirestore({ items: { ball: { name: 'Ball', image_data: 'data:image/png;base64,' + 'A'.repeat(100000), item_code: 'EQUIP-001', is_active: true, created_at: new Date('2026-01-01') } } });
+  const report = await loadWorkspace(db, 'OWNER', new Date(), { view: 'Reports' });
+  assert.equal(report.items[0].image_data, undefined);
+  assert.equal(report.items[0].item_code, 'EQUIP-001');
+  assert.ok(JSON.stringify(report).length < 30000);
+  assert.equal(db.data('items', 'ball').image_data.length, 100022, 'stored record stays intact');
+  const mobile = await loadWorkspace(db, 'OPERATOR', new Date(), { mobile: true });
+  assert.ok(mobile.items[0].image_data.startsWith('data:image/png'));
+});
+
+test('saved audit/history references survive workspace serialization without a per-record database reread', async () => {
+  const database = memoryFirestore({
+    audit_logs: Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`audit${index}`, { audit_code: `A-${String(index + 1).padStart(4, '0')}`, actor_type: 'SYSTEM', action: 'ITEM_UPDATED', created_at: new Date() }])),
+    item_status_history: { changed: { history_code: 'HIST-0001', item_id: 'ball', old_status: 'AVAILABLE', new_status: 'RENTED', changed_at: new Date() } }
+  });
+  const workspace = await loadWorkspace(database, 'OWNER', new Date(), { view: 'Reports' });
+  assert.equal(workspace.auditLogs.find(row => row.id === 'audit0').audit_code, 'A-0001');
+  assert.equal(workspace.statusHistory[0].history_code, 'HIST-0001');
+  let rereads = 0;
+  const reader = observeReads(database, () => { rereads++; });
+  const result = await createRecordCodeService(reader).enrich(workspace);
+  assert.equal(result.auditLogs.length, 100);
+  assert.equal(rereads, 0, 'reference enrichment must not reread every already-normalized log record');
+});
 
 test('customer validation normalizes safe directory fields', () => {
   assert.deepEqual(validateCustomer({ fullName: '  Maria Santos ', code: ' cust-001 ', email: 'MARIA@EXAMPLE.COM', phone: ' 09171234567 ', address: ' Los Baños ' }), { full_name: 'Maria Santos', search_name: 'maria santos', customer_code: 'CUST-001', email: 'maria@example.com', phone: '09171234567', address: 'Los Baños' });

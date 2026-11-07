@@ -1254,9 +1254,14 @@ var workspacePages = /* @__PURE__ */ new Set([
   "ESP32 terminal"
 ]);
 function appearanceSettingsHtml(theme) {
-  return `<section class="appearance-settings" aria-label="Appearance settings"><p>A comfortable workspace, day or night.</p><div class="theme-setting"><span class="theme-setting-icon">${icon(
-    "moon"
-  )}</span><div><label id="dark-mode-label">Dark mode</label><small>Use a softer, darker palette across your workspace.</small></div><button id="dark-mode" class="theme-switch" type="button" role="switch" aria-labelledby="dark-mode-label" aria-checked="${theme === "dark"}"><span></span></button></div><div class="theme-preference-note"><span id="theme-status" role="status">${theme === "dark" ? "Dark mode is on" : "Light mode is on"}</span><small>Saved on this browser \xB7 Applies to login and dashboard</small></div></section>`;
+  return `<section class="appearance-settings" aria-label="Appearance settings">
+    <div class="settings-theme-previews" role="group" aria-label="Color theme">${["light", "dark"].map((mode) => `
+      <button type="button" id="settings-theme-${mode}" class="settings-theme-example ${mode === theme ? "is-current" : ""}" data-settings-theme="${mode}" aria-pressed="${mode === theme}">
+        <div class="settings-theme-canvas is-${mode}" aria-hidden="true"><div class="settings-theme-side"><i></i><i></i><i></i><i></i></div><div class="settings-theme-page"><i></i><div><span></span><span></span></div><p></p><p></p></div></div>
+        <span>${mode === "light" ? "Light" : "Dark"}${mode === theme ? '<small aria-hidden="true">Current</small>' : ""}</span>
+      </button>`).join("")}</div>
+    <div class="theme-preference-note"><span id="theme-status" role="status">${theme === "dark" ? "Dark mode is on" : "Light mode is on"}</span><small>Saved on this browser</small></div>
+  </section>`;
 }
 function PageHeading({ page, reportSection }) {
   const [caption, description, glyph] = pageInfo[page] || pageInfo.Dashboard;
@@ -1329,6 +1334,7 @@ function WorkspaceModuleSection({
   onNavigate
 }) {
   const containerRef = useRef(null);
+  const renderedRef = useRef(null);
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -1344,11 +1350,15 @@ function WorkspaceModuleSection({
     } catch {
     }
     const html = workspaceUI.render(page, user, appearanceSettingsHtml(theme));
-    container.innerHTML = html;
-    const themeSwitch = container.querySelector("#dark-mode");
-    if (themeSwitch) {
-      themeSwitch.onclick = () => onSetTheme(theme === "dark" ? "light" : "dark");
+    if (page !== "Payments" && renderedRef.current?.page === page && renderedRef.current?.html === html) {
+      workspaceUI.syncIfNeeded(page, onTriggerRender);
+      return;
     }
+    container.innerHTML = html;
+    renderedRef.current = { page, html };
+    container.querySelectorAll("[data-settings-theme]").forEach((button) => {
+      button.onclick = () => onSetTheme(button.dataset.settingsTheme);
+    });
     container.querySelectorAll("[data-page]").forEach((el) => {
       el.onclick = (event) => {
         event.preventDefault();
@@ -1433,6 +1443,16 @@ function WorkspaceShell({
   renderTick,
   onTriggerRender
 }) {
+  const prefetchTimer = useRef(null);
+  useEffect(() => () => clearTimeout(prefetchTimer.current), []);
+  const cancelPagePrefetch = () => clearTimeout(prefetchTimer.current);
+  const queuePagePrefetch = (target) => {
+    cancelPagePrefetch();
+    if (target === page || navigator.connection?.saveData) return;
+    prefetchTimer.current = setTimeout(() => {
+      void workspaceUI.prefetch?.(target);
+    }, 120);
+  };
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(
     () => typeof window !== "undefined" ? window.matchMedia("(max-width:720px)").matches : false
@@ -1714,6 +1734,10 @@ function WorkspaceShell({
                 "aria-label": buttonLabel,
                 title: buttonLabel,
                 "aria-current": active ? "page" : void 0,
+                onPointerEnter: () => queuePagePrefetch(target),
+                onPointerLeave: cancelPagePrefetch,
+                onFocus: () => queuePagePrefetch(target),
+                onBlur: cancelPagePrefetch,
                 onClick: (e) => {
                   e.preventDefault();
                   setMobileDrawerOpen(false);
@@ -2029,6 +2053,29 @@ var dashboardSnapshot = (value) => value ? JSON.stringify(
   Object.fromEntries(Object.entries(value).filter(([key]) => key !== "refreshedAt"))
 ) : "";
 var liveRentalPages = /* @__PURE__ */ new Set(["Rentals", "Returns", "Transaction History"]);
+function playNotificationChime() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(698.46, now);
+    osc.frequency.exponentialRampToValueAtTime(880, now + 0.12);
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.exponentialRampToValueAtTime(1e-3, now + 0.45);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.45);
+  } catch {
+  }
+}
 function App() {
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState(null);
@@ -2052,7 +2099,12 @@ function App() {
   );
   const [sidebarCollapsed, setSidebarCollapsedState] = useState(() => {
     try {
-      return localStorage.getItem("rent-play-sidebar-collapsed") === "true";
+      const saved = localStorage.getItem("rent-play-sidebar-collapsed");
+      if (saved !== null) return saved === "true";
+      if (typeof window !== "undefined" && window.innerWidth <= 1100 && window.innerWidth > 720) {
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
@@ -2098,13 +2150,42 @@ function App() {
     }
     passwordResetCountdownRef.current = timer;
   }, []);
-  const toast = useCallback((message) => {
+  const toast = useCallback((message, options = {}) => {
     const el = document.querySelector("#toast");
     if (!el) return;
-    el.textContent = message;
-    el.classList.add("visible");
     clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => el.classList.remove("visible"), 4e3);
+    if (typeof message === "string" && !options.actionLabel) {
+      el.textContent = message;
+      el.classList.remove("has-action");
+    } else {
+      el.innerHTML = "";
+      el.classList.add("has-action");
+      const textSpan = document.createElement("span");
+      textSpan.textContent = typeof message === "string" ? message : (message?.text || "");
+      el.appendChild(textSpan);
+      if (options.actionLabel && options.onAction) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "toast-action-btn";
+        btn.textContent = options.actionLabel;
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          el.classList.remove("visible");
+          options.onAction();
+        };
+        el.appendChild(btn);
+      }
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "toast-close-btn";
+      closeBtn.setAttribute("aria-label", "Dismiss notification");
+      closeBtn.textContent = "✕";
+      closeBtn.onclick = () => el.classList.remove("visible");
+      el.appendChild(closeBtn);
+    }
+    el.classList.add("visible");
+    const duration = options.duration || (options.actionLabel ? 8e3 : 4e3);
+    toastTimerRef.current = setTimeout(() => el.classList.remove("visible"), duration);
   }, []);
   const setTheme = useCallback((next) => {
     const resolved = next === "dark" ? "dark" : "light";
@@ -2224,6 +2305,7 @@ function App() {
       }
       if (["POST", "PUT", "PATCH", "DELETE"].includes(String(options.method || "GET").toUpperCase()) && path !== "/pricing/quote" && !path.startsWith("/notifications") && !path.startsWith("/auth/")) {
         c.workspaceUI?.invalidate();
+        c.inventoryController?.invalidate();
       }
       return result;
     },
@@ -2238,9 +2320,6 @@ function App() {
         resolvedSection = nextReportSection || (currentPage === "Reports" ? c.workspaceUI?.reportSection() : "performance") || "performance";
         c.workspaceUI?.setReportSection(resolvedSection);
         setReportSection(resolvedSection);
-      }
-      if (workspacePages.has(next) && !(next === "Reports" && currentPage === "Reports")) {
-        c.workspaceUI?.invalidate();
       }
       pageRef.current = next;
       setPage(next);
@@ -2309,15 +2388,35 @@ function App() {
       confirmSubmit,
       showEquipmentDetails: (id) => c.inventoryController.details(id),
       onMaintenanceSaved: () => c.inventoryController.refresh({ force: true }),
+      onReportSectionChange: setReportSection,
       navigate: (...args) => c.goTo(...args)
     });
     c.workspaceUI.setReportSection(reportSectionForPath(location.pathname));
     c.rentalNotifications = createRentalNotifications({
       api: (...args) => c.api(...args),
       onChange: () => setNotificationVersion((v) => v + 1),
-      onAlert: (notification, count) => toast(
-        count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`
-      )
+      onAlert: (notification, count) => {
+        playNotificationChime();
+        if (count > 1) {
+          toast(`${count} new rental updates. Open notifications to review them.`, {
+            actionLabel: "View notifications",
+            onAction: () => {
+              notificationBellRef.current?.click();
+            }
+          });
+        } else {
+          toast(`🔔 ${notification.title}: ${notification.message}`, {
+            actionLabel: notification.rental_id ? "Review request" : "View",
+            onAction: async () => {
+              if (notification.rental_id) {
+                await c.workspaceUI.openTransaction(notification.rental_id);
+              } else if (notification.page) {
+                onNavigate(notification.page);
+              }
+            }
+          });
+        }
+      }
     });
   }
   const refresh = useCallback(
@@ -2472,6 +2571,29 @@ function App() {
     c.rentalNotifications.setAccount(user.id);
   }, [user, stopRentalEventStream, syncRentalEventStream]);
   useEffect(() => {
+    if (!user?.id || user.mustChangePassword) return;
+    let active = true;
+    const c = controllersRef.current;
+    const warmPages = async () => {
+      const current = pageRef.current;
+      if (workspacePages.has(current) && current !== "Payments") await c.workspaceUI.load().catch(() => {
+      });
+      if (!active || userRef.current?.id !== user.id) return;
+      await Promise.all([
+        c.workspaceUI.preloadPages({ skipViews: [pageRef.current] }),
+        c.inventoryController.prefetch()
+      ]);
+    };
+    const timer = setTimeout(() => {
+      void warmPages();
+    }, 150);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      c.workspaceUI.cancelPreload();
+    };
+  }, [user?.id, user?.mustChangePassword]);
+  useEffect(() => {
     if (!user || user.mustChangePassword) return;
     const displayPage = page === "Reports" ? {
       performance: "Performance",
@@ -2513,16 +2635,12 @@ function App() {
     };
     const handlePopState = () => {
       const nextPage = pageForPath(location.pathname);
-      const sameReport = pageRef.current === "Reports" && nextPage === "Reports";
       pageRef.current = nextPage;
       setPage(nextPage);
       if (nextPage === "Reports") {
         const sec = reportSectionForPath(location.pathname);
         c.workspaceUI.setReportSection(sec);
         setReportSection(sec);
-      }
-      if (workspacePages.has(nextPage) && !sameReport) {
-        c.workspaceUI.invalidate();
       }
       if (userRef.current) {
         triggerRender();

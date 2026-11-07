@@ -1,5 +1,6 @@
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import esbuild from 'esbuild';
@@ -12,8 +13,18 @@ const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0
 const appRoutes = new Set(['/', '/equipment', '/customers', '/rates', '/rentals', '/returns', '/transactions', '/maintenance', '/verification', '/reports', '/reports/equipment', '/reports/operations', '/reports/forecast', '/reports/recommendations', '/reports/audit', '/settings', '/payments', '/profile']);
 const browserHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host;
 
+let reactBuild = null, reactInputStamp = '';
 async function buildReactUiDev() {
-  await esbuild.build({
+  if (reactBuild) return reactBuild;
+  reactBuild = (async () => {
+    const directory = path.join(appRoot, 'src/react');
+    const files = (await readdir(directory)).sort();
+    const states = await Promise.all(files.map(name => stat(path.join(directory, name))));
+    const stamp = states.map((state, index) => `${files[index]}:${state.mtimeMs}:${state.size}`).join('|');
+    if (stamp === reactInputStamp) return;
+    const output = await stat(path.join(appRoot, 'src/react-ui.js')).catch(() => null);
+    if (!reactInputStamp && output && output.mtimeMs >= Math.max(...states.map(state => state.mtimeMs))) { reactInputStamp = stamp; return; }
+    await esbuild.build({
     entryPoints: [path.join(appRoot, 'src/react/index.jsx')],
     outfile: path.join(appRoot, 'src/react-ui.js'),
     bundle: true,
@@ -35,7 +46,10 @@ async function buildReactUiDev() {
       }
     ],
     logLevel: 'silent'
-  });
+    });
+    reactInputStamp = stamp;
+  })();
+  try { await reactBuild; } finally { reactBuild = null; }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -65,7 +79,10 @@ const server = http.createServer(async (req, res) => {
     const browserModule = /^\/src\/[A-Za-z0-9_-]+\.js$/.test(pathname);
     if (!(appRoutes.has(pathname) || pathname === '/index.html' || browserModule || pathname === '/src/styles.css' || pathname.startsWith('/public/')) || pathname.split('/').some(part => part.startsWith('.'))) { res.writeHead(404).end(); return; }
     const body = await readFile(target);
-    res.writeHead(200, { 'Content-Type': types[path.extname(target)] || 'application/octet-stream', 'Cache-Control': 'no-store' }).end(body);
+    const etag = '"' + createHash('sha256').update(body).digest('base64url') + '"';
+    const headers = { 'Content-Type': types[path.extname(target)] || 'application/octet-stream', 'Cache-Control': path.extname(target) === '.html' ? 'no-store' : 'private, no-cache', ETag: etag };
+    if (req.headers['if-none-match'] === etag && ['GET', 'HEAD'].includes(req.method)) { res.writeHead(304, headers).end(); return; }
+    res.writeHead(200, headers); if (req.method === 'HEAD') res.end(); else res.end(body);
   } catch { res.writeHead(404).end('Not found'); }
 });
 server.on('error', error => {

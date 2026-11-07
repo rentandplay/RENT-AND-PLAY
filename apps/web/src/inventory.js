@@ -85,6 +85,8 @@ export function createInventory(h) {
   }
   let root, records = [], categories = [], pricingProducts = [], initialized = false, search = '', cat = '', status = 'all', scope = 'active', sort = 'name-asc', offset = 0, view = 'table', categoryLink = '';
   let inventoryView, inventoryRequest, pricingRequest, pricingLoaded = false, syncError = '', requestedCategory = '', sessionVersion = 0;
+  let inventoryLoadedAt = -Infinity, pricingLoadedAt = -Infinity, inventoryRevision = 0;
+  const clock = h.nowMs || Date.now;
   const pageSize = () => view === 'grid' ? 6 : 5;
   const download = (content, type, name) => { const url = URL.createObjectURL(new Blob([content], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
   const qrCalibrationKey = 'rent-play-qr-calibration', qrCalibrationDefaults = { offsetX: 0, offsetY: 0 };
@@ -148,11 +150,12 @@ export function createInventory(h) {
     return inventoryRequest;
   }
   async function loadPricing(force = false) {
+    if (force && pricingRequest) await pricingRequest.catch(() => {});
     if (pricingLoaded && !force) return pricingProducts;
     if (!pricingRequest) {
-      const version = sessionVersion;
+      const version = sessionVersion, revision = inventoryRevision;
       const pending = inventoryApi('/pricing').then(pricing => {
-        if (version === sessionVersion) { pricingProducts = pricing.products || []; pricingLoaded = true; if (initialized) draw(); }
+        if (version === sessionVersion && revision === inventoryRevision) { pricingProducts = pricing.products || []; pricingLoaded = true; pricingLoadedAt = clock(); if (initialized) draw(); }
         return pricingProducts;
       }).finally(() => { if (pricingRequest === pending) pricingRequest = null; });
       pricingRequest = pending;
@@ -172,18 +175,19 @@ export function createInventory(h) {
     }
   }
   async function refreshInventory({ force = false } = {}) {
-    const version = sessionVersion;
+    const version = sessionVersion, revision = inventoryRevision;
     // Pricing is supplementary: a slow catalog must never hold the inventory screen open.
-    void loadPricing(true).catch(() => {});
+    void loadPricing(force || clock() - pricingLoadedAt >= 300000).catch(() => {});
+    if (!force && initialized && clock() - inventoryLoadedAt < 30000) return false;
     try {
       const result = await loadInventory(force);
-      if (version !== sessionVersion) return false;
+      if (version !== sessionVersion || revision !== inventoryRevision) return false;
       if (!Array.isArray(result.items) || !Array.isArray(result.categories)) throw new Error('The server returned incomplete inventory data. Please try Refresh again.');
       const changed = !initialized || JSON.stringify(records) !== JSON.stringify(result.items) || JSON.stringify(categories) !== JSON.stringify(result.categories);
       const hadError = !!syncError;
       records = result.items; categories = result.categories; syncError = '';
       if (!initialized) applyLinkedCategory(requestedCategory);
-      initialized = true;
+      initialized = true; inventoryLoadedAt = clock();
       if (changed || hadError || inventoryView?.root !== root) draw();
       return changed;
     } catch (error) {
@@ -218,7 +222,7 @@ export function createInventory(h) {
   function switchScope(next) { scope = next; status = 'all'; offset = 0; draw(); }
   function reset() { search = ''; cat = ''; status = 'all'; scope = 'active'; offset = 0; draw(); }
   function resetCache() {
-    sessionVersion++; root = null; inventoryView = null; inventoryRequest = null; pricingRequest = null;
+    sessionVersion++; inventoryLoadedAt = -Infinity; pricingLoadedAt = -Infinity; root = null; inventoryView = null; inventoryRequest = null; pricingRequest = null;
     records = []; categories = []; pricingProducts = []; initialized = false; pricingLoaded = false; syncError = ''; requestedCategory = ''; categoryLink = '';
     search = ''; cat = ''; status = 'all'; scope = 'active'; sort = 'name-asc'; offset = 0; view = 'table';
   }
@@ -831,7 +835,7 @@ export function createInventory(h) {
     } catch (err) { showModal('Equipment label unavailable', errorBody(err)); }
   }
   async function saveQrSheet(items) { if (!items.length) return; try { const result = await api('/inventory/qr-labels'), labels = new Map(result.items.map(item => [String(item.id), item])); download(qrSheet(items, labels, { ...qrCalibration, ...qrPrintSettings }), 'text/html;charset=utf-8', `rent-play-qr-labels-${new Date().toISOString().slice(0, 10)}.html`); toast(`Printable QR sheet saved for ${items.length} physical unit${items.length === 1 ? '' : 's'}. Open it and choose Print labels.`); } catch (err) { showModal('QR sheet unavailable', errorBody(err)); } }
-  return { mount, refresh: refreshInventory, reset: resetCache, details };
+  return { mount, prefetch: () => refreshInventory().catch(() => {}), refresh: refreshInventory, invalidate() { inventoryRevision++; inventoryLoadedAt = -Infinity; pricingLoadedAt = -Infinity; }, reset: resetCache, details };
 }
 
 // Keep the inventory controls mounted while records change in the background.

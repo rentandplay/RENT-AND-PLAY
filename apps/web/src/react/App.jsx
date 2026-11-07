@@ -258,6 +258,7 @@ export function App() {
         !path.startsWith('/auth/')
       ) {
         c.workspaceUI?.invalidate();
+        c.inventoryController?.invalidate();
       }
       return result;
     },
@@ -282,9 +283,6 @@ export function App() {
           'performance';
         c.workspaceUI?.setReportSection(resolvedSection);
         setReportSection(resolvedSection);
-      }
-      if (workspacePages.has(next) && !(next === 'Reports' && currentPage === 'Reports')) {
-        c.workspaceUI?.invalidate();
       }
       pageRef.current = next;
       setPage(next);
@@ -357,6 +355,7 @@ export function App() {
       confirmSubmit,
       showEquipmentDetails: id => c.inventoryController.details(id),
       onMaintenanceSaved: () => c.inventoryController.refresh({ force: true }),
+      onReportSectionChange: setReportSection,
       navigate: (...args) => c.goTo(...args)
     });
     c.workspaceUI.setReportSection(reportSectionForPath(location.pathname));
@@ -542,6 +541,24 @@ export function App() {
     c.rentalNotifications.setAccount(user.id);
   }, [user, stopRentalEventStream, syncRentalEventStream]);
 
+  // Warm first-visit page data after authentication, without rendering hidden pages.
+  useEffect(() => {
+    if (!user?.id || user.mustChangePassword) return;
+    let active = true;
+    const c = controllersRef.current;
+    const warmPages = async () => {
+      const current = pageRef.current;
+      if (workspacePages.has(current) && current !== 'Payments') await c.workspaceUI.load().catch(() => {});
+      if (!active || userRef.current?.id !== user.id) return;
+      await Promise.all([
+        c.workspaceUI.preloadPages({ skipViews: [pageRef.current] }),
+        c.inventoryController.prefetch()
+      ]);
+    };
+    const timer = setTimeout(() => { void warmPages(); }, 150);
+    return () => { active = false; clearTimeout(timer); c.workspaceUI.cancelPreload(); };
+  }, [user?.id, user?.mustChangePassword]);
+
   // Document title sync for workspace pages
   useEffect(() => {
     if (!user || user.mustChangePassword) return;
@@ -596,16 +613,12 @@ export function App() {
     };
     const handlePopState = () => {
       const nextPage = pageForPath(location.pathname);
-      const sameReport = pageRef.current === 'Reports' && nextPage === 'Reports';
       pageRef.current = nextPage;
       setPage(nextPage);
       if (nextPage === 'Reports') {
         const sec = reportSectionForPath(location.pathname);
         c.workspaceUI.setReportSection(sec);
         setReportSection(sec);
-      }
-      if (workspacePages.has(nextPage) && !sameReport) {
-        c.workspaceUI.invalidate();
       }
       if (userRef.current) {
         triggerRender();

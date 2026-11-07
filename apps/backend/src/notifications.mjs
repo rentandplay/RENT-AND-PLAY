@@ -261,7 +261,7 @@ export function createNotificationDispatcher(db, messaging, { now = () => new Da
         const profiles = new Map(await Promise.all([...new Set(devices.docs.map(doc => doc.data().user_id))].map(async id => [id, await profileDb.collection('users').doc(id).get()])));
         const allowed = devices.docs.filter(doc => {
           const device = doc.data(), profile = profiles.get(device.user_id), role = profile?.exists && profile.data().role;
-          return profile?.exists && profile.data().is_active !== false && (event.audience === 'STAFF'
+          return profile?.exists && profile.data().is_active !== false && profile.data().notification_preferences?.push_enabled !== false && (!/REMINDER|DUE_SOON/.test(event.type || '') || profile.data().notification_preferences?.return_reminders !== false) && (event.audience === 'STAFF'
             ? device.audience === 'STAFF' && (isStaffRole(role) || String(device.user_id) === String(ownerUid))
             : device.audience === 'CUSTOMER' && device.user_id === event.customer_id && isCustomerRole(role));
         });

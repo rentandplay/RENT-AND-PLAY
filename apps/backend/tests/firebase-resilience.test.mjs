@@ -180,7 +180,9 @@ test('mobile staff loads current rentals and fetches completed history through a
   const history=await services.recordPage('rentals',{status:'COMPLETED',limit:25});
   assert.equal(history.records[0].status,'COMPLETED');
   assert.ok(workspace._dashboard); assert.ok(workspace._inventory);
-  for (const name of ['audit_logs', 'item_status_history', 'item_condition_records', 'users', 'settings']) {
+  assert.ok(workspace.settings.receipt_header_title);
+  assert.equal(fixture.reads.filter(read => read.label.startsWith('settings')).length, 1);
+  for (const name of ['audit_logs', 'item_status_history', 'item_condition_records', 'users']) {
     assert.equal(fixture.reads.some(read => read.label === name || read.label.startsWith(name + '.')), false, name);
   }
   assert.equal(fixture.reads.some(read => read.label.startsWith('maintenance_records')), true);

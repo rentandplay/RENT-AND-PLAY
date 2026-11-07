@@ -63,7 +63,7 @@ export function createRentalEventHub({ heartbeatMs = 25000, maxConnectionMs = 50
         continue;
       }
       if (client.guest) {
-        if (allCustomers || ['inventory.changed', 'category.changed', 'catalog.changed', 'data.changed'].includes(eventType)) {
+        if (allCustomers || ['inventory.changed', 'category.changed', 'catalog.changed', 'settings.changed', 'data.changed'].includes(eventType)) {
           write(client, eventType, data);
         }
         continue;
@@ -105,7 +105,7 @@ export function createRentalEventHub({ heartbeatMs = 25000, maxConnectionMs = 50
       });
       response.flushHeaders?.();
       response.write('retry: 15000\n\n');
-      write(client, 'ready', { revision: sequence });
+      write(client, 'ready', { revision: sequence, serverTime: new Date().toISOString() });
       return () => remove(client);
     },
     publishRental({ rentalId = '', customerId = '', allCustomers = false } = {}) {

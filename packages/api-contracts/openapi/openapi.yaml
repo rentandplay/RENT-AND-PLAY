@@ -4,6 +4,38 @@ info:
   version: 0.5.0
   description: Local Lakewood delivery, scheduled rentals, verified payment records and physical return. ESP32 routes default to standby (ENABLE_ESP32=false).
 paths:
+  /api/mobile/settings:
+    get:
+      summary: Public allowlisted business details for customer discovery and checkout
+      description: Returns settings including announcement_enabled, announcement_text, opens_at, closes_at, timezone, contact fields and grace period. Refetch on settings.changed. Responses include an X-Server-Time UTC header.
+      responses:
+        '200': {description: Current public business settings}
+  /api/mobile/payment-instructions:
+    get:
+      summary: Current cash policy and owner QR transfer instructions
+      security: [{customerFirebaseToken: []}, {mobileAdminToken: []}]
+      responses:
+        '200': {description: accept_cash plus configured QR image and account details}
+  /api/mobile/terms:
+    get:
+      summary: Current owner terms, rental agreement, privacy, refunds and accepted IDs
+      responses:
+        '200': {description: Snake-case policy fields and current terms_version and rental_terms_version}
+  /api/customers/{customerId}/trust:
+    get:
+      summary: Staff-only customer rental history and physical ID verification status
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      parameters:
+        - {in: path, name: customerId, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Trust object with completed_rentals, active_overdue and physical_id_verified}
+        '401': {description: Staff authentication required}
+  /api/rental-events:
+    get:
+      summary: SSE for inventory, settings and private rental updates
+      description: Guests receive public catalog and settings changes only. The ready event includes serverTime in UTC. Authenticated customer rental events remain scoped to that customer.
+      responses:
+        '200': {description: text/event-stream}
   /api/auth/email-check:
     post:
       summary: Validate email syntax
@@ -1148,6 +1180,7 @@ components:
         transactionCode: {type: string, maxLength: 256}
         inventoryCode: {type: string, maxLength: 256}
         customerVerified: {type: boolean, enum: [true]}
+        physicalIdVerified: {type: boolean, description: Explicit staff inspection of physical ID; never inferred from customer acknowledgement}
         customerTermsAcknowledged: {type: boolean, enum: [true], description: Required for WALK_IN; staff witnessed customer agreement to total, duration, late fees, grace and return terms}
         paymentVerified: {type: boolean, description: Required true unless saved full payment was already received}
         manualLookup: {type: boolean, description: Allows the saved public rental reference instead of its secret QR token}
@@ -1236,6 +1269,13 @@ components:
         hasAcknowledgedIdRequirement: {type: boolean, description: Acknowledges the requirement to show physical ID at handoff; not identity verification}
         validIdUrl: {type: string, deprecated: true, enum: [physical_id_presented], description: Compatibility acknowledgement for older Android clients}
         hasAcceptedTerms: {type: boolean}
+        termsVersion: {type: string, maxLength: 40}
+        notification_preferences:
+          type: object
+          additionalProperties: false
+          properties:
+            push_enabled: {type: boolean, default: true}
+            return_reminders: {type: boolean, default: true}
     MobileReturnReview:
       type: object
       required: [action]

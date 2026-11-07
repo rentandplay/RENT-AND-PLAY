@@ -1,6 +1,6 @@
 # Customer rental and delivery flow
 
-The Android customer app, Android admin app, web admin, and backend use the same rental records. The owner configures the payment QR in web **Settings → Business → InstaPay QR**. Operators can prepare and hand off rentals from either admin client. The ESP32 remains on standby and is not required for this flow.
+The Android customer app, Android admin app, web admin, and backend use the same rental records. The owner configures the payment QR in web **Settings → Business → InstaPay QR**. Operators can prepare and hand off rentals from either admin client. The web counter can use ESP32 confirmation when hardware mode is enabled. Resort handover is confirmed on the staff device at the resort. See [the current counter workflow review](../rental-flow-ux-review.md).
 
 ## Rental stages
 
@@ -45,7 +45,7 @@ Rent & Play operates from its own establishment in Lakewoods Subdivision, Los Ba
 5. Staff can print/save the rental receipt from rental details on web or Android after handover. It includes the saved public reference, unit, customer contact, location, start/due times and saved payments/late rates. It does not expose internal IDs or secret QR tokens. No customer app is needed for returns: staff scans the actual equipment at physical receipt, which stops the clock but leaves the unit under inspection. Inspection then completes the rental and sends damaged units to maintenance. Final balances and refunds remain separate audited money movements.
 6. Web Customers can add app access to an existing walk-in profile later. Firebase Auth uses that exact customer ID; the customer code and every existing rental stay linked, and signing in on Android reads the same history. Account agreement acceptance remains the customer's own action at first app use.
 
-Existing customer-app requests and legacy counter rentals keep their existing QR handover path. Walk-in fields are accepted only on staff-created rentals, with `request_source=WALK_IN`, `rental_channel=WALK_IN`, and `fulfillment_mode=SHOP_HANDOVER|DELIVERY`. ESP32 remains on standby.
+Existing customer-app requests and legacy counter rentals keep their existing QR handover path. Walk-in fields are accepted only on staff-created rentals, with `request_source=WALK_IN`, `rental_channel=WALK_IN`, and `fulfillment_mode=SHOP_HANDOVER|DELIVERY`. ESP32 confirmation is available for shop handover, shop departure and shop return inspection when hardware mode is enabled.
 
 ## Current scope
 

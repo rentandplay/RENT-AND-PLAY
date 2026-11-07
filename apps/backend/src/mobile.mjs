@@ -5,6 +5,7 @@ import { normalizeRole } from './roles.mjs';
 import { nameError, phoneError, validationFailure } from './account-validation.mjs';
 import { pageLimit } from './query-validation.mjs';
 import { DEFAULT_TERMS_AND_CONDITIONS, DEFAULT_RENTAL_TERMS, DEFAULT_PRIVACY_POLICY, DEFAULT_REFUND_POLICY, DEFAULT_ACCEPTED_IDS, DEFAULT_TERMS_VERSION, DEFAULT_RENTAL_TERMS_VERSION } from './terms-constants.mjs';
+import { allocateCustomerCode } from './customer-codes.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const money = amount => `₱${Number(amount).toFixed(2)}`;
@@ -14,7 +15,10 @@ export const isMobileRental = rental => rental.request_source === 'MOBILE_APP' |
 export async function mobileProfile(db, claims, input = {}, method = 'GET', now = new Date(), onWrite = () => {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Profile details are required.');
   const userRef = db.collection('users').doc(String(claims.uid));
-  const { profile, created } = await db.runTransaction(async tx => {
+  const customerRef = db.collection('customers').doc(String(claims.uid));
+  const customerSnap = await customerRef.get();
+  const customerCode = !customerSnap.exists ? await allocateCustomerCode(db, now) : null;
+  const { profile, created, customerCreated } = await db.runTransaction(async tx => {
     const doc = await tx.get(userRef);
     const existing = doc.exists ? doc.data() : null;
     if (!existing && claims.email_verified !== true) fail(403, 'Verify your email before creating an account.');
@@ -30,6 +34,11 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     const created = existing ? { ...existing, role: existingRole } : { full_name: clean(input.name || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name'), email: claims.email || '', phone: clean(input.phone || '', 40, 'phone'), role: 'CUSTOMER', is_active: true, hasAcceptedTerms: false, created_at: now };
     const changes = {};
     if (method === 'PATCH') {
+      if (input.notification_preferences !== undefined) {
+        const prefs = input.notification_preferences;
+        if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs) || Object.keys(prefs).some(key => !['push_enabled', 'return_reminders'].includes(key)) || Object.values(prefs).some(value => typeof value !== 'boolean')) fail(400, 'Choose valid notification preferences.');
+        changes.notification_preferences = { push_enabled: true, return_reminders: true, ...existing?.notification_preferences, ...prefs };
+      }
       if (input.name !== undefined) { validationFailure(nameError(input.name)); changes.full_name = clean(input.name, 150, 'name'); changes.name = changes.full_name; }
       if (input.phone !== undefined) { validationFailure(phoneError(input.phone, false)); changes.phone = clean(input.phone, 40, 'phone'); }
       if (input.hasAcknowledgedIdRequirement !== undefined) {
@@ -56,10 +65,26 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     if (method === 'PATCH' || (!existing && method === 'POST' && Object.keys(changes).length)) {
       changes.updated_at = now;
     }
-    if (method === 'PATCH' && existingRole === 'CUSTOMER') {
-      const customerRef = db.collection('customers').doc(String(claims.uid));
+    let custCreated = false;
+    const targetRole = existing ? existingRole : 'CUSTOMER';
+    if (targetRole === 'CUSTOMER') {
       const customerDoc = await tx.get(customerRef);
-      if (customerDoc.exists) {
+      if (!customerDoc.exists && customerCode) {
+        const full_name = (changes.full_name || created.full_name || claims.name || claims.email?.split('@')[0] || 'Customer').trim();
+        tx.create(customerRef, {
+          full_name,
+          search_name: full_name.toLowerCase().replace(/\s+/g, ' '),
+          customer_code: customerCode,
+          email: claims.email || created.email || null,
+          phone: changes.phone || created.phone || null,
+          address: null,
+          auth_uid: String(claims.uid),
+          is_active: true,
+          created_at: created.created_at || now,
+          updated_at: now
+        });
+        custCreated = true;
+      } else if (customerDoc.exists && method === 'PATCH') {
         const customerChanges = {};
         if (changes.full_name !== undefined) { customerChanges.full_name = changes.full_name; customerChanges.search_name = changes.full_name.toLowerCase().replace(/\s+/g,' '); }
         if (changes.phone !== undefined) customerChanges.phone = changes.phone || null;
@@ -71,10 +96,10 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     }
     if (!existing) tx.create(userRef, { ...created, ...changes });
     else if (method === 'PATCH') tx.update(userRef, changes);
-    return { profile: { ...created, ...changes }, created: !existing };
+    return { profile: { ...created, ...changes }, created: !existing, customerCreated: custCreated };
   });
-  if (created || method === 'PATCH') onWrite(method === 'PATCH' ? ['users', 'customers'] : ['users']);
-  return { user: serializeMobile({ id: claims.uid, uid: claims.uid, name: profile.full_name || profile.name || '', full_name: profile.full_name || profile.name || '', email: profile.email || claims.email || '', phone: profile.phone || '', role: normalizeRole(profile.role) || 'CUSTOMER', mustChangePassword: profile.must_change_password === true, is_active: profile.is_active !== false, hasAcknowledgedIdRequirement: profile.hasAcknowledgedIdRequirement ?? Boolean(profile.validIdUrl || profile.valid_id_url), profileImageUrl: profile.profileImageUrl || null, hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false, createdAt: profile.created_at || profile.createdAt || null }) };
+  if (created || customerCreated || method === 'PATCH') onWrite(method === 'PATCH' || customerCreated ? ['users', 'customers'] : ['users']);
+  return { user: serializeMobile({ id: claims.uid, uid: claims.uid, name: profile.full_name || profile.name || '', full_name: profile.full_name || profile.name || '', email: profile.email || claims.email || '', phone: profile.phone || '', role: normalizeRole(profile.role) || 'CUSTOMER', notification_preferences: { push_enabled: true, return_reminders: true, ...profile.notification_preferences }, mustChangePassword: profile.must_change_password === true, is_active: profile.is_active !== false, hasAcknowledgedIdRequirement: profile.hasAcknowledgedIdRequirement ?? Boolean(profile.validIdUrl || profile.valid_id_url), profileImageUrl: profile.profileImageUrl || null, hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false, createdAt: profile.created_at || profile.createdAt || null }) };
 }
 
 // Only configured equipment belongs in the customer catalog; admin inventory retains all records.
@@ -222,4 +247,27 @@ export async function mobileRentalList(db, actor, rentalId = '', options = {}) {
     };
   }).sort((a, b) => (asDate(b.created_at || b.start_at)?.getTime() || 0) - (asDate(a.created_at || a.start_at)?.getTime() || 0));
   return serializeMobile(rentalId ? { rental: result[0] } : { rentals: result, nextCursor:options.nextCursor||null });
+}
+
+
+// Public, deliberately allowlisted business details. Never expose staff settings or secrets.
+export async function mobileBusinessSettings(db) {
+  const doc = await db.collection('settings').doc('business').get();
+  const saved = doc.exists ? doc.data() : {};
+  const defaults = { business_name: 'Rent & Play', location: 'Los Baños, Laguna', timezone: 'Asia/Manila', opens_at: '08:00', closes_at: '20:00', default_late_grace_hours: 0, announcement_enabled: false, announcement_text: '', terms_version: '', contact_phone: '0992-768-5192', contact_channels: 'Call / Text / Viber' };
+  return { settings: Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, saved[key] ?? value])) };
+}
+
+export async function mobileCustomerTrust(db, id, now = new Date()) {
+  const doc = await db.collection('customers').doc(id).get();
+  if (!doc.exists) fail(404, 'Customer not found.');
+  const customer = doc.data();
+  const ids = [...new Set([id, customer.auth_uid].filter(Boolean))];
+  const snapshots = await Promise.all(ids.flatMap(uid => ['customer_id', 'customerId'].map(field => db.collection('rentals').where(field, '==', uid).get())));
+  const rentals = [...new Map(snapshots.flatMap(snapshot => snapshot.docs.map(docData)).map(row => [row.id, row])).values()];
+  return { trust: {
+    completed_rentals: rentals.filter(row => String(row.status).toUpperCase() === 'COMPLETED').length,
+    active_overdue: rentals.filter(row => ['ACTIVE', 'RENTED'].includes(String(row.status).toUpperCase()) && !row.received_at && asDate(row.due_at || row.dueDate)?.getTime() < now.getTime()).length,
+    physical_id_verified: customer.physical_id_verified === true || rentals.some(row => row.handoff_verification?.physical_id_verified === true)
+  } };
 }

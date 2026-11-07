@@ -33,9 +33,14 @@ export function createTransactionWorkflow(h) {
     const modeLabel = mode === 'SHOP_DISPATCH' ? 'SHOP DISPATCH (RESORT DELIVERY)' : release ? 'RENTAL HANDOVER' : 'RETURN INTAKE';
     const itemName = request.item_name || rental?.item_name || 'Equipment';
     const rentalCode = request.rental_code || rental?.rental_code || request.rental_id || '';
-    const oledCard = `<div class="esp32-oled-preview ${pending ? 'is-pending' : request.status === 'CONFIRMED' ? 'is-confirmed' : ''}"><div class="esp32-oled-header"><span>SSD1306 OLED &middot; ${e(request.terminal_code || 'TERM-01')}</span><span>${pending ? getIcon('volume') + ' BUZZER ARMED' : request.status === 'CONFIRMED' ? '✓ CONFIRMED' : e(request.status)}</span></div><div class="esp32-oled-screen"><div class="oled-line oled-mode">${e(modeLabel)}</div><div class="oled-line oled-item">${e(itemName)}</div><div class="oled-line oled-code">ID: ${e(rentalCode)} &middot; PIN: ${e(request.verification_code || '------')}</div><div class="oled-line oled-cta">${pending ? '[ PRESS GPIO 35 BUTTON TO CONFIRM ]' : request.status === 'CONFIRMED' ? (mode === 'SHOP_DISPATCH' ? 'DISPATCHED FOR RESORT DELIVERY' : release ? 'HANDOVER CONFIRMED · TIMER STARTED' : 'RETURN COMPLETED') : 'TRANSACTION CLOSED'}</div></div></div>`;
-    const hardwareBanner = pending ? `<div class="esp32-status-banner esp32-listening"><div class="esp32-pulse-dot"></div><div><strong>Awaiting Physical Button Press on Counter Terminal (${e(request.terminal_code || 'TERM-01')})</strong><small>SSD1306 OLED is active &amp; buzzer is armed. Press the physical button (GPIO 35) on the counter terminal to authorize.</small></div></div>` : request.status === 'CONFIRMED' ? `<div class="esp32-status-banner esp32-confirmed"><div class="esp32-check-circle">✓</div><div><strong>Physical Terminal Confirmation Received</strong><small>ESP32 Terminal (${e(request.terminal_code || 'TERM-01')}) confirmed via GPIO 35 button. Transaction saved to ledger.</small></div></div>` : '';
-    return `<p class="info-box" role="status">${e(message)}</p>${hardwareBanner}${oledCard}${pending ? `<div class="handoff-code"><small>Verification code</small><strong>${e(request.verification_code)}</strong><p>Terminal ${e(request.terminal_code || 'Not assigned')} · Expires ${e(formatDate(request.expires_at))}</p></div><div class="handoff-refresh"><p>Check confirmation to view the latest counter status.</p><button type="button" class="secondary" data-handoff-refresh>Check confirmation</button></div>` : ''}<p class="form-error" role="alert" data-handoff-error></p>${renderFeeBreakdown(rental, h)}${inspection ? `<section class="record-section"><h3>Recorded inspection</h3><dl class="record-fields"><div><dt>Condition</dt><dd>${e(inspection.condition || 'Not recorded')}</dd></div><div><dt>Inspection result</dt><dd>${e(inspection.result || 'Not recorded')}</dd></div><div><dt>Notes</dt><dd>${e(inspection.notes || 'Not recorded')}</dd></div></dl></section>` : ''}${renderRequestHistory([request], { ...h, requestLinks: false })}`;
+    const dispatch = mode === 'SHOP_DISPATCH';
+    const outcome = dispatch ? 'Shop departure confirmed. The rental timer stays stopped until the resort handoff.' : release ? 'Equipment handover confirmed. The rental timer has started.' : 'Return inspection confirmed. Review any remaining payment balance.';
+    const statusText = pending ? 'Press confirm on the counter terminal' : request.status === 'CONFIRMED' ? 'Terminal confirmation received' : 'Terminal request closed';
+    return `<div class="counter-handoff-status" role="status"><span class="counter-handoff-label">${e(modeLabel)}</span><h3>${e(statusText)}</h3><p>${e(pending ? 'Match the rental reference below with the terminal display before pressing its physical confirmation button.' : request.status === 'CONFIRMED' ? outcome : message)}</p></div>
+      <dl class="counter-handoff-facts"><div><dt>Equipment</dt><dd>${e(itemName)}</dd></div><div><dt>Rental reference</dt><dd>${e(rentalCode)}</dd></div><div><dt>Counter terminal</dt><dd>${e(request.terminal_code || 'Not assigned')}</dd></div>${pending ? `<div><dt>Request expires</dt><dd>${e(formatDate(request.expires_at))}</dd></div>` : ''}</dl>
+      ${pending ? `<div class="counter-handoff-code"><span>Verification code</span><strong>${e(request.verification_code)}</strong><p>The clock ${dispatch ? 'stays stopped during delivery' : release ? 'starts only after terminal confirmation' : 'uses the recorded physical receipt time'}.</p></div><div class="handoff-refresh"><p>Status updates automatically. If the terminal is unavailable, close this window and reopen the rental to review the offline fallback.</p><button type="button" class="secondary" data-handoff-refresh>Check confirmation</button></div>` : ''}
+      <p class="form-error" role="alert" data-handoff-error></p>
+      <details class="counter-handoff-details"><summary>Charges and recorded inspection</summary>${renderFeeBreakdown(rental, h)}${inspection ? `<section class="record-section"><h3>Recorded inspection</h3><dl class="record-fields"><div><dt>Condition</dt><dd>${e(inspection.condition || 'Not recorded')}</dd></div><div><dt>Inspection result</dt><dd>${e(inspection.result || 'Not recorded')}</dd></div><div><dt>Notes</dt><dd>${e(inspection.notes || 'Not recorded')}</dd></div></dl></section>` : ''}${renderRequestHistory([request], { ...h, requestLinks: false })}</details>`;
   }
   function bindHandoff() {
     modal.querySelector('[data-handoff-refresh]')?.addEventListener('click', refreshPendingHandoff);
@@ -236,12 +241,12 @@ export function createTransactionWorkflow(h) {
             </button>
           </div>
         </div>
-        <div class="terminal-hardware-grid">
+        <details class="terminal-device-details"><summary>Device specifications</summary><div class="terminal-hardware-grid">
           <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
             <span class="spec-icon">${getIcon('monitor')}</span>
             <div>
               <span class="spec-label">OLED Display</span>
-              <strong>${isOnline ? 'Active (128&times;64)' : 'Standby'}</strong>
+              <strong>128&times;64 display</strong>
               <small class="spec-sub">SSD1306 Panel</small>
             </div>
           </div>
@@ -249,7 +254,7 @@ export function createTransactionWorkflow(h) {
             <span class="spec-icon">${getIcon('radio')}</span>
             <div>
               <span class="spec-label">Physical Button</span>
-              <strong>${isOnline ? 'Armed &amp; Ready' : 'Standby'}</strong>
+              <strong>Physical confirmation</strong>
               <small class="spec-sub">Confirm trigger (GPIO 35)</small>
             </div>
           </div>
@@ -257,7 +262,7 @@ export function createTransactionWorkflow(h) {
             <span class="spec-icon">${getIcon('volume')}</span>
             <div>
               <span class="spec-label">Audible Buzzer</span>
-              <strong>${isOnline ? 'Alerts Enabled' : 'Muted'}</strong>
+              <strong>Request and result alerts</strong>
               <small class="spec-sub">Counter alert (GPIO 23)</small>
             </div>
           </div>
@@ -270,7 +275,7 @@ export function createTransactionWorkflow(h) {
             </div>
           </div>
         </div>
-      </section>
+      </details></section>
     `;
 
     const workflowGuide = `

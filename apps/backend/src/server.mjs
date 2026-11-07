@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
@@ -9,10 +10,10 @@ import { firebaseAuth as defaultFirebaseAuth, firebaseMessaging as defaultMessag
 import { loadDashboard, loadAnalyticsSummary } from './dashboard.mjs';
 import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createItem, updateItem, setItemQuantity, itemAction, createItemCategory, deleteItemCategory, deleteArchivedItem } from './inventory.mjs';
 import { updateProfile } from './profile.mjs';
-import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, saveTermsSettings, saveRulesSettings, saveReceiptSettings, createWorkspaceUser, updateWorkspaceUser } from './workspace.mjs';
+import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, saveTermsSettings, saveRulesSettings, saveReceiptSettings, createWorkspaceUser, updateWorkspaceUser, syncMissingCustomerProfiles } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
 import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, terminalPending, testTerminalPing, dispatchRentalToTerminal } from './transactions.mjs';
-import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions, mobileTerms } from './mobile.mjs';
+import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions, mobileTerms, mobileBusinessSettings, mobileCustomerTrust } from './mobile.mjs';
 import { createReadCache } from './read-cache.mjs';
 import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-errors.mjs';
 import { createBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt, completeRentalReturn, lookupRental, rentalTicket, changeAssignedUnit, settleRentalPayment, inspectionPhoto, submitRentalPaymentProof, rentalPaymentProof, reviewRentalPaymentProof, prepareRentalDelivery, MOBILE_RENTAL_TERMS_VERSION } from './rental-flow.mjs';
@@ -35,7 +36,7 @@ const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; c
 
 function explicitRefreshCollections(path) {
   if(path.startsWith('/api/records/'))return [{rentals:'rentals',customers:'customers',maintenance:'maintenance_records'}[path.split('/').at(-1)]];
-  if(path.startsWith('/api/finance/'))return ['payment_ledger','financial_daily','rental_financial_daily','rental_payment_totals','rentals'];
+  if(path.startsWith('/api/finance/'))return ['payment_ledger','financial_daily','rental_financial_daily','rental_payment_totals','rentals','terminals'];
   if(path==='/api/reports/daily')return ['rental_daily'];
   if (path === '/api/maintenance-staff') return ['users'];
   if (path.startsWith('/api/maintenance/')) return ['maintenance_records', 'maintenance_photos', 'items'];
@@ -58,7 +59,10 @@ async function serveWeb(req, res, requestPath) {
       if (error.code !== 'ENOENT' || nodePath.extname(pathname)) throw error;
       target = nodePath.join(webRoot, 'index.html'); content = await readFile(target);
     }
-    res.writeHead(200, { 'Content-Type': contentTypes[nodePath.extname(target)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    const etag = '"' + createHash('sha256').update(content).digest('base64url') + '"';
+    const headers = { 'Content-Type': contentTypes[nodePath.extname(target)] || 'application/octet-stream', 'Cache-Control': nodePath.extname(target) === '.html' ? 'no-store' : 'private, no-cache', ETag: etag };
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers).end(); return; }
+    res.writeHead(200, headers);
     if (req.method === 'HEAD') res.end(); else res.end(content);
   } catch { res.writeHead(404).end('Not found'); }
 }
@@ -235,6 +239,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     mobileRentalList: async (actor, id, options={}) => { await verificationSweep.run(); return mobileRentalList(readDatabase, actor, id,options); },
     mobilePaymentInstructions: () => mobilePaymentInstructions(readDatabase),
     mobileTerms: () => mobileTerms(readDatabase),
+    mobileBusinessSettings: () => mobileBusinessSettings(readDatabase),
+    mobileCustomerTrust: id => mobileCustomerTrust(readDatabase, id, now()),
     submitRentalPaymentProof: (actor, id, input) => submitRentalPaymentProof(firestore, actor, id, input, now()),
     mobileQuote: input => quoteEquipmentRental(firestore, { ...input, mode: 'TIMED' }, now()),
     requestMobileReturn: (actor, id, input) => requestMobileReturn(firestore, actor, id, input, now()),
@@ -251,7 +257,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     createCustomer: (actor, input) => createCustomer(firestore, actor, input),
     createMobileCustomerAccount: (actor, input) => createMobileCustomerAccount(firebaseAuth, firestore, actor, input, now(), { validateEmail: validateEmailFormat }),
     updateCustomer: (actor, id, input) => updateCustomer(firestore, actor, id, input, now(), firebaseAuth),
-    changeCustomerPassword: (actor, id, input) => changeCustomerPassword(firestore, actor, id, input, firebaseAuth), deleteArchivedCustomer: (actor, id, input) => deleteArchivedCustomer(firestore, actor, id, input, firebaseAuth), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: (actor, input) => saveSettings(firestore, actor, input), createUser: (actor, input) => createWorkspaceUser(firebaseAuth, firestore, actor, input, now(), { validateEmail: validateEmailFormat }), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input)
+    changeCustomerPassword: (actor, id, input) => changeCustomerPassword(firestore, actor, id, input, firebaseAuth), deleteArchivedCustomer: (actor, id, input) => deleteArchivedCustomer(firestore, actor, id, input, firebaseAuth), saveRate: (actor, input) => saveRate(firestore, actor, input), saveSettings: (actor, input) => saveSettings(firestore, actor, input), createUser: (actor, input) => createWorkspaceUser(firebaseAuth, firestore, actor, input, now(), { validateEmail: validateEmailFormat }), updateUser: (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input),
+    syncMissingCustomerProfiles: () => syncMissingCustomerProfiles(firestore, now())
   };
   services.updateUser = (actor, id, input) => updateWorkspaceUser(firebaseAuth, firestore, actor, id, input, now(), { ownerUid });
 
@@ -406,7 +413,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       return url.protocol === 'http:' && Boolean(url.port) && ['localhost', '127.0.0.1'].includes(url.hostname) && url.origin === origin;
     } catch { return false; }
   };
-  function send(res, status, value, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers }); res.end(JSON.stringify(value)); }
+  function send(res, status, value, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Server-Time': new Date().toISOString(), 'Access-Control-Expose-Headers': 'X-Server-Time', ...headers }); res.end(JSON.stringify(value)); }
   function stopRentalEventStream(res) { res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); }
   function sendRentalUpdate(res, status, value, { rentalId = '', customerId = '' } = {}) {
     if (value?.duplicate !== true) {
@@ -603,6 +610,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
       if (path === '/api/mobile/catalog' && req.method === 'GET') return send(res, 200, { ...await services.mobileCatalog(), firebaseProjectId: services.firebaseProjectId });
       if (path === '/api/mobile/catalog/resolve' && req.method === 'POST') return send(res, 200, { ...await services.resolveMobileItem(await body(req)), firebaseProjectId: services.firebaseProjectId });
+      if (path === '/api/mobile/settings' && req.method === 'GET') return send(res, 200, await services.mobileBusinessSettings());
       if ((path === '/api/terms' || path === '/api/mobile/terms') && req.method === 'GET') return send(res, 200, await services.mobileTerms());
       if (path === '/api/mobile/profile') {
         const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
@@ -620,6 +628,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (!claims) return send(res, 401, { error: 'Please sign in again to access your rentals.' });
         const profile = await services.getUser(claims.uid);
         if (!profile || profile.is_active === false) return send(res, 403, { error: 'Your customer profile is inactive or missing.' });
+        if (path === '/api/mobile/payment-instructions' && req.method === 'GET') return send(res, 200, await services.mobilePaymentInstructions());
         if (!isCustomerRole(profile.role)) return send(res, 403, { error: 'Rental requests and customer rental records are available only to customer accounts.' });
         const actor = { id: claims.uid, full_name: profile.full_name || profile.name || claims.name, email: profile.email || claims.email, phone: profile.phone };
         if (path === '/api/mobile/payment-instructions' && req.method === 'GET') return send(res, 200, await services.mobilePaymentInstructions());
@@ -691,7 +700,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       const financeRoute=historicalReceiptRoute || ['/api/finance/summary','/api/finance/ledger','/api/finance/rentals','/api/finance/expenses','/api/reports/daily'].includes(path);
       const terminalTestRoute = path.match(/^\/api\/terminals\/([A-Za-z0-9_-]{1,128})\/test-ping$/);
       const securitySessionsRoute = path === '/api/auth/sessions' || path === '/api/auth/sessions/revoke' || path === '/api/security/alerts';
-      const workspaceRoute = securitySessionsRoute || recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || path === '/api/settings/terms' || path === '/api/settings/rules' || path === '/api/settings/receipt' || path === '/api/settings/policies' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
+      const customerTrustRoute = path.match(/^\/api\/customers\/([A-Za-z0-9_-]{1,128})\/trust$/);
+      const workspaceRoute = customerTrustRoute || securitySessionsRoute || recordsRoute || financeRoute || terminalTestRoute || path === '/api/workspace' || path === '/api/mobile/admin-workspace' || path === '/api/analytics' || path === '/api/rates' || path === '/api/pricing' || path === '/api/pricing/quote' || path === '/api/settings' || path === '/api/settings/payment' || path === '/api/settings/terms' || path === '/api/settings/rules' || path === '/api/settings/receipt' || path === '/api/settings/policies' || customerRoute || customerPasswordRoute || customerAccountRoute || userRoute || itemCategoriesRoute || mobileReviewRoute || mobileReturnReviewRoute;
       if ((['/api/auth/me', '/api/dashboard'].includes(path) && req.method === 'GET') || (path === '/api/profile' && req.method === 'PATCH') || inventoryRoute || maintenanceRoute || maintenanceStaffRoute || inventoryQrLabelsRoute || workspaceRoute || transactionRoute || rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) {
         const mobileToken = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = mobileToken ? await services.verifyMobileToken?.(mobileToken) : await sessions.verify(token); if (!claims) return send(res, 401, { error: 'Please sign in.' });
@@ -708,6 +718,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const queryOptions=Object.fromEntries(new URL(req.url,'http://localhost').searchParams);
         if (terminalTestRoute && req.method === 'POST') return send(res, 201, await services.testTerminalPing(user, terminalTestRoute[1]));
         if (recordsRoute && req.method === 'GET') return send(res,200,await services.recordPage(recordsRoute[1],queryOptions));
+        if (customerTrustRoute && req.method === 'GET') return send(res, 200, await services.mobileCustomerTrust(customerTrustRoute[1]));
         if (path === '/api/finance/summary' && req.method === 'GET') return send(res,200,await services.financeSummary(queryOptions));
         if (path === '/api/finance/ledger' && req.method === 'GET') return send(res,200,await services.ledgerPage(queryOptions));
         if (path === '/api/finance/rentals' && req.method === 'GET') return send(res,200,await services.financeRentalPage(queryOptions));
@@ -729,6 +740,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (rentalFlowRoute && req.method === 'GET' && rentalFlowRoute[2] === 'rolling-qr') return send(res, 200, await services.rentalTicket(user, rentalFlowRoute[1]));
         if (rentalFlowRoute && req.method === 'POST') {
           const [, id, action] = rentalFlowRoute;
+          if (action === 'terminal-dispatch' && !hardwareEnabled) return send(res, 409, { error: 'ESP32 confirmation is disabled on this server. Use the rental desk offline fallback; no terminal request was queued.' });
           const operations = { 'release-verification': 'verifyReleaseCodes', release: 'releaseBooking', 'prepare-delivery': 'prepareRentalDelivery', 'payment-review': 'reviewRentalPaymentProof', receipt: 'recordRentalReceipt', 'complete-return': 'completeRentalReturn', assignment: 'changeAssignedUnit', settlement: 'settleRentalPayment',delivery:'updateLocalDelivery','extension-review':'reviewRentalExtension','extension':'requestRentalExtension','extension-quote':'quoteRentalExtension','terminal-dispatch':'dispatchRentalToTerminal' };
           const result = await services[operations[action]](user, id, await body(req, 550000));
           if (['release-verification','extension-quote'].includes(action)) return send(res, 200, result);
@@ -957,6 +969,9 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       { onError: error => quotaBackoff.record(error) });
     server.once('listening', () => pushWorker.wake());
     server.once('close', () => pushWorker.stop());
+  }
+  if (typeof services?.syncMissingCustomerProfiles === 'function') {
+    server.once('listening', () => services.syncMissingCustomerProfiles().catch(() => {}));
   }
   if (services.readCacheStats) {
     const metricsTimer = setInterval(() => {

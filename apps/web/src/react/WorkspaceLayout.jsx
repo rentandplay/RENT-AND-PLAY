@@ -68,13 +68,14 @@ export const workspacePages = new Set([
 ]);
 
 function appearanceSettingsHtml(theme) {
-  return `<section class="appearance-settings" aria-label="Appearance settings"><p>A comfortable workspace, day or night.</p><div class="theme-setting"><span class="theme-setting-icon">${icon(
-    'moon'
-  )}</span><div><label id="dark-mode-label">Dark mode</label><small>Use a softer, darker palette across your workspace.</small></div><button id="dark-mode" class="theme-switch" type="button" role="switch" aria-labelledby="dark-mode-label" aria-checked="${
-    theme === 'dark'
-  }"><span></span></button></div><div class="theme-preference-note"><span id="theme-status" role="status">${
-    theme === 'dark' ? 'Dark mode is on' : 'Light mode is on'
-  }</span><small>Saved on this browser · Applies to login and dashboard</small></div></section>`;
+  return `<section class="appearance-settings" aria-label="Appearance settings">
+    <div class="settings-theme-previews" role="group" aria-label="Color theme">${['light', 'dark'].map(mode => `
+      <button type="button" id="settings-theme-${mode}" class="settings-theme-example ${mode === theme ? 'is-current' : ''}" data-settings-theme="${mode}" aria-pressed="${mode === theme}">
+        <div class="settings-theme-canvas is-${mode}" aria-hidden="true"><div class="settings-theme-side"><i></i><i></i><i></i><i></i></div><div class="settings-theme-page"><i></i><div><span></span><span></span></div><p></p><p></p></div></div>
+        <span>${mode === 'light' ? 'Light' : 'Dark'}${mode === theme ? '<small aria-hidden="true">Current</small>' : ''}</span>
+      </button>`).join('')}</div>
+    <div class="theme-preference-note"><span id="theme-status" role="status">${theme === 'dark' ? 'Dark mode is on' : 'Light mode is on'}</span><small>Saved on this browser</small></div>
+  </section>`;
 }
 
 export function PageHeading({ page, reportSection }) {
@@ -171,6 +172,7 @@ export function WorkspaceModuleSection({
   onNavigate
 }) {
   const containerRef = useRef(null);
+  const renderedRef = useRef(null);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -188,12 +190,16 @@ export function WorkspaceModuleSection({
     } catch {}
 
     const html = workspaceUI.render(page, user, appearanceSettingsHtml(theme));
-    container.innerHTML = html;
-
-    const themeSwitch = container.querySelector('#dark-mode');
-    if (themeSwitch) {
-      themeSwitch.onclick = () => onSetTheme(theme === 'dark' ? 'light' : 'dark');
+    if (page !== 'Payments' && renderedRef.current?.page === page && renderedRef.current?.html === html) {
+      workspaceUI.syncIfNeeded(page, onTriggerRender);
+      return;
     }
+    container.innerHTML = html;
+    renderedRef.current = { page, html };
+
+    container.querySelectorAll('[data-settings-theme]').forEach(button => {
+      button.onclick = () => onSetTheme(button.dataset.settingsTheme);
+    });
 
     container.querySelectorAll('[data-page]').forEach(el => {
       el.onclick = event => {
@@ -284,6 +290,14 @@ export function WorkspaceShell({
   renderTick,
   onTriggerRender
 }) {
+  const prefetchTimer = useRef(null);
+  useEffect(() => () => clearTimeout(prefetchTimer.current), []);
+  const cancelPagePrefetch = () => clearTimeout(prefetchTimer.current);
+  const queuePagePrefetch = target => {
+    cancelPagePrefetch();
+    if (target === page || navigator.connection?.saveData) return;
+    prefetchTimer.current = setTimeout(() => { void workspaceUI.prefetch?.(target); }, 120);
+  };
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width:720px)').matches : false
@@ -631,6 +645,10 @@ export function WorkspaceShell({
                           aria-label={buttonLabel}
                           title={buttonLabel}
                           aria-current={active ? 'page' : undefined}
+                          onPointerEnter={() => queuePagePrefetch(target)}
+                          onPointerLeave={cancelPagePrefetch}
+                          onFocus={() => queuePagePrefetch(target)}
+                          onBlur={cancelPagePrefetch}
                           onClick={e => {
                             e.preventDefault();
                             setMobileDrawerOpen(false);

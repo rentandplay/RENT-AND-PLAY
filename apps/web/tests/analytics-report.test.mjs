@@ -30,7 +30,7 @@ test('equipment labels are escaped and monthly charts do not duplicate two-bucke
   assert.ok(!html.includes('<script>unsafe</script>'));
   assert.ok(html.includes('1 rental'));
   assert.ok(!html.includes('1 rentals'));
-  const plot=html.match(/<figure class="ana-chart" aria-labelledby="performance-trend-title">([\s\S]*?)<\/figure>/)[1];
+  const plot=html.match(/<figure class="ana-chart[^"]*"[^>]*aria-labelledby="performance-trend-title"[^>]*>([\s\S]*?)<\/figure>/)[1];
   assert.equal((plot.match(/class="ana-axis-label">Jan 2020<\/text>/g)||[]).length,1);
   assert.equal((plot.match(/class="ana-axis-label">Feb 2020<\/text>/g)||[]).length,1);
 });

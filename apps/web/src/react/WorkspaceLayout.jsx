@@ -4,6 +4,7 @@ import { pageInfo } from '../workspace-navigation.js';
 import { renderRentalNotifications } from '../notifications.js';
 import { DashboardView } from './DashboardView.jsx';
 import { ProfileView } from './ProfileView.jsx';
+import { MessagesView } from './MessagesView.jsx';
 
 export const navGroups = [
   {
@@ -13,6 +14,7 @@ export const navGroups = [
     items: [
       ['Equipment', 'Inventory'],
       ['Customers', 'Customers'],
+      ['Messages', 'Messages'],
       ['Rates & Fees', 'Rates & Fees']
     ]
   },
@@ -449,7 +451,11 @@ export function WorkspaceShell({
       setNotificationsOpen(false);
       try {
         await rentalNotifications.markRead([entry.dataset.rentalNotification]);
-        if (entry.dataset.notificationRental) {
+        if (entry.dataset.notificationChat) {
+          window.dispatchEvent(new CustomEvent('rental-support-open', { detail: entry.dataset.notificationChat }));
+          try { sessionStorage.setItem('rental-support-open', entry.dataset.notificationChat); } catch {}
+          onNavigate('Messages');
+        } else if (entry.dataset.notificationRental) {
           await workspaceUI.openTransaction(entry.dataset.notificationRental);
         } else if (entry.dataset.notificationPage) {
           onNavigate(entry.dataset.notificationPage);
@@ -956,6 +962,8 @@ export function WorkspaceShell({
                 inventoryController={inventoryController}
                 renderTick={renderTick}
               />
+            ) : page === 'Messages' ? (
+              <MessagesView api={api} user={user} />
             ) : page === 'Profile' ? (
               <ProfileView
                 user={user}

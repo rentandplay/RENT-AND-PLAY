@@ -58,7 +58,7 @@ export function resolveCollectionAndId(rawCollection, rawId) {
 
 export function isSupabaseConfigured(env = process.env) {
   const url = normalizeSupabaseUrl(env.SUPABASE_URL);
-  const key = (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SECRET_KEY || '').trim();
+  const key = (env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
   return Boolean(url && key);
 }
 
@@ -141,7 +141,7 @@ function compareValues(aRaw, bRaw) {
 
 export function createSupabaseFirestore({
   url = process.env.SUPABASE_URL,
-  serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
+  serviceRoleKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
   bucket = process.env.SUPABASE_STORAGE_BUCKET || 'rental-media',
   fetcher = fetch,
   onWrite = null
@@ -154,7 +154,7 @@ export function createSupabaseFirestore({
   function headers(extra = {}) {
     return {
       apikey: apiKey,
-      Authorization: `Bearer ${apiKey}`,
+      ...(!apiKey.startsWith('sb_secret_') ? { Authorization: `Bearer ${apiKey}` } : {}),
       'Content-Type': 'application/json',
       ...extra
     };
@@ -179,7 +179,7 @@ export function createSupabaseFirestore({
       const message = parsed?.message || parsed?.error || errText || `Supabase RPC ${fnName} failed (${response.status})`;
       if (message.includes('Could not find the function public.app_')) {
         throw Object.assign(
-          new Error('Supabase schema is not initialized yet. Run infrastructure/supabase-schema.sql in the Supabase SQL Editor.'),
+          new Error(fnName === 'app_chat_list_docs' ? 'Rental support schema is not initialized yet. Run infrastructure/chat-schema.sql in the Supabase SQL Editor.' : 'Supabase schema is not initialized yet. Run infrastructure/supabase-schema.sql in the Supabase SQL Editor.'),
           { code: 'SUPABASE_SCHEMA_MISSING', status: 503 }
         );
       }
@@ -204,12 +204,7 @@ export function createSupabaseFirestore({
     try {
       const res = await fetcher(`${baseUrl}/storage/v1/object/${bucket}/${objectPath}`, {
         method: 'POST',
-        headers: {
-          apikey: apiKey,
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': contentType,
-          'x-upsert': 'true'
-        },
+        headers: headers({ 'Content-Type': contentType, 'x-upsert': 'true' }),
         body: bytes
       });
       if (!res.ok) return null;
@@ -232,7 +227,7 @@ export function createSupabaseFirestore({
     }
     try {
       const res = await fetcher(`${baseUrl}/storage/v1/object/public/${targetBucket}/${objectPath}`, {
-        headers: { apikey: apiKey, Authorization: `Bearer ${apiKey}` }
+        headers: headers()
       });
       if (!res.ok) return null;
       const arrayBuf = await res.arrayBuffer();
@@ -304,7 +299,6 @@ export function createSupabaseFirestore({
       return { ...op, collection: resolved.collection, id: resolved.id };
     });
     const normalizedPreconditions = preconditions
-      .filter(cond => cond.exists)
       .map(cond => {
         const resolved = resolveCollectionAndId(cond.collection, cond.id);
         return { ...cond, collection: resolved.collection, id: resolved.id };
@@ -397,7 +391,10 @@ export function createSupabaseFirestore({
         return collection(name, filters, limitVal, order, id);
       },
       async get() {
-        const rows = await rpc('app_list_docs', { p_collection: tableName });
+        const chatQuery = ['chat_threads', 'chat_messages'].includes(tableName);
+        const rows = chatQuery
+          ? await rpc('app_chat_list_docs', { p_collection: tableName, p_filters: filters, p_order: order, p_limit: Number.isFinite(limitVal) ? limitVal : 51 })
+          : await rpc('app_list_docs', { p_collection: tableName });
         const hydratedRows = await Promise.all(
           (Array.isArray(rows) ? rows : []).map(async row => ({
             ...row,
@@ -467,6 +464,11 @@ export function createSupabaseFirestore({
 
   return {
     collection,
+    async uploadProfilePhoto(uid, dataUrl) {
+      const uploaded = await uploadDataUrlToStorage('profile_photos', uid, 'image_data_url', dataUrl);
+      if (!uploaded) throw Object.assign(new Error('Profile photo upload is temporarily unavailable.'), { status: 503 });
+      return `${uploaded.storage_url}?t=${Date.now()}`;
+    },
     batch() {
       const writes = [];
       const writer = {

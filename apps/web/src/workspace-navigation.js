@@ -1,4 +1,4 @@
-export const pageRoutes = Object.freeze({ Dashboard: '/', Inventory: '/equipment', Customers: '/customers', 'Rates & Fees': '/rates', Rentals: '/rentals', Returns: '/returns', 'Transaction History': '/transactions', Maintenance: '/maintenance', 'ESP32 terminal': '/verification', Reports: '/reports', Settings: '/settings', Payments: '/payments', Profile: '/profile' });
+export const pageRoutes = Object.freeze({ Dashboard: '/', Inventory: '/equipment', Customers: '/customers', Messages: '/messages', 'Rates & Fees': '/rates', Rentals: '/rentals', Returns: '/returns', 'Transaction History': '/transactions', Maintenance: '/maintenance', 'ESP32 terminal': '/verification', Reports: '/reports', Settings: '/settings', Payments: '/payments', Profile: '/profile' });
 export const routePages = Object.fromEntries(Object.entries(pageRoutes).map(([page, route]) => [route, page]));
 const reportSectionRoutes = Object.freeze({ '/reports': 'performance', '/reports/equipment': 'performance', '/reports/operations': 'performance', '/reports/forecast': 'forecast', '/reports/recommendations': 'recommendations', '/reports/audit': 'performance' });
 const reportSectionPaths = Object.freeze({ performance: '/reports', forecast: '/reports/forecast', recommendations: '/reports/recommendations' });
@@ -25,6 +25,7 @@ export function pageForPath(pathname) {
 export const pageInfo = Object.freeze({
   Dashboard: ['Today at a glance', 'Track equipment, upcoming returns, and the handoffs that need your attention.', 'grid'],
   Inventory: ['Your equipment collection', 'Manage availability, condition, pricing, and QR labels in one place.', 'box'],
+  Messages: ['Customer conversations', 'Answer rental questions and follow up with customers from a shared support inbox.', 'users'],
   Customers: ['People behind the play', 'Keep contact details close and follow every customer’s rental history.', 'users'],
   'Rates & Fees': ['Clear prices, easier rentals', 'Manage rental rates, then preview what a customer will pay.', 'money'],
   Rentals: ['Keep every rental on track', 'Prepare new rentals and follow up on equipment that is due or overdue.', 'clock'],

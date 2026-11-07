@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createHash } from 'node:crypto';
+import { openChat, listChats, chatMessages, sendChatMessage, readChat, setChatStatus } from './chat.mjs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
@@ -89,6 +90,13 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   });
   let healthCheckedAt = -Infinity, healthError = null, healthPending = null;
   const services = {
+    uploadProfilePhoto: (uid, dataUrl) => firestore.uploadProfilePhoto(uid, dataUrl),
+    openChat: (actor, input) => openChat(firestore, actor, input, now()),
+    listChats: (actor, options) => listChats(firestore, actor, options),
+    chatMessages: (actor, id, options) => chatMessages(firestore, actor, id, options),
+    sendChatMessage: (actor, id, input) => sendChatMessage(firestore, actor, id, input, now()),
+    readChat: (actor, id, input) => readChat(firestore, actor, id, input),
+    setChatStatus: (actor, id, input) => setChatStatus(firestore, actor, id, input, now()),
     financeSummary: options => financeSummary(readDatabase,options,now()),
     financeRentalPage: options => financeRentalPage(readDatabase,options),
     confirmHistoricalReceipt: (actor,id,input) => confirmHistoricalReceipt(firestore,actor,id,input,now()),
@@ -591,6 +599,43 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         return send(res, 200, { ...await services.completeMobileRegistration(claims, input), firebaseProjectId: services.firebaseProjectId });
       }
       quotaBackoff.assertAvailable();
+      const chatRoute = path.match(/^\/api\/chat\/threads(?:\/([A-Za-z0-9_-]{1,128})(?:\/(messages|read|status))?)?$/);
+      if (chatRoute) {
+        const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
+        const claims = bearer ? await services.verifyMobileToken?.(bearer) : await sessions.verify(token);
+        if (!claims) return send(res, 401, { error: 'Please sign in to access rental support.' });
+        const profile = await services.getUser(claims.uid);
+        if (!profile || profile.is_active === false) return send(res, 403, { error: 'Your account is inactive or missing.' });
+        if (profile.must_change_password === true) return send(res, 403, { error: 'Change your temporary password first.', code: 'PASSWORD_CHANGE_REQUIRED' });
+        const actor = { ...profile, id: claims.uid };
+        const [, id, action] = chatRoute;
+        const options = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams);
+        if (!id && req.method === 'GET') return send(res, 200, await services.listChats(actor, options));
+        if (!id && req.method === 'POST') return send(res, 200, await services.openChat(actor, await body(req)));
+        if (id && action === 'messages' && req.method === 'GET') return send(res, 200, await services.chatMessages(actor, id, options));
+        if (id && action === 'messages' && req.method === 'POST') {
+          const value = await services.sendChatMessage(actor, id, await body(req, 16000));
+          if (!value.duplicate) { services.invalidateReadCache?.(['notification_inboxes']); pushWorker?.wake(); }
+          return send(res, value.duplicate ? 200 : 201, value);
+        }
+        if (id && action === 'read' && req.method === 'POST') return send(res, 200, await services.readChat(actor, id, await body(req)));
+        if (id && action === 'status' && req.method === 'PATCH') return send(res, 200, await services.setChatStatus(actor, id, await body(req)));
+        return send(res, 405, { error: 'Method not allowed.' });
+      }
+      if (path === '/api/mobile/profile/photo') {
+        if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed.' });
+        const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
+        const claims = bearer ? await services.verifyMobileToken?.(bearer) : null;
+        if (!claims) return send(res, 401, { error: 'Please sign in to upload a photo.' });
+        const profile = await services.getUser(claims.uid);
+        if (!profile || profile.is_active === false || profile.must_change_password === true) return send(res, 403, { error: 'Your account cannot upload a photo.' });
+        const input = await body(req, 2900000);
+        const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$/.exec(input?.dataUrl || '');
+        const bytes = match ? Buffer.from(match[2], 'base64') : null;
+        const valid = bytes && bytes.length <= 2 * 1024 * 1024 && (match[1] === 'png' ? bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255);
+        if (!valid) return send(res, 400, { error: 'Choose a PNG or JPEG photo up to 2 MB.' });
+        return send(res, 200, { url: await services.uploadProfilePhoto(claims.uid, input.dataUrl) });
+      }
       if (['/api/notifications', '/api/notifications/read', '/api/notifications/device'].includes(path)) {
         const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = bearer ? await services.verifyMobileToken?.(bearer) : await sessions.verify(token);

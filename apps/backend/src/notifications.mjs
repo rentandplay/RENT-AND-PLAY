@@ -155,6 +155,23 @@ export async function listSecurityAlerts(db, actor, { limit = 25 } = {}) {
   return { alerts };
 }
 
+export function queueChatNotification(tx, db, thread, message, now) {
+  const audience = message.sender_role === 'STAFF' ? 'CUSTOMER' : 'STAFF';
+  const key = audience === 'STAFF' ? 'staff' : `customer_${thread.customer_id}`;
+  const id = `n_${hash(`chat:${message.id}`).slice(0, 40)}`;
+  const title = audience === 'STAFF' ? 'New customer inquiry' : 'Rental support replied';
+  // Keep private message content out of lock-screen push previews.
+  const text = 'You have a new message in rental support.';
+  tx.create(messages(db, key).doc(id), { type: 'CHAT_MESSAGE', title, message: text,
+    thread_id: thread.id, rental_id: thread.rental_id || '', rental_code: thread.rental_code || 'Support',
+    item_name: thread.subject, page: 'Messages', created_at: now, read_by: {} });
+  tx.set(db.collection('notification_inboxes').doc(key), { revision: randomBytes(16).toString('hex') }, { merge: true });
+  tx.create(db.collection('notification_outbox').doc(id), { notification_id: id, inbox_key: key,
+    audience, customer_id: audience === 'CUSTOMER' ? thread.customer_id : null,
+    thread_id: thread.id, title, message: text, rental_id: thread.rental_id || '', type: 'CHAT_MESSAGE',
+    status: 'PENDING', attempts: 0, created_at: now, next_attempt_at: now, lease_until: null });
+}
+
 export async function listNotifications(db, actor, { before, since } = {}) {
   const key = inboxKey(actor), collection = messages(db, key);
   const header = await db.collection('notification_inboxes').doc(key).get();
@@ -174,6 +191,7 @@ export async function listNotifications(db, actor, { before, since } = {}) {
     return {
       id: doc.id,
       type: row.type,
+      ...(row.thread_id ? { thread_id: row.thread_id } : {}),
       ...(row.category ? { category: row.category } : {}),
       ...(row.severity ? { severity: row.severity } : {}),
       ...(Array.isArray(row.security_flags) && row.security_flags.length ? { security_flags: row.security_flags } : {}),
@@ -269,7 +287,7 @@ export function createNotificationDispatcher(db, messaging, { now = () => new Da
           const batch = allowed.slice(offset, offset + 500);
           const response = await messaging.sendEachForMulticast({ tokens: batch.map(doc => doc.data().token),
             notification: { title: event.title, body: event.message.slice(0, 240) },
-            data: { notification_id: event.notification_id, rental_id: event.rental_id, type: event.type, audience: event.audience, recipient_id: event.customer_id || '' },
+            data: { notification_id: event.notification_id, rental_id: event.rental_id || '', thread_id: event.thread_id || '', type: event.type, audience: event.audience, recipient_id: event.customer_id || '' },
             android: { priority: 'high', notification: { channelId: 'rental_updates', icon: 'ic_notification', sound: 'default', tag: event.notification_id } } });
           const invalid = response.responses.flatMap((result, index) => ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token'].includes(result.error?.code) ? [batch[index]] : []);
           if (invalid.length) { const writer = db.batch(); invalid.forEach(doc => writer.delete(doc.ref)); await writer.commit(); onDevicesChanged(); }

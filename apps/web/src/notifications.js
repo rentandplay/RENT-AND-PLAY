@@ -58,7 +58,7 @@ export function renderRentalNotifications(state, { escape: e, formatDate }) {
   return state.notifications.map(row => {
     const isSecurity = String(row.type || '').startsWith('SECURITY_') || row.category === 'SECURITY';
     const isUrgent = isSecurity || String(row.type || '').includes('REJECTED');
-    const targetAttr = row.rental_id ? ` data-notification-rental="${e(row.rental_id)}"` : ' data-notification-page="Settings"';
+    const targetAttr = row.type === 'CHAT_MESSAGE' && row.thread_id ? ` data-notification-chat="${e(row.thread_id)}"` : row.rental_id ? ` data-notification-rental="${e(row.rental_id)}"` : ' data-notification-page="Settings"';
     return `<button type="button" class="${row.is_read ? '' : 'notification-unread'}${isSecurity ? ' notification-security-item' : ''}" data-rental-notification="${e(row.id)}"${targetAttr}><span class="notification-mark ${isUrgent ? 'overdue-mark' : 'pending-mark'}">${isSecurity ? '🛡' : isUrgent ? '!' : '•'}</span><span><strong>${e(row.title)}</strong><small>${e(row.message)}</small><small class="notification-time">${e(row.rental_code || (isSecurity ? 'SECURITY' : ''))} · ${e(formatDate(row.created_at))}${row.is_read ? '' : ' · Unread'}</small></span></button>`;
   }).join('');
 }

@@ -10,7 +10,7 @@ const root = process.env.NODE_ENV === 'production' ? path.join(appRoot, 'dist') 
 const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml' };
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
-const appRoutes = new Set(['/', '/equipment', '/customers', '/rates', '/rentals', '/returns', '/transactions', '/maintenance', '/verification', '/reports', '/reports/equipment', '/reports/operations', '/reports/forecast', '/reports/recommendations', '/reports/audit', '/settings', '/payments', '/profile']);
+const appRoutes = new Set(['/', '/equipment', '/customers', '/messages', '/rates', '/rentals', '/returns', '/transactions', '/maintenance', '/verification', '/reports', '/reports/equipment', '/reports/operations', '/reports/forecast', '/reports/recommendations', '/reports/audit', '/settings', '/payments', '/profile']);
 const browserHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host;
 
 let reactBuild = null, reactInputStamp = '';

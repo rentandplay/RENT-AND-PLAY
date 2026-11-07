@@ -1,4 +1,4 @@
-// src/react/react-shim.js
+// source/apps/web/src/react/react-shim.js
 import {
   React,
   React as React2,
@@ -16,7 +16,7 @@ import {
   flushSync
 } from "./react-vendor.js";
 
-// src/react/icons.jsx
+// source/apps/web/src/react/icons.jsx
 var icons = {
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
@@ -157,7 +157,7 @@ function cleanErrorMessage(msg) {
   return str;
 }
 
-// src/react/LoginView.jsx
+// source/apps/web/src/react/LoginView.jsx
 import {
   bindAccountValidation,
   emailError,
@@ -456,7 +456,7 @@ function LoginView({
   )), /* @__PURE__ */ React.createElement("label", { className: "checkbox" }, /* @__PURE__ */ React.createElement("input", { id: "remember", type: "checkbox" }), " Remember me on this device"), /* @__PURE__ */ React.createElement("p", { id: "login-error", role: "alert" }, errorMsg), /* @__PURE__ */ React.createElement("button", { className: "primary login-submit", type: "submit" }, "Sign in")), /* @__PURE__ */ React.createElement("p", { className: "login-foot" }, "Your account. Your equipment. Your workspace.")), /* @__PURE__ */ React.createElement("footer", null, "\xA9 ", (/* @__PURE__ */ new Date()).getFullYear(), " Rent & Play ", /* @__PURE__ */ React.createElement("span", null, "Built for more play."))));
 }
 
-// src/react/PasswordChangeView.jsx
+// source/apps/web/src/react/PasswordChangeView.jsx
 import {
   bindAccountValidation as bindAccountValidation2,
   passwordError as passwordError2,
@@ -580,11 +580,11 @@ function PasswordChangeView({
   ), " ", "Show passwords"), /* @__PURE__ */ React.createElement("p", { className: "form-error", role: "alert" }, errorMsg), /* @__PURE__ */ React.createElement("button", { className: "primary", type: "submit" }, "Update password"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", id: "change-signout", onClick: handleSignOut }, "Sign out"))));
 }
 
-// src/react/WorkspaceLayout.jsx
+// source/apps/web/src/react/WorkspaceLayout.jsx
 import { pageInfo } from "./workspace-navigation.js";
 import { renderRentalNotifications } from "./notifications.js";
 
-// src/react/DashboardView.jsx
+// source/apps/web/src/react/DashboardView.jsx
 function StatCard({ label, value, note, glyph, color, page, target = "", filter = "", onNavigate }) {
   const handleClick = (e) => {
     e.preventDefault();
@@ -979,7 +979,7 @@ function DashboardView({
   )) : /* @__PURE__ */ React.createElement("p", null, "No categories recorded.")), /* @__PURE__ */ React.createElement("div", { className: "counter-tip" }, /* @__PURE__ */ React.createElement("span", null, "\u2726"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "A small counter tip"), /* @__PURE__ */ React.createElement("p", null, "Check item condition before confirming a return."))))));
 }
 
-// src/react/ProfileView.jsx
+// source/apps/web/src/react/ProfileView.jsx
 function ProfileView({
   user,
   profileEditing,
@@ -1193,7 +1193,207 @@ function ProfileView({
   ))))));
 }
 
-// src/react/WorkspaceLayout.jsx
+// source/apps/web/src/react/MessagesView.jsx
+var retryKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+var when = (value) => new Date(value).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+function MessagesView({ api, user }) {
+  const storageKey = `rental-support-drafts:${user.id}`;
+  function saved(kind) {
+    try {
+      return new Map(JSON.parse(sessionStorage.getItem(`${storageKey}:${kind}`) || "[]"));
+    } catch {
+      return /* @__PURE__ */ new Map();
+    }
+  }
+  const [threads, setThreads] = useState([]), [active, setActive] = useState(() => {
+    try {
+      const id = sessionStorage.getItem("rental-support-open");
+      sessionStorage.removeItem("rental-support-open");
+      return id;
+    } catch {
+      return null;
+    }
+  });
+  const [status, setStatus] = useState(""), [search, setSearch] = useState("");
+  const [next, setNext] = useState(null), [thread, setThread] = useState(null);
+  const [messages, setMessages] = useState([]), [older, setOlder] = useState(null);
+  const [draft, setDraft] = useState(""), [pending, setPending] = useState(null);
+  const [sending, setSending] = useState(false), [error, setError] = useState("");
+  const [loading, setLoading] = useState(true), [synced, setSynced] = useState(null);
+  const generation = useRef(0), sequence = useRef(0), busy = useRef(false), listBusy = useRef(false), bottom = useRef(null);
+  const drafts = useRef(saved("drafts")), failures = useRef(saved("pending"));
+  const atBottom = useRef(true), hasOlderThreads = useRef(false);
+  function persist() {
+    try {
+      sessionStorage.setItem(`${storageKey}:drafts`, JSON.stringify([...drafts.current]));
+      sessionStorage.setItem(`${storageKey}:pending`, JSON.stringify([...failures.current]));
+    } catch {
+    }
+  }
+  const currentId = useRef(active);
+  currentId.current = active;
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const request = (path, method, body) => apiRef.current(path, method ? { method, body: JSON.stringify(body) } : {});
+  useEffect(() => {
+    const open = (event) => setActive(event.detail);
+    window.addEventListener("rental-support-open", open);
+    return () => window.removeEventListener("rental-support-open", open);
+  }, []);
+  async function loadThreads(before = null) {
+    if (listBusy.current) return;
+    listBusy.current = true;
+    try {
+      const params = new URLSearchParams();
+      if (status) params.set("status", status);
+      if (before) params.set("before", before);
+      const result = await request(`/chat/threads?${params}`);
+      if (before) hasOlderThreads.current = true;
+      setThreads((old) => before || hasOlderThreads.current ? [...new Map([...old, ...result.threads].map((row) => [row.id, row])).values()].sort((a, b) => b.sort_key.localeCompare(a.sort_key)) : result.threads);
+      if (before || !hasOlderThreads.current) setNext(result.next_cursor);
+    } catch (problem) {
+      setError(problem.message);
+    } finally {
+      listBusy.current = false;
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    hasOlderThreads.current = false;
+    loadThreads();
+    const timer = setInterval(() => {
+      if (!document.hidden) loadThreads();
+    }, 7e3);
+    const refresh = () => {
+      if (!document.hidden) loadThreads();
+    };
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [status]);
+  useEffect(() => {
+    const version = ++generation.current;
+    sequence.current = 0;
+    busy.current = false;
+    atBottom.current = true;
+    setMessages([]);
+    setThread(null);
+    setOlder(null);
+    setError("");
+    setDraft(drafts.current.get(active) || "");
+    setPending(failures.current.get(active) || null);
+    if (!active) return;
+    async function sync() {
+      if (busy.current || document.hidden) return;
+      busy.current = true;
+      try {
+        const last = sequence.current;
+        const result = await request(`/chat/threads/${active}/messages${last ? `?after=${last}` : ""}`);
+        if (version !== generation.current) return;
+        setThread(result.thread);
+        if (!last) setOlder(result.next_cursor);
+        if (result.messages.length) {
+          sequence.current = result.messages.at(-1).seq;
+          setMessages((old) => [...new Map([...old, ...result.messages].map((row) => [row.id, row])).values()].sort((a, b) => a.seq - b.seq));
+        }
+        setError("");
+        setSynced(/* @__PURE__ */ new Date());
+        if (sequence.current && !document.hidden && atBottom.current) {
+          const read = await request(`/chat/threads/${active}/read`, "POST", { through: sequence.current });
+          if (version === generation.current) setThread(read.thread);
+        }
+        if (result.has_more && last) setTimeout(() => {
+          if (version === generation.current) sync();
+        }, 0);
+      } catch (problem) {
+        if (version === generation.current) setError(problem.message);
+      } finally {
+        if (version === generation.current) busy.current = false;
+      }
+    }
+    sync();
+    const timer = setInterval(sync, 4e3);
+    const wake = () => sync();
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      generation.current++;
+      clearInterval(timer);
+      window.removeEventListener("online", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
+  }, [active]);
+  useEffect(() => {
+    if (atBottom.current) bottom.current?.scrollIntoView({ block: "nearest" });
+  }, [active, messages.at(-1)?.id]);
+  async function send(event) {
+    event.preventDefault();
+    if (sending || !active) return;
+    const operation = pending || { text: draft.trim(), requestKey: retryKey() };
+    if (!operation.text) return;
+    const id = active;
+    setSending(true);
+    setError("");
+    failures.current.set(id, operation);
+    setPending(operation);
+    persist();
+    try {
+      const result = await request(`/chat/threads/${id}/messages`, "POST", operation);
+      failures.current.delete(id);
+      drafts.current.delete(id);
+      persist();
+      if (currentId.current === id) {
+        setPending(null);
+        setDraft("");
+        setThread(result.thread);
+        setMessages((old) => [...new Map([...old, result.message].map((row) => [row.id, row])).values()].sort((a, b) => a.seq - b.seq));
+      }
+      loadThreads();
+    } catch (problem) {
+      if (problem.status >= 400 && problem.status < 500) {
+        failures.current.delete(id);
+        persist();
+        if (currentId.current === id) setPending(null);
+      }
+      if (currentId.current === id) setError(`${problem.message} Your message is kept; try again below.`);
+    } finally {
+      setSending(false);
+    }
+  }
+  async function loadOlder() {
+    const id = active, cursor = older;
+    try {
+      const result = await request(`/chat/threads/${id}/messages?before=${cursor}`);
+      if (currentId.current !== id) return;
+      setMessages((old) => [...new Map([...result.messages, ...old].map((row) => [row.id, row])).values()].sort((a, b) => a.seq - b.seq));
+      setOlder(result.next_cursor);
+    } catch (problem) {
+      setError(problem.message);
+    }
+  }
+  async function changeStatus() {
+    const id = active;
+    try {
+      const result = await request(`/chat/threads/${id}/status`, "PATCH", { status: thread.status === "OPEN" ? "RESOLVED" : "OPEN" });
+      if (currentId.current === id) setThread(result.thread);
+      loadThreads();
+    } catch (problem) {
+      setError(problem.message);
+    }
+  }
+  const filtered = threads.filter((row) => `${row.customer_name} ${row.subject} ${row.rental_code || ""}`.toLowerCase().includes(search.toLowerCase()));
+  return /* @__PURE__ */ React.createElement("section", { className: "support-chat panel", "aria-label": "Customer rental support" }, /* @__PURE__ */ React.createElement("aside", { className: "support-inbox" }, /* @__PURE__ */ React.createElement("h2", null, "Customer inbox"), /* @__PURE__ */ React.createElement("label", null, "Find in loaded conversations", /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Customer or rental reference" })), /* @__PURE__ */ React.createElement("label", null, "Status", /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "All conversations"), /* @__PURE__ */ React.createElement("option", { value: "OPEN" }, "Open"), /* @__PURE__ */ React.createElement("option", { value: "RESOLVED" }, "Resolved"))), /* @__PURE__ */ React.createElement("div", { className: "support-thread-list" }, filtered.map((row) => /* @__PURE__ */ React.createElement("button", { key: row.id, className: `support-thread ${active === row.id ? "selected" : ""}`, onClick: () => setActive(row.id) }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, row.customer_name), row.unread_count > 0 && /* @__PURE__ */ React.createElement("b", { className: "support-unread" }, row.unread_count)), /* @__PURE__ */ React.createElement("span", null, row.subject), /* @__PURE__ */ React.createElement("small", null, row.rental_code || "General inquiry", " \xB7 ", row.status.toLowerCase()), /* @__PURE__ */ React.createElement("p", null, row.last_message || "No messages yet"), /* @__PURE__ */ React.createElement("time", null, when(row.updated_at))))), !filtered.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, loading ? "Loading conversations\u2026" : "No conversations to show."), next && /* @__PURE__ */ React.createElement("button", { onClick: () => loadThreads(next) }, "Load more conversations")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation" }, error && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, error, /* @__PURE__ */ React.createElement("button", { onClick: () => loadThreads() }, "Refresh inbox")), !active ? /* @__PURE__ */ React.createElement("div", { className: "support-empty" }, /* @__PURE__ */ React.createElement("h2", null, "Rental support"), /* @__PURE__ */ React.createElement("p", null, "Select a conversation to help a customer."), /* @__PURE__ */ React.createElement("p", null, "Replies are saved and customers receive an alert. Staff share this inbox.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("header", { className: "support-header" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", null, thread?.customer_name || "Loading conversation\u2026"), /* @__PURE__ */ React.createElement("p", null, thread?.subject, " ", thread?.rental_code && `\xB7 ${thread.rental_code}`), /* @__PURE__ */ React.createElement("small", null, synced ? `Last synced ${synced.toLocaleTimeString()}` : "Connecting\u2026")), thread && /* @__PURE__ */ React.createElement("button", { disabled: sending, onClick: changeStatus }, thread.status === "OPEN" ? "Resolve conversation" : "Reopen conversation")), /* @__PURE__ */ React.createElement("div", { className: "support-messages", role: "log", "aria-label": "Messages", "aria-live": "polite", onScroll: (e) => {
+    atBottom.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80;
+  } }, older && /* @__PURE__ */ React.createElement("button", { onClick: loadOlder }, "Load earlier messages"), messages.map((message) => /* @__PURE__ */ React.createElement("article", { key: message.id, className: `support-bubble ${message.sender_role === "STAFF" ? "outgoing" : ""}` }, /* @__PURE__ */ React.createElement("strong", null, message.sender_role === "STAFF" ? `${message.sender_name}${message.sender_id === user?.id ? " (you)" : ""}` : thread?.customer_name), /* @__PURE__ */ React.createElement("p", null, message.text), /* @__PURE__ */ React.createElement("small", null, when(message.created_at), message.sender_role === "STAFF" ? ` \xB7 ${thread?.customer_read_seq >= message.seq ? "Read" : "Sent"}` : ""))), !messages.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Messages will appear here."), /* @__PURE__ */ React.createElement("div", { ref: bottom })), thread?.status === "RESOLVED" && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Resolved. Reopen to reply. A new customer message also reopens this conversation."), /* @__PURE__ */ React.createElement("form", { className: "support-composer", onSubmit: send }, /* @__PURE__ */ React.createElement("label", { htmlFor: "support-reply" }, "Reply to customer"), /* @__PURE__ */ React.createElement("textarea", { id: "support-reply", rows: "3", maxLength: 2e3, value: pending?.text ?? draft, disabled: !!pending || thread?.status === "RESOLVED", onChange: (e) => {
+    setDraft(e.target.value);
+    drafts.current.set(active, e.target.value);
+    persist();
+  }, placeholder: "Help with availability, pricing, or a rental\u2026" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("small", null, (pending?.text ?? draft).length, "/2000 \xB7 Plain text"), /* @__PURE__ */ React.createElement("button", { type: "submit", disabled: sending || !thread || thread.status === "RESOLVED" || !(pending?.text ?? draft).trim() }, sending ? "Sending\u2026" : pending ? "Retry message" : "Send reply"))))));
+}
+
+// source/apps/web/src/react/WorkspaceLayout.jsx
 var navGroups = [
   {
     id: "management",
@@ -1202,6 +1402,7 @@ var navGroups = [
     items: [
       ["Equipment", "Inventory"],
       ["Customers", "Customers"],
+      ["Messages", "Messages"],
       ["Rates & Fees", "Rates & Fees"]
     ]
   },
@@ -1568,7 +1769,14 @@ function WorkspaceShell({
       setNotificationsOpen(false);
       try {
         await rentalNotifications.markRead([entry.dataset.rentalNotification]);
-        if (entry.dataset.notificationRental) {
+        if (entry.dataset.notificationChat) {
+          window.dispatchEvent(new CustomEvent("rental-support-open", { detail: entry.dataset.notificationChat }));
+          try {
+            sessionStorage.setItem("rental-support-open", entry.dataset.notificationChat);
+          } catch {
+          }
+          onNavigate("Messages");
+        } else if (entry.dataset.notificationRental) {
           await workspaceUI.openTransaction(entry.dataset.notificationRental);
         } else if (entry.dataset.notificationPage) {
           onNavigate(entry.dataset.notificationPage);
@@ -1995,7 +2203,7 @@ function WorkspaceShell({
       inventoryController,
       renderTick
     }
-  ) : page === "Profile" ? /* @__PURE__ */ React.createElement(
+  ) : page === "Messages" ? /* @__PURE__ */ React.createElement(MessagesView, { api, user }) : page === "Profile" ? /* @__PURE__ */ React.createElement(
     ProfileView,
     {
       user,
@@ -2036,7 +2244,7 @@ function WorkspaceShell({
   )));
 }
 
-// src/react/App.jsx
+// source/apps/web/src/react/App.jsx
 import { createInventory } from "./inventory.js";
 import { createWorkspaceUI } from "./workspace-ui.js";
 import { createConfirmationDialog } from "./confirmation-dialog.js";
@@ -2053,29 +2261,6 @@ var dashboardSnapshot = (value) => value ? JSON.stringify(
   Object.fromEntries(Object.entries(value).filter(([key]) => key !== "refreshedAt"))
 ) : "";
 var liveRentalPages = /* @__PURE__ */ new Set(["Rentals", "Returns", "Transaction History"]);
-function playNotificationChime() {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(698.46, now);
-    osc.frequency.exponentialRampToValueAtTime(880, now + 0.12);
-    gain.gain.setValueAtTime(0.22, now);
-    gain.gain.exponentialRampToValueAtTime(1e-3, now + 0.45);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.45);
-  } catch {
-  }
-}
 function App() {
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState(null);
@@ -2099,12 +2284,7 @@ function App() {
   );
   const [sidebarCollapsed, setSidebarCollapsedState] = useState(() => {
     try {
-      const saved = localStorage.getItem("rent-play-sidebar-collapsed");
-      if (saved !== null) return saved === "true";
-      if (typeof window !== "undefined" && window.innerWidth <= 1100 && window.innerWidth > 720) {
-        return true;
-      }
-      return false;
+      return localStorage.getItem("rent-play-sidebar-collapsed") === "true";
     } catch {
       return false;
     }
@@ -2150,42 +2330,13 @@ function App() {
     }
     passwordResetCountdownRef.current = timer;
   }, []);
-  const toast = useCallback((message, options = {}) => {
+  const toast = useCallback((message) => {
     const el = document.querySelector("#toast");
     if (!el) return;
-    clearTimeout(toastTimerRef.current);
-    if (typeof message === "string" && !options.actionLabel) {
-      el.textContent = message;
-      el.classList.remove("has-action");
-    } else {
-      el.innerHTML = "";
-      el.classList.add("has-action");
-      const textSpan = document.createElement("span");
-      textSpan.textContent = typeof message === "string" ? message : (message?.text || "");
-      el.appendChild(textSpan);
-      if (options.actionLabel && options.onAction) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "toast-action-btn";
-        btn.textContent = options.actionLabel;
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          el.classList.remove("visible");
-          options.onAction();
-        };
-        el.appendChild(btn);
-      }
-      const closeBtn = document.createElement("button");
-      closeBtn.type = "button";
-      closeBtn.className = "toast-close-btn";
-      closeBtn.setAttribute("aria-label", "Dismiss notification");
-      closeBtn.textContent = "✕";
-      closeBtn.onclick = () => el.classList.remove("visible");
-      el.appendChild(closeBtn);
-    }
+    el.textContent = message;
     el.classList.add("visible");
-    const duration = options.duration || (options.actionLabel ? 8e3 : 4e3);
-    toastTimerRef.current = setTimeout(() => el.classList.remove("visible"), duration);
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => el.classList.remove("visible"), 4e3);
   }, []);
   const setTheme = useCallback((next) => {
     const resolved = next === "dark" ? "dark" : "light";
@@ -2395,28 +2546,9 @@ function App() {
     c.rentalNotifications = createRentalNotifications({
       api: (...args) => c.api(...args),
       onChange: () => setNotificationVersion((v) => v + 1),
-      onAlert: (notification, count) => {
-        playNotificationChime();
-        if (count > 1) {
-          toast(`${count} new rental updates. Open notifications to review them.`, {
-            actionLabel: "View notifications",
-            onAction: () => {
-              notificationBellRef.current?.click();
-            }
-          });
-        } else {
-          toast(`🔔 ${notification.title}: ${notification.message}`, {
-            actionLabel: notification.rental_id ? "Review request" : "View",
-            onAction: async () => {
-              if (notification.rental_id) {
-                await c.workspaceUI.openTransaction(notification.rental_id);
-              } else if (notification.page) {
-                onNavigate(notification.page);
-              }
-            }
-          });
-        }
-      }
+      onAlert: (notification, count) => toast(
+        count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`
+      )
     });
   }
   const refresh = useCallback(
@@ -2970,7 +3102,7 @@ function App() {
   );
 }
 
-// src/react/index.jsx
+// source/apps/web/src/react/index.jsx
 function mountReactApp(container = document.querySelector("#app")) {
   if (!container) return null;
   const root = createRoot(container);
@@ -2982,6 +3114,7 @@ export {
   DashboardView,
   InventorySection,
   LoginView,
+  MessagesView,
   PageHeading,
   PasswordChangeView,
   ProfileView,

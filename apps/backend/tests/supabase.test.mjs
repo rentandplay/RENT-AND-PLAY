@@ -112,6 +112,40 @@ function createMockSupabaseServer() {
   return { fetcher, tables, storageObjects };
 }
 
+test('chat queries send ownership, ordering and limits to PostgreSQL instead of listing all messages', async () => {
+  const calls = [];
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return { ok: true, json: async () => [{ id:'m2', version:1, data:{thread_id:'c_1',seq:2,text:'Saved'} }] };
+  } });
+  const result = await db.collection('chat_messages').where('thread_id','==','c_1').where('seq','>',1).orderBy('seq','asc').limit(51).get();
+  assert.equal(calls.length,1); assert.match(calls[0].url,/app_chat_list_docs$/);
+  assert.deepEqual(calls[0].body, { p_collection:'chat_messages',p_filters:[['thread_id','==','c_1'],['seq','>',1]],p_order:{field:'seq',direction:'asc'},p_limit:51 });
+  assert.equal(result.docs[0].data().seq,2);
+});
+
+test('nonexistent document reads remain commit preconditions for cross-instance deduplication', async () => {
+  const commits = [];
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: async (url, options) => {
+    const input = JSON.parse(options.body);
+    if (url.endsWith('/app_commit_writes')) { commits.push(input); return { ok:true,json:async()=>({ok:true}) }; }
+    return { ok:true,json:async()=>({id:input.p_id,exists:false,data:null,version:0}) };
+  } });
+  await db.runTransaction(async tx => { const ref=db.collection('chat_threads').doc('c_1'); await tx.get(ref); tx.create(ref,{id:'c_1'}); });
+  assert.deepEqual(commits[0].p_preconditions,[{collection:'chat_threads',id:'c_1',exists:false,version:0}]);
+});
+
+test('opaque secret keys use the apikey header without being sent as a JWT', async () => {
+  const calls = [];
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'sb_secret_fixture_only', fetcher: async (url, options) => {
+    calls.push(options.headers);
+    return { ok:true,json:async()=>({id:'u1',exists:false,data:null,version:0}) };
+  } });
+  await db.collection('users').doc('u1').get();
+  assert.equal(calls[0].apikey,'sb_secret_fixture_only');
+  assert.equal(calls[0].Authorization,undefined);
+});
+
 test('normalizeSupabaseUrl strips trailing /rest/v1/ and slashes', () => {
   assert.equal(
     normalizeSupabaseUrl('https://yuhforhnrnfpzzhulgzt.supabase.co/rest/v1/'),

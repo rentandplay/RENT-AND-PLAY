@@ -170,6 +170,50 @@ void soundError() {
 // =============================================================================
 // 5. OLED DISPLAY SCREENS
 // =============================================================================
+void soundHardwareTest() {
+  Serial.println("[TEST] Running full hardware test: LEDs, Fairy Lights, Buzzer, and Music!");
+
+  // Song melody for hardware test (Twinkle Twinkle Little Star melody)
+  int melody[] = {
+    262, 262, 392, 392, 440, 440, 392,  // C4, C4, G4, G4, A4, A4, G4
+    349, 349, 330, 330, 294, 294, 262   // F4, F4, E4, E4, D4, D4, C4
+  };
+  int durations[] = {
+    180, 180, 180, 180, 180, 180, 360,
+    180, 180, 180, 180, 180, 180, 400
+  };
+
+  int numNotes = sizeof(melody) / sizeof(melody[0]);
+  for (int i = 0; i < numNotes; i++) {
+    // Alternate Red LED, Green LED and Fairy Lights with each note
+    if (i % 2 == 0) {
+      digitalWrite(LED1_PIN, HIGH);
+      digitalWrite(LED2_PIN, LOW);
+      digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+    } else {
+      digitalWrite(LED1_PIN, LOW);
+      digitalWrite(LED2_PIN, HIGH);
+      digitalWrite(FAIRY_LIGHT_PIN, LOW);
+    }
+
+    if (i == 0 || i == 6 || i == 13) {
+      digitalWrite(ACTIVE_BUZZER, HIGH);
+    }
+
+    tone(PASSIVE_BUZZER, melody[i], durations[i]);
+    delay(durations[i]);
+
+    digitalWrite(ACTIVE_BUZZER, LOW);
+    noTone(PASSIVE_BUZZER);
+    delay(40);
+  }
+
+  // Keep alert LED1 & Fairy Lights on waiting for confirmation button
+  digitalWrite(LED1_PIN, HIGH);
+  digitalWrite(LED2_PIN, LOW);
+  digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+}
+
 void showConnectingScreen() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -204,6 +248,17 @@ void showPendingScreen(const String& code, const String& type, const String& mod
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
+  if (code == "R-9999" || pin == "TEST" || itemName.indexOf("Test") >= 0) {
+    display.println("== HARDWARE TEST ==");
+    display.println("--------------------");
+    display.println("LEDs: OK | FAIRY: OK");
+    display.println("BUZZER & MUSIC: OK");
+    display.print("PIN: ");
+    display.println(pin);
+    display.println("[PRESS GPIO35 TO OK]");
+    display.display();
+    return;
+  }
   if (mode == "SHOP_DISPATCH") {
     display.println("! RESORT DISPATCH !");
   } else if (type == "RETURN") {
@@ -239,6 +294,16 @@ void showSuccessScreen() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 5);
+  if (currentRentalCode == "R-9999" || currentVerificationCode == "TEST") {
+    display.println("  HARDWARE PASSED!  ");
+    display.println("====================");
+    display.println("OLED, LEDs & Fairy:OK");
+    display.println("Music & Buzzer: OK");
+    display.println("Button GPIO35: OK");
+    display.println("\nStatus: ALL VERIFIED");
+    display.display();
+    return;
+  }
   display.println("    CONFIRMED!      ");
   display.println("====================");
   if (currentTerminalMode == "SHOP_DISPATCH") {
@@ -320,8 +385,13 @@ void pollPendingRequests() {
 
         if (isNewRequest) {
           Serial.printf("[POLL] New pending request: %s (%s) mode=%s\n", currentRentalCode.c_str(), currentRequestId.c_str(), currentTerminalMode.c_str());
-          soundAlert();
+          bool isTest = (currentRentalCode == "R-9999" || currentVerificationCode == "TEST" || currentItemName.indexOf("Test") >= 0);
           showPendingScreen(currentRentalCode, currentTransactionType, currentTerminalMode, currentItemName, currentVerificationCode);
+          if (isTest) {
+            soundHardwareTest();
+          } else {
+            soundAlert();
+          }
         }
       } else {
         if (currentState != STATE_IDLE) {

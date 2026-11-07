@@ -236,8 +236,8 @@ export function createTransactionWorkflow(h) {
             <button type="button" class="secondary" id="return-request-add">
               ${getIcon('undo')} Receive Return
             </button>
-            <button type="button" class="secondary terminal-test-btn" id="btn-terminal-test-ping" title="Sends a test ping to the ESP32. Buzzer will beep and OLED will display confirmation.">
-              ${getIcon('zap')} Test Buzzer &amp; OLED
+            <button type="button" class="secondary terminal-test-btn" id="btn-terminal-test-ping" title="Sends a test ping to the ESP32. Plays song melody, tests Red & Green LEDs, flashes Fairy Lights, and OLED.">
+              ${getIcon('zap')} Test Hardware, LEDs &amp; Music
             </button>
           </div>
         </div>
@@ -373,7 +373,7 @@ export function createTransactionWorkflow(h) {
         toast('Test failed: ' + err.message);
       } finally {
         btn.disabled = false;
-        btn.textContent = '⚡ Test Buzzer & OLED';
+        btn.textContent = '⚡ Test Hardware, LEDs & Music';
       }
     });
     document.querySelectorAll('[data-verification-filter]').forEach(select => select.onchange = () => { filters[select.dataset.verificationFilter] = select.value; pages['Verification history'] = 0; rerender(); });

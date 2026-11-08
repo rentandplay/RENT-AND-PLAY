@@ -129,12 +129,13 @@ DECLARE
 BEGIN
   PERFORM public.app_ensure_table(p_collection);
 
+  v_row := NULL;
   EXECUTE format(
     'SELECT id, data, tx_version FROM public.%I WHERE id = $1',
     p_collection
   ) INTO v_row USING p_id;
 
-  IF NOT FOUND OR v_row.id IS NULL THEN
+  IF v_row.id IS NULL THEN
     RETURN jsonb_build_object(
       'id', p_id,
       'exists', false,
@@ -222,12 +223,13 @@ BEGIN
 
       PERFORM public.app_ensure_table(v_collection);
 
+      v_current_version := NULL;
       EXECUTE format(
         'SELECT tx_version FROM public.%I WHERE id = $1',
         v_collection
       ) INTO v_current_version USING v_id;
 
-      IF NOT FOUND OR v_current_version IS NULL THEN
+      IF v_current_version IS NULL THEN
         IF v_expected_exists THEN
           RAISE EXCEPTION 'TRANSACTION_CONFLICT: %/% was deleted concurrently', v_collection, v_id;
         END IF;

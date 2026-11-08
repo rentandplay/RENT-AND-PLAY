@@ -299,6 +299,7 @@ export function createSupabaseFirestore({
       return { ...op, collection: resolved.collection, id: resolved.id };
     });
     const normalizedPreconditions = preconditions
+      .filter(cond => cond.exists)
       .map(cond => {
         const resolved = resolveCollectionAndId(cond.collection, cond.id);
         return { ...cond, collection: resolved.collection, id: resolved.id };
@@ -580,7 +581,7 @@ export function createSupabaseFirestore({
             }
             return output;
           } catch (error) {
-            const isConflict = String(error?.message || '').includes('TRANSACTION_CONFLICT');
+            const isConflict = String(error?.message || '').includes('TRANSACTION_CONFLICT') || String(error?.message || '').includes('Document exists');
             if (isConflict && attempt < maxAttempts) {
               continue;
             }

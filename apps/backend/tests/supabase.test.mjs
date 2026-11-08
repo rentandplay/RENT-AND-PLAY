@@ -124,15 +124,30 @@ test('chat queries send ownership, ordering and limits to PostgreSQL instead of 
   assert.equal(result.docs[0].data().seq,2);
 });
 
-test('nonexistent document reads remain commit preconditions for cross-instance deduplication', async () => {
+test('nonexistent document reads do not produce failing nonexistence preconditions and retry on document existence conflicts', async () => {
   const commits = [];
+  let attempts = 0;
   const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: async (url, options) => {
     const input = JSON.parse(options.body);
-    if (url.endsWith('/app_commit_writes')) { commits.push(input); return { ok:true,json:async()=>({ok:true}) }; }
-    return { ok:true,json:async()=>({id:input.p_id,exists:false,data:null,version:0}) };
+    if (url.endsWith('/app_commit_writes')) {
+      commits.push(input);
+      attempts++;
+      return { ok: false, status: 409, json: async () => ({ message: 'Document exists: chat_threads/c_1' }), text: async () => JSON.stringify({ message: 'Document exists: chat_threads/c_1' }) };
+    }
+    return { ok: true, json: async () => (attempts > 0 ? { id: input.p_id, exists: true, data: { status: 'OPEN' }, version: 1 } : { id: input.p_id, exists: false, data: null, version: 0 }) };
   } });
-  await db.runTransaction(async tx => { const ref=db.collection('chat_threads').doc('c_1'); await tx.get(ref); tx.create(ref,{id:'c_1'}); });
-  assert.deepEqual(commits[0].p_preconditions,[{collection:'chat_threads',id:'c_1',exists:false,version:0}]);
+  let loopCount = 0;
+  const result = await db.runTransaction(async tx => {
+    loopCount++;
+    const ref = db.collection('chat_threads').doc('c_1');
+    const existing = await tx.get(ref);
+    if (existing.exists) return existing.data();
+    tx.create(ref, { id: 'c_1', status: 'OPEN' });
+    return { id: 'c_1' };
+  });
+  assert.deepEqual(commits[0].p_preconditions, []);
+  assert.equal(loopCount, 2);
+  assert.equal(result.status, 'OPEN');
 });
 
 test('opaque secret keys use the apikey header without being sent as a JWT', async () => {

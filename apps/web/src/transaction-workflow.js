@@ -1,5 +1,5 @@
 import { recordCode } from './record-codes.js';
-import { createRentalDesk } from './rental-desk.js';
+import { createRentalDesk, renderRentalTaskProgress } from './rental-desk.js';
 import { enrichVerification, verificationMatches, renderRequestHistory, transactionTime, renderFeeBreakdown, recordedAmount } from './transaction-records.js';
 import { bindRecordLinks, recordAttrs } from './record-links.js';
 import { manilaDateTimeIso } from './date-time.js';
@@ -20,6 +20,7 @@ export function createTransactionWorkflow(h) {
   const getIcon = name => typeof icon === 'function' ? icon(name) : '';
   const desk = createRentalDesk({ ...h, showHandoff: (request, rental) => showHandoff(request, rental) });
   const filters = { status: 'ALL', type: 'ALL', terminal: 'ALL' };
+  let guideOpen = false, deviceDetailsOpen = false;
   let handoff = null, handoffRefreshing = false, handoffPollTimer = null, pagePollTimer = null;
   function handoffRental(request, rental = {}) {
     if (request.status !== 'PENDING' || String(request.transaction_type || request.type).toUpperCase() !== 'RETURN') return rental;
@@ -36,9 +37,9 @@ export function createTransactionWorkflow(h) {
     const dispatch = mode === 'SHOP_DISPATCH';
     const outcome = dispatch ? 'Shop departure confirmed. The rental timer stays stopped until the resort handoff.' : release ? 'Equipment handover confirmed. The rental timer has started.' : 'Return inspection confirmed. Review any remaining payment balance.';
     const statusText = pending ? 'Press confirm on the counter terminal' : request.status === 'CONFIRMED' ? 'Terminal confirmation received' : 'Terminal request closed';
-    return `<div class="counter-handoff-status" role="status"><span class="counter-handoff-label">${e(modeLabel)}</span><h3>${e(statusText)}</h3><p>${e(pending ? 'Match the rental reference below with the terminal display before pressing its physical confirmation button.' : request.status === 'CONFIRMED' ? outcome : message)}</p></div>
+    return `${release ? renderRentalTaskProgress(rental, request.status === 'CONFIRMED' && !dispatch ? 'released' : dispatch ? 'prepare' : 'handover') : ''}<div class="counter-handoff-status" role="status"><span class="counter-handoff-label">${e(modeLabel)}</span><h3>${e(statusText)}</h3><p>${e(pending ? 'Match the rental reference below with the terminal display before pressing its physical confirmation button.' : request.status === 'CONFIRMED' ? outcome : message)}</p></div>
       <dl class="counter-handoff-facts"><div><dt>Equipment</dt><dd>${e(itemName)}</dd></div><div><dt>Rental reference</dt><dd>${e(rentalCode)}</dd></div><div><dt>Counter terminal</dt><dd>${e(request.terminal_code || 'Not assigned')}</dd></div>${pending ? `<div><dt>Request expires</dt><dd>${e(formatDate(request.expires_at))}</dd></div>` : ''}</dl>
-      ${pending ? `<div class="counter-handoff-code"><span>Verification code</span><strong>${e(request.verification_code)}</strong><p>The clock ${dispatch ? 'stays stopped during delivery' : release ? 'starts only after terminal confirmation' : 'uses the recorded physical receipt time'}.</p></div><div class="handoff-refresh"><p>Status updates automatically. If the terminal is unavailable, close this window and reopen the rental to review the offline fallback.</p><button type="button" class="secondary" data-handoff-refresh>Check confirmation</button></div>` : ''}
+      ${pending ? `<div class="counter-handoff-code"><span>Terminal matching code</span><strong>${e(request.verification_code)}</strong><p>Check that this code matches the counter terminal, then press its physical confirm button. The terminal sends the code automatically; no typing is needed in the app.</p><p>The clock ${dispatch ? 'stays stopped during delivery' : release ? 'starts only after terminal confirmation' : 'uses the recorded physical receipt time'}.</p></div><div class="handoff-refresh"><p>Status updates automatically. If the terminal is unavailable, close this window and reopen the rental to review the offline fallback.</p><button type="button" class="secondary" data-handoff-refresh>Check confirmation</button></div>` : ''}
       <p class="form-error" role="alert" data-handoff-error></p>
       <details class="counter-handoff-details"><summary>Charges and recorded inspection</summary>${renderFeeBreakdown(rental, h)}${inspection ? `<section class="record-section"><h3>Recorded inspection</h3><dl class="record-fields"><div><dt>Condition</dt><dd>${e(inspection.condition || 'Not recorded')}</dd></div><div><dt>Inspection result</dt><dd>${e(inspection.result || 'Not recorded')}</dd></div><div><dt>Notes</dt><dd>${e(inspection.notes || 'Not recorded')}</dd></div></dl></section>` : ''}${renderRequestHistory([request], { ...h, requestLinks: false })}</details>`;
   }
@@ -76,9 +77,24 @@ export function createTransactionWorkflow(h) {
       const source = getModel().verification.find(row => String(row.id) === String(handoff.request.id));
       if (!source) throw new Error('This request is no longer in the workspace. Close the dialog and refresh the queue.');
       const request = enrichVerification(source, getModel());
-      const savedRental = getModel().transactions.find(row => String(row.id) === String(request.rental_id));
+      let savedRental = getModel().transactions.find(row => String(row.id) === String(request.rental_id));
+      if (!savedRental && request.status === 'CONFIRMED' && typeof api === 'function') {
+        // Completed returns can disappear from the active queue immediately.
+        const result = await api('/rentals/lookup', { method: 'POST', body: JSON.stringify({ kind: 'RENTAL', code: request.rental_id }) });
+        if (!modal.open || modal.querySelector('[data-handoff-request]') !== panel) return true;
+        savedRental = result.rental;
+        h.applyResponse?.(result);
+      }
       const sameInspection = request.inspection_revision === handoff.request.inspection_revision;
       const rental = handoffRental(request, request.status === 'PENDING' && sameInspection ? { ...savedRental, ...handoff.rental } : savedRental || handoff.rental);
+      if (request.status === 'CONFIRMED' && handoff.request.status === 'PENDING' && savedRental) {
+        if (modal._handoffTimer) { clearInterval(modal._handoffTimer); modal._handoffTimer = null; }
+        // Advance only the handoff the operator is currently viewing, once.
+        if (desk.continueRental(rental)) {
+          handoff = { request, rental, signature: JSON.stringify([request, rental]) };
+          redraw(); return true;
+        }
+      }
       const signature = JSON.stringify([request, rental]);
       panel.querySelector('[data-handoff-error]').textContent = '';
       if (signature !== handoff.signature) {
@@ -186,6 +202,7 @@ export function createTransactionWorkflow(h) {
     const history = all.filter(request => verificationMatches(request, { ...filters, search })), view = paged(history, 'Verification history');
     const select = (key, label, options) => `<label class="transaction-select"><span>${label}</span><select data-verification-filter="${key}" aria-label="Filter verification ${label.toLowerCase()}">${options.map(([value, caption]) => `<option value="${e(value)}" ${filters[key] === value ? 'selected' : ''}>${e(caption)}</option>`).join('')}</select></label>`;
     const entries = records => records.map(request => {
+      const hardwareTest = request.verification_code === 'TEST';
       const times = [];
       if (request.requested_at) times.push(`<span class="time-item"><strong>Requested:</strong> ${e(formatDate(request.requested_at))}</span>`);
       if (request.status === 'PENDING' && request.expires_at) times.push(`<span class="time-item time-deadline"><strong>Expires:</strong> ${e(formatDate(request.expires_at))}</span>`);
@@ -198,15 +215,15 @@ export function createTransactionWorkflow(h) {
 
       return `<tr ${recordAttrs('verification', request.id, recordCode(request, 'verification'))}>
         <td><strong class="row-highlight-code">${e(request.rental_code)}</strong><small class="record-sub">Request ${e(recordCode(request, 'verification'))}</small></td>
-        <td><span class="type-pill ${String(request.transaction_type || '').toLowerCase()}">${e(request.transaction_type || 'Type not recorded')}</span><small class="record-sub">Code ${e(request.verification_code || 'not recorded')}</small></td>
+        <td><span class="type-pill ${hardwareTest ? 'hardware-test' : String(request.transaction_type || '').toLowerCase()}">${e(hardwareTest ? 'Hardware test' : request.transaction_type || 'Type not recorded')}</span>${hardwareTest ? '' : `<small class="record-sub">Code ${e(request.verification_code || 'not recorded')}</small>`}</td>
         <td><strong>${e(request.terminal_code)}</strong><small class="record-sub">${terminalNotice}</small></td>
         <td>${status(request.status)}</td>
         <td class="times-column">${times.join('')}</td>
         <td>
-          <div class="reason-note">${e(request.rejection_reason || request.final_reason || (request.status === 'PENDING' ? request.inspection ? 'Inspection recorded' : 'Inspection needed' : 'No reason recorded'))}</div>
+          <div class="reason-note">${e(request.rejection_reason || request.final_reason || (request.status === 'PENDING' ? request.inspection ? 'Inspection recorded' : 'Inspection needed' : request.status === 'CONFIRMED' ? hardwareTest ? 'Terminal test completed' : 'Confirmed at counter' : 'No reason recorded'))}</div>
           <div class="row-actions">
             ${request.status === 'PENDING' ? `<button type="button" class="btn-action-tag inspection" data-inspection="${e(request.id)}">${request.inspection ? 'Review inspection' : 'Record inspection'}</button>` : ''}
-            <button type="button" class="btn-action-tag details" data-transaction-detail="${e(request.rental_id)}">Rental details</button>
+            ${hardwareTest ? '' : `<button type="button" class="btn-action-tag details" data-transaction-detail="${e(request.rental_id)}">Rental details</button>`}
           </div>
         </td>
       </tr>`;
@@ -223,11 +240,11 @@ export function createTransactionWorkflow(h) {
           <div class="terminal-title-area">
             <div class="terminal-badge-row">
               <span class="terminal-pulse-dot ${isOnline ? 'online' : 'offline'}"></span>
-              <span class="terminal-status-badge ${isOnline ? 'online' : 'offline'}">${isOnline ? 'ONLINE &amp; POLLING' : 'OFFLINE'}</span>
-              <span class="terminal-chip">Station ${e(terminal?.terminal_code || 'TERM-01')}</span>
+              <span class="terminal-status-badge ${isOnline ? 'online' : 'offline'}">${isOnline ? 'Online' : 'Offline'}</span>
+              <span class="terminal-chip">${e(terminal?.terminal_code || 'Not registered')}</span>
             </div>
-            <h2>${e(terminal?.name || 'Counter Station 1')}</h2>
-            <p class="terminal-subtitle">Countertop IoT Verification Terminal &middot; <span class="gateway-tag">Gateway: Cloud Sync</span></p>
+            <h2>${e(terminal?.name || (terminal ? 'Counter terminal' : 'No terminal registered'))}</h2>
+            <p class="terminal-subtitle">Physical handoff confirmation · ${pending.length} waiting <span class="terminal-sync-label">· Updates automatically</span></p>
           </div>
           <div class="terminal-station-actions">
             <button type="button" class="primary" id="rental-request-add">
@@ -236,12 +253,9 @@ export function createTransactionWorkflow(h) {
             <button type="button" class="secondary" id="return-request-add">
               ${getIcon('undo')} Receive Return
             </button>
-            <button type="button" class="secondary terminal-test-btn" id="btn-terminal-test-ping" title="Sends a test ping to the ESP32. Plays song melody, tests Red & Green LEDs, flashes Fairy Lights, and OLED.">
-              ${getIcon('zap')} Test Hardware, LEDs &amp; Music
-            </button>
           </div>
         </div>
-        <details class="terminal-device-details"><summary>Device specifications</summary><div class="terminal-hardware-grid">
+        <details class="terminal-device-details" data-terminal-device ${deviceDetailsOpen ? 'open' : ''}><summary>Device details &amp; tools</summary><p class="terminal-last-seen">Last device contact: ${e(lastSeenStr)}</p><button type="button" class="secondary terminal-test-btn" id="btn-terminal-test-ping">${getIcon('zap')} Test terminal</button><div class="terminal-hardware-grid">
           <div class="hardware-spec-chip ${isOnline ? 'online' : 'offline'}">
             <span class="spec-icon">${getIcon('monitor')}</span>
             <div>
@@ -279,7 +293,7 @@ export function createTransactionWorkflow(h) {
     `;
 
     const workflowGuide = `
-      <div class="terminal-guide-bar">
+      <details class="terminal-guide-disclosure" data-terminal-guide ${guideOpen ? 'open' : ''}><summary>How counter verification works</summary><div class="terminal-guide-bar">
         <div class="guide-lead">
           <span class="guide-tag">WORKFLOW GUIDE</span>
           <strong>3-Step Counter Verification Flow</strong>
@@ -288,8 +302,8 @@ export function createTransactionWorkflow(h) {
           <div class="guide-step">
             <div class="guide-num">1</div>
             <div>
-              <strong>Dispatch Rental</strong>
-              <small>Create rental from admin desk or approve customer mobile app request.</small>
+              <strong>Send a handoff request</strong>
+              <small>Complete preparation or return inspection, then send the request to the counter terminal.</small>
             </div>
           </div>
           <div class="guide-divider">&rarr;</div>
@@ -305,27 +319,27 @@ export function createTransactionWorkflow(h) {
             <div class="guide-num">3</div>
             <div>
               <strong>Button Push Confirms</strong>
-              <small>Press physical button on ESP32 to finalize handover and start rental timer.</small>
+              <small>Match the request, then confirm on the terminal. Handover starts the timer; returns use the recorded receipt time. Shop dispatch keeps the timer stopped.</small>
             </div>
           </div>
         </div>
-      </div>
+      </div></details>
     `;
 
     const queueSection = `
       <section class="panel admin-module verification-queue-panel">
         <div class="panel-title">
           <div>
-            <h3>Active Verification Queue ${pending.length ? `<span class="active-queue-badge">${pending.length} Waiting</span>` : ''}</h3>
+            <h3>Active Verification Queue <span class="active-queue-badge">${pending.length} waiting</span></h3>
             <p>Handoffs awaiting physical confirmation on the ESP32 terminal.</p>
           </div>
         </div>
         ${pending.length ? table(heads, entries(queue.rows)) + queue.footer : `
           <div class="terminal-idle-box">
-            <div class="idle-icon-badge">&check;</div>
+            <div class="idle-icon-badge ${isOnline ? '' : 'is-offline'}" aria-hidden="true">${isOnline ? '&check;' : '–'}</div>
             <div>
-              <h4>Terminal is Idle &amp; Ready</h4>
-              <p>No pending handoffs right now. Create a walk-in rental or receive a return to verify on the hardware.</p>
+              <h4>${isOnline ? 'All clear — no pending handoffs' : 'No pending handoffs · terminal offline'}</h4>
+              <p>${isOnline ? 'New rental and return confirmations will appear here.' : 'Check device power and Wi-Fi before sending a terminal request.'}</p>
             </div>
           </div>
         `}
@@ -342,7 +356,7 @@ export function createTransactionWorkflow(h) {
         </div>
         <div class="transaction-filter-toolbar history-filter-toolbar">
           <label class="module-search">
-            <input id="module-search" value="${e(search)}" placeholder="Search rental, request, code, terminal, or reason" aria-label="Search verification history"/>
+            <input id="module-search" value="${e(search)}" placeholder="Search rental, request or code" aria-label="Search verification history"/>
           </label>
           <div class="transaction-selects">
             ${select('status', 'Status', ['ALL', 'PENDING', 'CONFIRMED', 'REJECTED', 'EXPIRED'].map(value => [value, value === 'ALL' ? 'All statuses' : value]))}
@@ -354,10 +368,14 @@ export function createTransactionWorkflow(h) {
       </section>
     `;
 
-    return heroCard + workflowGuide + queueSection + historySection;
+    return `<div class="verification-workspace">${heroCard + queueSection + workflowGuide + historySection}</div>`;
   }
   function bind(page, rerender, pages) {
-    bindInspections(); clearInterval(pagePollTimer); if (page === 'ESP32 terminal' && (getModel()?.verification || []).some(r => r.status === 'PENDING')) { pagePollTimer = setInterval(async () => { if (document.visibilityState !== 'visible') return; try { const changed = await refresh(); if (changed) rerender(); } catch {} }, 2000); }
+    if (page === 'ESP32 terminal') {
+      document.querySelector('[data-terminal-guide]')?.addEventListener('toggle', event => { guideOpen = event.currentTarget.open; });
+      document.querySelector('[data-terminal-device]')?.addEventListener('toggle', event => { deviceDetailsOpen = event.currentTarget.open; });
+    }
+    bindInspections(); clearInterval(pagePollTimer); if (page === 'ESP32 terminal' && (getModel()?.verification || []).some(r => r.status === 'PENDING')) { pagePollTimer = setInterval(async () => { if (document.visibilityState !== 'visible' || modal.open) return; try { const changed = await refresh(); if (changed && !modal.open) rerender(); } catch {} }, 2000); }
     document.querySelector('#rental-request-add')?.addEventListener('click', () => requestForm('RENTAL'));
     document.querySelector('#return-request-add')?.addEventListener('click', () => requestForm('RETURN'));
     document.querySelector('#btn-terminal-test-ping')?.addEventListener('click', async event => {
@@ -373,7 +391,7 @@ export function createTransactionWorkflow(h) {
         toast('Test failed: ' + err.message);
       } finally {
         btn.disabled = false;
-        btn.textContent = '⚡ Test Hardware, LEDs & Music';
+        btn.textContent = 'Test terminal';
       }
     });
     document.querySelectorAll('[data-verification-filter]').forEach(select => select.onchange = () => { filters[select.dataset.verificationFilter] = select.value; pages['Verification history'] = 0; rerender(); });

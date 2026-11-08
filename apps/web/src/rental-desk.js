@@ -50,6 +50,27 @@ export function renderBookingPrice(quote, { escape: e, money }) {
   return `<section class="rental-booking-price"><h3>Price summary</h3><dl><div><dt>Rental fee</dt><dd>${amount(quote.rental_fee)}</dd></div></dl><p>Billed duration: ${duration}. Timer starts at handoff.</p></section>`;
 }
 export const rentalOperationKey = () => globalThis.crypto.randomUUID().replaceAll('-', '');
+// Choose the next screen from committed state; opening it never submits an action.
+export function renderRentalTaskProgress(row = {}, stage = 'review') {
+  const steps = [ ['review', 'Review request'], ['prepare', 'Prepare equipment'],
+    ['handover', row.fulfillment_mode !== 'SHOP_HANDOVER' ? 'Deliver equipment' : 'Release equipment'],
+    ['released', 'Released'] ];
+  const current = Math.max(0, steps.findIndex(([key]) => key === stage));
+  return `<nav class="rental-task-progress" aria-label="Rental task progress"><ol>${steps.map(([key, label], index) =>
+    `<li class="${index < current ? 'is-done' : index === current ? 'is-current' : ''}"${index === current ? ' aria-current="step"' : ''}><span aria-hidden="true">${index < current ? '✓' : index + 1}</span><strong>${label}</strong></li>`
+  ).join('')}</ol><p>Step ${current + 1} of ${steps.length} · ${steps[current][1]}${stage === 'released' ? ' complete' : ' · The next task opens after you confirm this step.'}</p></nav>`;
+}
+
+export function nextRentalStep(row = {}) {
+  if (row.status === 'RETURN_PENDING_INSPECTION') return 'inspect';
+  if (row.status === 'APPROVED') {
+    return ['PREPARED', 'OUT_FOR_DELIVERY'].includes(row.delivery_status) ? 'handover' : 'prepare';
+  }
+  if (['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(row.status) &&
+      (Number(row.balance_due) > 0 || Number(row.refund_due) > 0)) return 'settle';
+  return 'details';
+}
+
 export function createRentalDesk(h) {
   const { api, escape: e, showModal: openModal, modal, toast, model: getModel, refresh, redraw, confirmSubmit } = h;
   function showModal(title, content) {
@@ -62,6 +83,20 @@ export function createRentalDesk(h) {
       if (!child.classList.contains('form-actions') && !child.classList.contains('form-error')) scroll.append(child);
     }
     form.prepend(scroll);
+  }
+  function continueRental(row) {
+    if (!row) return false;
+    const current = (getModel()?.transactions || []).find(record => String(record.id) === String(row.id));
+    const rental = { ...current, ...row };
+    switch (nextRentalStep(rental)) {
+      case 'prepare': prepareForm(rental); return true;
+      case 'handover': releaseForm(rental); return true;
+      case 'inspect': completeReturnForm(rental); return true;
+      case 'settle': settlementForm(rental); return true;
+      default:
+        if (!h.transactionDetails) return false;
+        h.transactionDetails(rental); return true;
+    }
   }
   const scannedBookings = new Map(), scannedInventory = new Map();
   const options = (records, label) => records.map(row => `<option value="${e(row.id)}">${e(label(row))}</option>`).join('');
@@ -84,10 +119,16 @@ export function createRentalDesk(h) {
     };
   }
   async function saved(response, label, next) {
-    modal.close(); let fresh = true;
-    try { await refresh(); } catch { fresh = false; }
-    redraw(); toast(fresh ? label : `${label} Refresh to see the latest records.`);
+    modal.close();
+    h.applyResponse?.(response);
+    redraw(); toast(label);
+    // The mutation already returned the saved record. Open its next step now;
+    // refreshing unrelated workspace tables must not block the dialog.
     if (next) next(response.rental);
+    let fresh = true;
+    try { await refresh(); } catch { fresh = false; }
+    redraw();
+    if (!fresh) toast(`${label} Refresh to see the latest records.`);
   }
   function submit(form, title, description, callback, { confirm = true } = {}) {
     const key = rentalOperationKey();
@@ -259,7 +300,7 @@ export function createRentalDesk(h) {
       'Outside Operating / Delivery Hours',
       'Unverified Payment Proof / Reference',
     ].map(preset => `<button type="button" class="secondary duration-chip" data-reject-preset="${e(preset)}">${e(preset)}</button>`).join('');
-    showModal(approve ? 'Approve rental request' : 'Reject rental request', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)} · ${e(row.rental_code || row.id)}</p>${approve ? '<p>Approval reserves the equipment. Confirm any outstanding rental payment at handoff; the rental timer starts when you confirm delivery.</p><label>Review notes<textarea name="notes" maxlength="1000"></textarea></label>' : `<div class="duration-chip-row" role="group" aria-label="Quick rejection reasons">${rejectPresets}</div><label>Reason for rejection (required)<textarea name="reason" maxlength="1000" rows="3" required placeholder="Select a reason above or enter specific remarks for the customer…"></textarea></label>`}${actions(approve ? 'Approve rental request' : 'Reject rental request')}</form>`);
+    showModal(approve ? 'Approve rental request' : 'Reject rental request', `<form class="admin-form rental-desk-form">${approve ? renderRentalTaskProgress(row, 'review') : ''}<p>${e(row.item_name)} · ${e(row.customer_name)} · ${e(row.rental_code || row.id)}</p>${approve ? '<p>Approval reserves the equipment. Confirm any outstanding rental payment at handoff; the rental timer starts when you confirm delivery.</p><label>Review notes<textarea name="notes" maxlength="1000"></textarea></label>' : `<div class="duration-chip-row" role="group" aria-label="Quick rejection reasons">${rejectPresets}</div><label>Reason for rejection (required)<textarea name="reason" maxlength="1000" rows="3" required placeholder="Select a reason above or enter specific remarks for the customer…"></textarea></label>`}${actions(approve ? 'Approve rental request' : 'Reject rental request')}</form>`);
     const form = modal.querySelector('form');
     form.querySelectorAll?.('[data-reject-preset]')?.forEach(chip => {
       chip.onclick = () => {
@@ -270,10 +311,10 @@ export function createRentalDesk(h) {
         form.querySelectorAll('[data-reject-preset]').forEach(btn => btn.classList.toggle('active', btn === chip));
       };
     });
-    submit(form, approve ? 'Approve this rental request?' : 'Reject this rental request?', approve ? 'The equipment stays reserved until preparation and handoff or expiry.' : 'The reservation will be released. Verified payments remain recorded for refund.', async fields => saved(await api(`/mobile/rentals/${encodeURIComponent(row.id)}/review`, { method: 'POST', body: JSON.stringify(approve ? { action, notes: fields.notes } : { action, reason: fields.reason }) }), approve ? 'Rental request approved. Prepare the equipment for delivery.' : 'Rental request rejected.'), { confirm: false });
+    submit(form, approve ? 'Approve this rental request?' : 'Reject this rental request?', approve ? 'The equipment stays reserved until preparation and handoff or expiry.' : 'The reservation will be released. Verified payments remain recorded for refund.', async fields => saved(await api(`/mobile/rentals/${encodeURIComponent(row.id)}/review`, { method: 'POST', body: JSON.stringify(approve ? { action, notes: fields.notes } : { action, reason: fields.reason }) }), approve ? 'Rental request approved. Prepare the equipment for delivery.' : 'Rental request rejected.', updated => continueRental({ ...row, ...updated })), { confirm: false });
   }
   async function paymentProofReviewForm(row) {
-    showModal('Review QR payment', `<form class="admin-form rental-desk-form"><p>Rental request · ${e(row.rental_code || row.id)} · ${e(row.customer_name)}</p><p>Expected transfer: <strong>${e(h.money(Number(row.rental_fee || 0)))}</strong></p><div data-proof-content>Loading payment screenshot…</div><label>Review note<textarea name="notes" maxlength="1000" rows="2"></textarea></label><label data-proof-reject-reason hidden>Why is this proof being rejected?<textarea name="reason" maxlength="1000" rows="3"></textarea></label><p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Close</button><button type="button" class="secondary" data-reject-proof>Reject proof</button><button type="button" class="primary" data-verify-proof>Verify payment &amp; approve request</button></div></form>`);
+    showModal('Review QR payment', `<form class="admin-form rental-desk-form">${renderRentalTaskProgress(row, 'review')}<p>Rental request · ${e(row.rental_code || row.id)} · ${e(row.customer_name)}</p><p>Expected transfer: <strong>${e(h.money(Number(row.rental_fee || 0)))}</strong></p><div data-proof-content>Loading payment screenshot…</div><label>Review note<textarea name="notes" maxlength="1000" rows="2"></textarea></label><label data-proof-reject-reason hidden>Why is this proof being rejected?<textarea name="reason" maxlength="1000" rows="3"></textarea></label><p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Close</button><button type="button" class="secondary" data-reject-proof>Reject proof</button><button type="button" class="primary" data-verify-proof>Verify payment &amp; approve request</button></div></form>`);
     const form = modal.querySelector('form'), verify = form.querySelector('[data-verify-proof]'), reject = form.querySelector('[data-reject-proof]'), error = form.querySelector('.form-error');
     form.querySelector('[data-close]').onclick = () => modal.close();
     try {
@@ -297,7 +338,7 @@ export function createRentalDesk(h) {
       if (action === 'REJECT' && !reason) { form.querySelector('[data-proof-reject-reason]').hidden = false; form.elements.reason.required = true; error.textContent = 'Enter why the screenshot cannot be verified.'; form.elements.reason.focus(); return; }
       verify.disabled = reject.disabled = true; error.textContent = '';
       try {
-        await saved(await api(`/rentals/${encodeURIComponent(row.id)}/payment-review`, { method: 'POST', body: JSON.stringify({ action, ...(action === 'REJECT' ? { reason } : { notes: form.elements.notes.value }) }) }), action === 'VERIFY' ? 'Payment verified. Rental request approved.' : 'Payment proof rejected. The customer can upload a new screenshot.');
+        await saved(await api(`/rentals/${encodeURIComponent(row.id)}/payment-review`, { method: 'POST', body: JSON.stringify({ action, ...(action === 'REJECT' ? { reason } : { notes: form.elements.notes.value }) }) }), action === 'VERIFY' ? 'Payment verified. Rental request approved.' : 'Payment proof rejected. The customer can upload a new screenshot.', updated => action === 'VERIFY' ? continueRental({ ...row, ...updated }) : h.transactionDetails?.({ ...row, ...updated }));
       } catch (problem) { if (form.isConnected) { error.textContent = problem.message; verify.disabled = reject.disabled = false; } }
     };
     verify.onclick = () => run('VERIFY');
@@ -307,7 +348,7 @@ export function createRentalDesk(h) {
     if (!row || row.status !== 'APPROVED') { toast('Approve the rental request before preparing the equipment.'); return; }
     const isDelivery = row.fulfillment_mode !== 'SHOP_HANDOVER';
     const prepareActions = `<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button>${isDelivery ? `<button type="button" class="primary btn-terminal-dispatch" data-prepare-esp32 title="Scan equipment QR and confirm shop departure on the ESP32 counter terminal. Timer stays stopped until resort handoff.">${terminalWifiIcon}<span>Confirm shop departure on terminal</span></button>` : ''}<button type="submit" class="${isDelivery ? 'secondary' : 'primary'}">${row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Mark ready for handover' : 'Mark ready without terminal'}</button></div>`;
-    showModal(row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Prepare walk-in equipment' : 'Prepare equipment for delivery', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Scan the assigned unit’s printed QR at the shop. This verifies the exact unit before handover and keeps the rental timer stopped.</p>${scanField('inventoryCode','Assigned equipment QR')}${manualControls}${prepareActions}</form>`);
+    showModal(row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Prepare walk-in equipment' : 'Prepare equipment for delivery', `<form class="admin-form rental-desk-form">${renderRentalTaskProgress(row, 'prepare')}<p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Scan the assigned unit’s printed QR at the shop. This verifies the exact unit before handover and keeps the rental timer stopped.</p>${scanField('inventoryCode','Assigned equipment QR')}${manualControls}${prepareActions}</form>`);
     const form = modal.querySelector('form'); bindManual(form, row, false);
     const terminalOperationKey = rentalOperationKey();
     const espBtn = form.querySelector('[data-prepare-esp32]');
@@ -326,18 +367,16 @@ export function createRentalDesk(h) {
               ...(fields.manualLookup === 'on' ? { manualLookup: true, manualReason: fields.manualReason } : {})
             })
           });
-          modal.close();
-          try { await refresh(); } catch {}
-          redraw();
-          toast('Dispatched to ESP32 Counter Terminal! Press the physical button on the terminal to confirm shop departure.');
-          if (h.showHandoff && res?.request) h.showHandoff(res.request, res.rental || row);
+          await saved(res, 'Dispatched to ESP32 Counter Terminal! Press the physical button on the terminal to confirm shop departure.', updated => {
+            if (h.showHandoff && res?.request) h.showHandoff(res.request, updated || row);
+          });
         } catch (problem) {
           if (form.isConnected) { error.textContent = problem.message; espBtn.disabled = false; }
         }
       };
     }
     submit(form, 'Prepare this equipment?', `${row.item_name} (${row.item_code}) will be marked ready for delivery to ${row.delivery_location || 'the customer'}. The rental timer stays stopped.`, async fields => saved(await api(`/rentals/${encodeURIComponent(row.id)}/prepare-delivery`, { method: 'POST', body: JSON.stringify({ inventoryCode: fields.inventoryCode, ...(fields.manualLookup === 'on' ? { manualLookup: true, manualReason: fields.manualReason } : {}) }) }), row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Equipment verified and ready for shop handover.' : 'Equipment verified and ready for delivery.', updated => {
-      if (updated && form.ownerDocument && updated.fulfillment_mode === 'SHOP_HANDOVER') releaseForm(updated);
+      if (updated) continueRental({ ...row, ...updated });
     }), { confirm: false });
   }
   function releaseForm(row) {
@@ -346,7 +385,7 @@ export function createRentalDesk(h) {
     const counterHandoff = row.fulfillment_mode === 'SHOP_HANDOVER';
     const amount = value => e(h.money(Number(value || 0)));
     const rollingHelperHtml = walkIn ? '' : '<p class="rental-code-help">Ask the customer to open My Rentals and show their current handoff QR or 6-digit PIN. Use the printed rental reference only when the customer cannot show their ticket.</p>';
-    showModal('Deliver / Hand over equipment', `<form class="admin-form rental-desk-form rental-release-form">
+    showModal('Deliver / Hand over equipment', `<form class="admin-form rental-desk-form rental-release-form">${renderRentalTaskProgress(row, 'handover')}
       <ol class="rental-release-steps" aria-label="Handoff progress">${[walkIn ? 'Verify walk-in rental' : 'Customer rental QR', 'Confirm handoff'].map((label, i) => `<li data-release-step="${i + 1}" ${i === 0 ? 'aria-current="step"' : ''}><span>${i + 1}</span><strong>${label}</strong></li>`).join('')}</ol>
       <div class="rental-flow-summary"><div><small>Rental request · ${e(row.rental_code || row.id)}</small><strong>${e(row.item_name)}</strong><span>${e(row.customer_name)} · ${e(row.delivery_location || 'Shop pickup')}</span></div><span class="rental-timer-note">Timer starts at handoff</span></div>
       <div class="rental-flow-scroll">
@@ -460,11 +499,9 @@ export function createRentalDesk(h) {
               inspection: { condition: fields.condition, result: 'AVAILABLE', notes, accessoriesChecked: fields.accessoriesChecked === 'on', photos: photos() }
             })
           });
-          modal.close();
-          try { await refresh(); } catch {}
-          redraw();
-          toast('Sent to ESP32 Counter Terminal! Press the physical button on the terminal to start the rental timer.');
-          if (h.showHandoff && res?.request) h.showHandoff(res.request, res.rental || row);
+          await saved(res, 'Sent to ESP32 Counter Terminal! Press the physical button on the terminal to start the rental timer.', updated => {
+            if (h.showHandoff && res?.request) h.showHandoff(res.request, updated || row);
+          });
         } catch (problem) {
           if (form.isConnected) { error.textContent = problem.message; espReleaseBtn.disabled = false; }
         }
@@ -473,7 +510,7 @@ export function createRentalDesk(h) {
     submit(form, 'Confirm physical handoff?', `${row.item_name} will be delivered to ${row.customer_name} at ${row.delivery_location || 'the selected location'}. The rental timer starts now.`, async (fields, key) => {
       if (counterHandoff && !form.elements.emergencyBypassConfirm?.checked) throw new Error('Use the counter terminal, or explicitly confirm the offline fallback.');
       const notes = fields.inspectionNotes.trim() || 'No additional inspection notes.';
-      return saved(await api(`/rentals/${encodeURIComponent(row.id)}/release`, { method: 'POST', body: JSON.stringify({ requestKey: key, ...verification.releaseCodes(), customerVerified: fields.customerVerified === 'on', paymentVerified: fields.paymentVerified === 'on', customerTermsAcknowledged: fields.customerTermsAcknowledged === 'on', inspection: { condition: fields.condition, result: 'AVAILABLE', notes, accessoriesChecked: fields.accessoriesChecked === 'on', photos: photos() } }) }), 'Handoff confirmed. Rental timer started.');
+      return saved(await api(`/rentals/${encodeURIComponent(row.id)}/release`, { method: 'POST', body: JSON.stringify({ requestKey: key, ...verification.releaseCodes(), customerVerified: fields.customerVerified === 'on', paymentVerified: fields.paymentVerified === 'on', customerTermsAcknowledged: fields.customerTermsAcknowledged === 'on', inspection: { condition: fields.condition, result: 'AVAILABLE', notes, accessoriesChecked: fields.accessoriesChecked === 'on', photos: photos() } }) }), 'Handoff confirmed. Rental timer started.', updated => continueRental({ ...row, ...updated }));
     }, { confirm: false });
   }
   function receiveForm(id, reject = false) {
@@ -523,17 +560,15 @@ export function createRentalDesk(h) {
               inspection: { condition: fields.condition, result: fields.result, notes: fields.inspectionNotes, accessoriesChecked: fields.accessoriesChecked === 'on', photos: photos() }
             })
           });
-          modal.close();
-          try { await refresh(); } catch {}
-          redraw();
-          toast('Return dispatched to ESP32 Counter Terminal! Press the physical button on the terminal to finalize return.');
-          if (h.showHandoff && res?.request) h.showHandoff(res.request, res.rental || row);
+          await saved(res, 'Return dispatched to ESP32 Counter Terminal! Press the physical button on the terminal to finalize return.', updated => {
+            if (h.showHandoff && res?.request) h.showHandoff(res.request, updated || row);
+          });
         } catch (problem) {
           if (form.isConnected) { error.textContent = problem.message; espReturnBtn.disabled = false; }
         }
       };
     }
-    submit(form,'Complete this return?','The unit becomes available only if the inspection clears it. Payment balances remain separate.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/complete-return`,{method:'POST',body:JSON.stringify({requestKey:key,penaltyAmount:Number(fields.penaltyAmount),penaltyReason:fields.penaltyReason,inspection:{condition:fields.condition,result:fields.result,notes:fields.inspectionNotes,accessoriesChecked:fields.accessoriesChecked==='on',photos:photos()}})}),'Return confirmed. Review any outstanding rental balance.',updated=>h.transactionDetails?.({...row,...updated})));
+    submit(form,'Complete this return?','The unit becomes available only if the inspection clears it. Payment balances remain separate.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/complete-return`,{method:'POST',body:JSON.stringify({requestKey:key,penaltyAmount:Number(fields.penaltyAmount),penaltyReason:fields.penaltyReason,inspection:{condition:fields.condition,result:fields.result,notes:fields.inspectionNotes,accessoriesChecked:fields.accessoriesChecked==='on',photos:photos()}})}),'Return confirmed. Review any outstanding rental balance.',updated=>continueRental({...row,...updated})));
   }
   function chooseReturn() { lookupForm('INVENTORY'); }
   function lookupForm(kind = 'RENTAL') {
@@ -551,7 +586,10 @@ export function createRentalDesk(h) {
         const response = await api('/rentals/lookup', { method: 'POST', body: JSON.stringify({ kind, code }) });
         if (!form.isConnected || !modal.open) return;
         (kind === 'RENTAL' ? scannedBookings : scannedInventory).set(response.rental.id, code);
-        modal.close(); try { await refresh(); } catch {} redraw(); h.transactionDetails?.(response.rental);
+        await saved(response, 'Rental found.', updated => {
+          if (kind !== 'RENTAL' && updated?.status === 'ACTIVE') receiveForm(updated.id);
+          else continueRental(updated);
+        });
       } catch (error) { if (form.isConnected) form.querySelector('.form-error').textContent = error.message; }
       finally { button.disabled = false; button.textContent = 'Find record'; }
     };
@@ -559,11 +597,11 @@ export function createRentalDesk(h) {
   function assignmentForm(row) {
     showModal('Change assigned unit',`<form class="admin-form rental-desk-form"><p>Choose another available unit of the same product and price.</p>${scanField('inventoryCode','Replacement inventory QR or item code')}<p data-camera-status role="status"></p><label>Reason<textarea name="reason" required maxlength="1000"></textarea></label>${actions('Change unit')}</form>`);
     const form=modal.querySelector('form');bindQrReaders(form,modal);
-    submit(form,'Assign this replacement unit?','The old reservation is released only after the replacement is reserved.',async fields=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/assignment`,{method:'POST',body:JSON.stringify({inventoryCode:fields.inventoryCode,reason:fields.reason})}),'Assigned unit updated.'));
+    submit(form,'Assign this replacement unit?','The old reservation is released only after the replacement is reserved.',async fields=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/assignment`,{method:'POST',body:JSON.stringify({inventoryCode:fields.inventoryCode,reason:fields.reason})}),'Assigned unit updated.', updated => continueRental({ ...row, ...updated })));
   }
   function settlementForm(row) {
     showModal('Record payment or refund',`<form class="admin-form rental-desk-form"><p>Outstanding balance: ${e(h.money(row.balance_due || 0))} · Refund due: ${e(h.money(row.refund_due || 0))}</p><label>Additional payment received (₱)<input name="paymentAmount" type="number" min="0" step="0.01" value="0"/></label>${row.status==='COMPLETED'?'':'<label>Rental payment refunded (₱)<input name="rentalRefundAmount" type="number" min="0" step="0.01" value="0"/></label>'}<label>Payment / refund method<select name="paymentMethod"><option value="CASH">Cash · in person</option><option value="QR">QR transfer</option></select></label><label>Transfer reference<input name="reference" maxlength="150"/></label><label>Receipt / settlement notes<textarea name="notes" required maxlength="1000"></textarea></label>${actions('Record settlement')}</form>`);
-    submit(modal.querySelector('form'),'Record these money movements?','Confirm only amounts actually collected, deducted, or refunded.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/settlement`,{method:'POST',body:JSON.stringify({requestKey:key,paymentAmount:Number(fields.paymentAmount),rentalRefundAmount:Number(fields.rentalRefundAmount || 0),paymentMethod:fields.paymentMethod,reference:fields.reference,notes:fields.notes})}),'Settlement recorded.'));
+    submit(modal.querySelector('form'),'Record these money movements?','Confirm only amounts actually collected, deducted, or refunded.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/settlement`,{method:'POST',body:JSON.stringify({requestKey:key,paymentAmount:Number(fields.paymentAmount),rentalRefundAmount:Number(fields.rentalRefundAmount || 0),paymentMethod:fields.paymentMethod,reference:fields.reference,notes:fields.notes})}),'Settlement recorded.', updated => h.transactionDetails?.({ ...row, ...updated })));
   }
   async function viewPhoto(id) { try { const result=await api(`/rental-inspection-photos/${encodeURIComponent(id)}`);showModal('Inspection photo',`<img class="inspection-photo-full" alt="Recorded inspection" src="${e(result.photo.data_url)}"/>`); } catch(error){toast(error.message);} }
   function bind(root = document) {
@@ -574,5 +612,5 @@ export function createRentalDesk(h) {
     root.querySelectorAll('[data-inspection-photo]').forEach(button=>button.onclick=()=>viewPhoto(button.dataset.inspectionPhoto));
     root.querySelector('[data-find-booking]')?.addEventListener('click',()=>lookupForm('RENTAL'));
   }
-  return { bookingForm, reviewForm, prepareForm, releaseForm, receiveForm, completeReturnForm, chooseReturn, lookupForm, assignmentForm, settlementForm, bind };
+  return { continueRental, bookingForm, reviewForm, prepareForm, releaseForm, receiveForm, completeReturnForm, chooseReturn, lookupForm, assignmentForm, settlementForm, bind };
 }

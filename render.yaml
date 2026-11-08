@@ -6,6 +6,7 @@ services:
     region: singapore
     buildCommand: npm --prefix apps/web install && npm --prefix apps/web run build && npm --prefix apps/backend install
     startCommand: node apps/backend/src/server.mjs
+    healthCheckPath: /api/ready
     envVars:
       - key: NODE_VERSION
         value: 22

@@ -65,9 +65,10 @@ test('due return requests stay marked overdue until physical receipt and inspect
 
 test('openTransaction immediately displays modal and does not make unnecessary workspace refreshes', async () => {
   let modalTitle = '', modalBody = '', workspaceReads = 0, lookupCalls = 0;
+  const loadingPanel = {};
   const modalMock = {
     open: true,
-    querySelector: () => ({ addEventListener() {}, onclick: null }),
+    querySelector: selector => selector === '.transaction-record-modal' ? loadingPanel : ({ addEventListener() {}, onclick: null }),
     querySelectorAll: () => []
   };
   const showModal = (title, body) => {
@@ -114,4 +115,19 @@ test('openTransaction immediately displays modal and does not make unnecessary w
   assert.equal(lookupCalls, 1);
   assert.equal(workspaceReads, 1);
   assert.ok(modalBody.includes('Cancelled'));
+});
+
+
+test('a delayed notification lookup cannot replace a newer dialog', async () => {
+  let finish, panel = {}, body = '';
+  const modal = { open: true, querySelector: selector => selector === '.transaction-record-modal' ? panel : null, querySelectorAll: () => [] };
+  const ui = createWorkspaceUI({ ...h, modal,
+    showModal: (_title, html) => { body = html; panel = {}; },
+    api: () => new Promise(resolve => { finish = resolve; })
+  });
+  const opening = ui.openTransaction('missing');
+  assert.match(body, /Loading rental details/);
+  panel = {}; body = 'New inspection draft';
+  finish({ rental: row }); await opening;
+  assert.equal(body, 'New inspection draft');
 });

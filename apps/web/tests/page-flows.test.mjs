@@ -9,14 +9,14 @@ const escape = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll(
 const helpers = { escape, icon: () => '', money: value => `PHP ${value}`, formatDate: value => value || 'Not recorded' };
 const model = () => ({ customers: [], transactions: [], items: [], categories: [], rates: [], maintenance: [], users: [], settings: {}, terminals: [], verification: [], auditLogs: [] });
 
-function handoffFixture() {
+function handoffFixture(extra = {}) {
   let current = { ...model(), transactions: [{ id: 'rental', rental_code: 'R-1', status: 'ACTIVE', rental_fee: 150 }], verification: [{ id: 'request', rental_id: 'rental', transaction_type: 'RETURN', status: 'PENDING', verification_code: '123456', terminal_id: 'terminal', penalty_amount: 50, penalty_reason: 'Missing piece', inspection: { condition: 'DAMAGED', result: 'UNDER_MAINTENANCE', notes: 'A damaged piece' } }] };
   const error = { textContent: '' }, button = { disabled: false, isConnected: true, textContent: '', addEventListener() {}, setAttribute() {}, removeAttribute() {} };
   const panel = { innerHTML: '', querySelector: selector => selector === '[data-handoff-error]' ? error : button };
   const title = { textContent: '' };
   const modal = { open: false, activePanel: null, querySelector: selector => selector === '[data-handoff-request]' ? modal.activePanel : selector === 'h2' ? title : button, querySelectorAll: () => [], setAttribute() {} };
   let sync = async () => {}, refreshes = 0;
-  const workflow = createTransactionWorkflow({ ...helpers, modal, model: () => current,
+  const workflow = createTransactionWorkflow({ ...helpers, ...extra, modal, model: () => current,
     showModal: (heading, body) => { modal.open = true; modal.activePanel = panel; title.textContent = heading; panel.innerHTML = body; },
     refresh: async () => { refreshes++; await sync(); }, redraw() {} });
   return { workflow, modal, panel, title, error, button, setModel: value => { current = value; }, setSync: value => { sync = value; }, model: () => current, refreshes: () => refreshes };
@@ -150,4 +150,21 @@ test('pricing editor preserves saved service hours when changing unrelated price
     await ui.load(); ui.bind('Rates & Fees', {}, () => {}); openPricing();
     assert.match(shown, /name="opensAt" type="time" value="09:30"/); assert.match(shown, /name="closesAt" type="time" value="18:45"/);
   } finally { if (previous === undefined) delete globalThis.document; else globalThis.document = previous; }
+});
+
+
+test('terminal confirmation automatically opens final details exactly once', async () => {
+  const opened = [];
+  const s = handoffFixture({ transactionDetails: rental => opened.push(rental) });
+  s.workflow.verificationDetails('request');
+  assert.equal(opened.length, 0);
+  s.setSync(async () => s.setModel({ ...s.model(),
+    transactions: [{ id: 'rental', status: 'COMPLETED', balance_due: 0, refund_due: 0 }],
+    verification: [{ ...s.model().verification[0], status: 'CONFIRMED' }]
+  }));
+  await s.workflow.refreshPendingHandoff();
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].status, 'COMPLETED');
+  await s.workflow.refreshPendingHandoff();
+  assert.equal(opened.length, 1);
 });

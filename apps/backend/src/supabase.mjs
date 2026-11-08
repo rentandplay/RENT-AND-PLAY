@@ -144,8 +144,10 @@ export function createSupabaseFirestore({
   serviceRoleKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
   bucket = process.env.SUPABASE_STORAGE_BUCKET || 'rental-media',
   fetcher = fetch,
+  requestTimeoutMs = 15000,
   onWrite = null
 } = {}) {
+  if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs <= 0) throw new RangeError('requestTimeoutMs must be a positive integer.');
   const baseUrl = normalizeSupabaseUrl(url);
   const apiKey = (serviceRoleKey || '').trim();
   const mediaDataUrlCache = new Map();
@@ -168,6 +170,7 @@ export function createSupabaseFirestore({
       );
     }
     const response = await fetcher(`${baseUrl}/rest/v1/rpc/${fnName}`, {
+      signal: AbortSignal.timeout(requestTimeoutMs),
       method: 'POST',
       headers: headers(),
       body: JSON.stringify(params)
@@ -203,6 +206,7 @@ export function createSupabaseFirestore({
 
     try {
       const res = await fetcher(`${baseUrl}/storage/v1/object/${bucket}/${objectPath}`, {
+        signal: AbortSignal.timeout(requestTimeoutMs),
         method: 'POST',
         headers: headers({ 'Content-Type': contentType, 'x-upsert': 'true' }),
         body: bytes
@@ -227,6 +231,7 @@ export function createSupabaseFirestore({
     }
     try {
       const res = await fetcher(`${baseUrl}/storage/v1/object/public/${targetBucket}/${objectPath}`, {
+        signal: AbortSignal.timeout(requestTimeoutMs),
         headers: headers()
       });
       if (!res.ok) return null;

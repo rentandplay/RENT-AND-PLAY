@@ -452,6 +452,11 @@ export function App() {
       rentalEventSyncPendingRef.current = false;
       rentalEventSyncingRef.current = true;
       try {
+        // A handoff is a status viewer, so it can safely update while open.
+        // Other dialogs still keep their drafts until the operator closes them.
+        if (c.modal?.querySelector('[data-handoff-request]')) {
+          await c.workspaceUI.refreshPendingHandoff();
+        }
         const synced = await syncLiveRentalUpdate({
           notifications: c.rentalNotifications,
           isDialogOpen: () => Boolean(c.modal?.open),
@@ -464,7 +469,6 @@ export function App() {
               }
             } else if (currentPage === 'ESP32 terminal') {
               const refreshedPage = currentPage;
-              await refresh({ force: true });
               await c.workspaceUI.refresh();
               if (!c.modal?.open && pageRef.current === refreshedPage && userRef.current) {
                 triggerRender();
@@ -474,9 +478,7 @@ export function App() {
               await refresh({ force: true });
             } else if (workspacePages.has(currentPage)) {
               const refreshedPage = currentPage;
-              c.workspaceUI.invalidate();
               await c.workspaceUI.refresh();
-              await refresh({ force: true });
               if (!c.modal?.open && pageRef.current === refreshedPage && userRef.current) {
                 triggerRender();
               }
@@ -537,6 +539,7 @@ export function App() {
         receivedReady = true;
       });
       source.addEventListener('rental.changed', scheduleRentalEventSync);
+      source.addEventListener('verification.changed', scheduleRentalEventSync);
       source.addEventListener('inventory.changed', scheduleRentalEventSync);
       source.addEventListener('maintenance.changed', scheduleRentalEventSync);
       source.addEventListener('customer.changed', event => {

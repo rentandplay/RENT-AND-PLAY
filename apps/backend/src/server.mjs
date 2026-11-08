@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { withDeadline } from './request-deadline.mjs';
 import { createHash } from 'node:crypto';
 import { openChat, listChats, chatMessages, sendChatMessage, readChat, setChatStatus, setTyping, getTyping } from './chat.mjs';
 import { readFile } from 'node:fs/promises';
@@ -80,6 +81,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   const readCache = createReadCache(firestore, { ttlMs: 300000, maxEntries: 4096 });
   const readDatabase = readCache.database;
   const expiryListeners = new Set();
+  const customerListeners = new Set();
   const verificationSweep = createExpirySweep(firestore, { idleIntervalMs: 300000, now: () => now().getTime(), onExpired: result => {
     for (const collection of ['verification_requests', 'rentals', 'items', 'audit_logs']) readCache.invalidate(collection);
     for (const listener of expiryListeners) listener(result);
@@ -90,6 +92,10 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   });
   let healthCheckedAt = -Infinity, healthError = null, healthPending = null;
   const services = {
+    subscribeCustomerChanges(listener) {
+      customerListeners.add(listener);
+      return () => customerListeners.delete(listener);
+    },
     uploadProfilePhoto: (uid, dataUrl) => firestore.uploadProfilePhoto(uid, dataUrl),
     openChat: (actor, input) => openChat(firestore, actor, input, now()),
     listChats: (actor, options) => listChats(firestore, actor, options),
@@ -143,11 +149,11 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
       requireFirebaseConfig();
       const checkedAt = now().getTime();
       if (healthPending) return healthPending;
-      if (checkedAt - healthCheckedAt < 60000) {
+      if (checkedAt - healthCheckedAt < (healthError ? 5000 : 60000)) {
         if (healthError) throw healthError;
         return;
       }
-      healthPending = firestore.collection('users').limit(1).get()
+      healthPending = withDeadline(() => firestore.collection('users').limit(1).get(), 3000)
         .then(() => { healthError = null; healthCheckedAt = now().getTime(); })
         .catch(error => { healthError = error; healthCheckedAt = now().getTime(); throw error; })
         .finally(() => { healthPending = null; });
@@ -237,12 +243,11 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
       if (String(claims.uid) === ownerUid) result.user.role = 'OWNER';
       if (wroteCollections.includes('customers') || wroteCollections.includes('users') || result.created || result.customerCreated) {
         const customerName = result.user?.full_name || result.user?.name || claims.name || '';
-        rentalEvents.publishCustomer({
+        for (const listener of customerListeners) listener({
           customerId: String(claims.uid),
           customerName,
           action: (result.created || result.customerCreated) ? 'registered' : 'updated'
         });
-        rentalEvents.publishDataChange('data.changed', { collections: ['customers', 'users'] });
       }
       return result;
     },
@@ -412,7 +417,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
 
 const defaultServices = createFirebaseServices();
 
-export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices, notificationWorker = services === defaultServices, hardwareEnabled = process.env.ENABLE_ESP32 === 'true' } = {}) {
+export function createApi({ services = defaultServices, sessions = new FirebaseSessions(), expiryWorker = services === defaultServices, notificationWorker = services === defaultServices, hardwareEnabled = process.env.ENABLE_ESP32 === 'true', healthTimeoutMs = 3500 } = {}) {
   const checkEmail = validateEmailFormat;
   const rentalEvents = createRentalEventHub();
   let pushWorker, holdWorker;
@@ -542,16 +547,18 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         return;
       }
       if (path === '/api/auth/logout' && req.method === 'POST') { if (await sessions.verify(token)) sessions.revoke?.(token); return send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0, true) }); }
-      if (path === '/api/health' && req.method === 'GET') {
+      if (['/api/health', '/api/ready'].includes(path) && req.method === 'GET') {
+        const readiness = path === '/api/ready';
+        const provider = isSupabaseConfigured() ? 'supabase' : 'firebase';
         try {
           quotaBackoff.assertAvailable();
-          await services.health();
-          return send(res, 200, { database: true, provider: isSupabaseConfigured() ? 'supabase' : 'firebase', firebaseProjectId: services.firebaseProjectId });
+          await withDeadline(() => services.health(), healthTimeoutMs);
+          return send(res, 200, { ...(readiness ? { ready: true } : {}), database: true, provider, firebaseProjectId: services.firebaseProjectId });
         } catch (error) {
           quotaBackoff.record(error);
           const failure = firebaseFailure(error);
-          if (!error.quotaCooldown) console.warn(`Firebase health check failed (${error.code || 'FIREBASE_ERROR'}): ${error.message}`);
-          return send(res, 200, { database: false, provider: 'firebase', warning: failure.error, code: failure.code, retryAfterSeconds: failure.retryAfterSeconds }, { 'Retry-After': String(failure.retryAfterSeconds) });
+          if (!error.quotaCooldown) console.warn(`Database health check failed (${error.code || 'DATABASE_ERROR'}): ${error.message}`);
+          return send(res, readiness ? 503 : 200, { ...(readiness ? { ready: false } : {}), database: false, provider, warning: failure.error, code: failure.code, retryAfterSeconds: failure.retryAfterSeconds }, { 'Retry-After': String(failure.retryAfterSeconds) });
         }
       }
       if (path === '/api/auth/email-check' && req.method === 'POST') {
@@ -1002,7 +1009,10 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       else {
         quotaBackoff.record(error);
         const { status, ...failure } = firebaseFailure(error);
-        if (!error.quotaCooldown) console.error(`Backend request failed (${error.code || 'FIREBASE_ERROR'}): ${error.message} ${failure.error}`);
+        if (!error.quotaCooldown) {
+          const diagnostic = error instanceof ReferenceError || error instanceof TypeError ? error.stack : error.message;
+          console.error(`Backend request failed [${req.method} ${requestPath}] (${error.code || error.name || 'SERVER_ERROR'}): ${diagnostic}`);
+        }
         send(res, status, failure, { 'Retry-After': String(failure.retryAfterSeconds) });
       }
     }
@@ -1016,6 +1026,11 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
   };
   const unsubscribeExpiries = services.subscribeRentalExpiries?.(publishExpiries);
   server.once('close', () => unsubscribeExpiries?.());
+  const unsubscribeCustomers = services.subscribeCustomerChanges?.(change => {
+    rentalEvents.publishCustomer(change);
+    rentalEvents.publishDataChange('data.changed', { collections: ['customers', 'users'] });
+  });
+  server.once('close', () => unsubscribeCustomers?.());
   if (expiryWorker && services.sweepVerificationRequests) {
     holdWorker = createBackgroundWorker(async () => {
       quotaBackoff.assertAvailable();

@@ -153,3 +153,21 @@ test('equipment refresh reuses recent data, while saves and force refresh bypass
   await inventory.refresh({ force: true }); assert.equal(calls.filter(path => path === '/inventory').length, 3);
   now += 31000; await inventory.refresh(); assert.equal(calls.filter(path => path === '/inventory').length, 4);
 });
+
+
+test('simultaneous live and polling refreshes share one request without blocking another page', async () => {
+  const requests = [];
+  const ui = createWorkspaceUI({ ...helpers, api: path => {
+    const pending = deferred(); requests.push({ path, pending }); return pending.promise;
+  } });
+  ui.render('Rentals', user);
+  const first = ui.refresh(), second = ui.refresh();
+  assert.equal(first, second);
+  assert.equal(requests.length, 1);
+  ui.render('Returns', user);
+  const otherPage = ui.refresh();
+  assert.equal(requests.length, 2);
+  requests[1].pending.resolve(snapshot(requests[1].path)); await otherPage;
+  requests[0].pending.resolve(snapshot(requests[0].path)); await first;
+  assert.equal(ui.business().business_name, 'Returns');
+});

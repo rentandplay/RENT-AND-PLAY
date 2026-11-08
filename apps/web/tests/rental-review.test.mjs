@@ -9,6 +9,7 @@ function setup(api, { refreshFailure = false } = {}) {
   const messages = [];
   const form = {
     isConnected: true, reportValidity: () => true,
+    elements: {}, querySelectorAll: () => [],
     querySelector: selector => selector === '[type="submit"]' ? button : selector === '.form-error' ? error : cancel,
     addEventListener: (_event, listener) => { submit = listener; }
   };
@@ -44,6 +45,8 @@ test('web staff approval submits the exact rental once, preserves its reference,
     assert.deepEqual(calls, [{ path: '/mobile/rentals/internal-rental-id/review', method: 'POST', body: { action: 'APPROVE', notes: 'Customer request checked' } }]);
     resolve(); await first;
     assert.equal(ui.refreshed, 1);
+    assert.equal(ui.title, 'Prepare equipment for delivery');
+    assert.match(ui.html, /aria-current="step"/);
     assert.match(ui.messages[0], /approved/);
   });
 });
@@ -62,6 +65,6 @@ test('failed web approval restores the form and a confirmed save survives a subs
     await ui.submit();
     assert.equal(attempts, 2); assert.equal(ui.refreshed, 1);
     assert.match(ui.messages[0], /approved/);
-    assert.match(ui.messages[0], /Refresh to see the latest records/);
+    assert.match(ui.messages.at(-1), /Refresh to see the latest records/);
   });
 });

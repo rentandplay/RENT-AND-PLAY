@@ -28,7 +28,7 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     }
   }
   const customerCode = !targetCustomerSnap.exists ? await allocateCustomerCode(db, now) : null;
-  const { profile, created, customerCreated } = await db.runTransaction(async tx => {
+  const { profile, created, customerCreated, wroteCollections } = await db.runTransaction(async tx => {
     const doc = await tx.get(userRef);
     const existing = doc.exists ? doc.data() : null;
     const isGoogleAccount = claims.firebase?.sign_in_provider === 'google.com' || Boolean(claims.firebase?.identities?.['google.com']);
@@ -95,7 +95,7 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     if (method === 'PATCH' || Object.keys(changes).length) {
       changes.updated_at = now;
     }
-    let custCreated = false;
+    let custCreated = false, custUpdated = false;
     const targetRole = existing ? existingRole : 'CUSTOMER';
     if (targetRole === 'CUSTOMER') {
       const customerDoc = await tx.get(matchedCustomerRef);
@@ -133,16 +133,16 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
         if (Object.keys(customerChanges).length) {
           customerChanges.updated_at = now;
           tx.update(matchedCustomerRef, customerChanges);
+          custUpdated = true;
         }
       }
     }
     if (!existing) tx.create(userRef, { ...created, ...changes });
     else if (Object.keys(changes).length) tx.update(userRef, changes);
-    return { profile: { ...created, ...changes }, created: !existing, customerCreated: custCreated };
+    return { profile: { ...created, ...changes }, created: !existing, customerCreated: custCreated,
+      wroteCollections: [...(!existing || Object.keys(changes).length ? ['users'] : []), ...(custCreated || custUpdated ? ['customers'] : [])] };
   });
-  if (created || customerCreated || method === 'PATCH' || (method === 'POST' && (created || customerCreated || Object.keys(changes).length))) {
-    onWrite(['users', 'customers']);
-  }
+  if (wroteCollections.length) onWrite(wroteCollections);
   return {
     user: serializeMobile({
       id: claims.uid,

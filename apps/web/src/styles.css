@@ -15807,11 +15807,11 @@ button.secondary:active:not(:disabled),
 }
 
 dialog[open]:not(:has(.inv-print-settings)) {
-  animation: smoothModalPop 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: smoothModalPop 0.12s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 dialog::backdrop {
-  animation: smoothBackdropFade 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: smoothBackdropFade 0.12s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* 10. Form Controls Smooth Focus */
@@ -15859,6 +15859,15 @@ textarea,
 }
 
 /* Keep the counter workflow actions reachable on smaller operator screens. */
+.rental-task-progress { padding: 16px; border: 1px solid var(--ui-border, #e7e0d8); border-radius: 12px; background: var(--ui-soft, #faf7f3); margin-bottom: 18px; }
+.rental-task-progress ol { display: flex; gap: 8px; padding: 0; margin: 0; list-style: none; }
+.rental-task-progress li { flex: 1; display: flex; flex-direction: column; gap: 7px; align-items: flex-start; color: var(--ui-muted, #6b7280); font-size: 11px; line-height: 1.4; border-top: 3px solid var(--ui-border, #e7e0d8); padding-top: 10px; }
+.rental-task-progress li > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; background: var(--ui-surface, white); border: 1px solid var(--ui-border, #e7e0d8); }
+.rental-task-progress li.is-current { color: var(--ui-accent, #b94d12); border-color: currentColor; }
+.rental-task-progress li.is-current > span { background: #b94d12; border-color: #b94d12; color: white; }
+.rental-task-progress li.is-done { color: #37775b; border-color: currentColor; }
+.rental-task-progress p { font-size: 12px; line-height: 1.5; margin: 12px 0 0; color: var(--ui-muted, #6b7280); }
+.transaction-record-modal > .rental-task-progress { margin: 16px 20px; }
 .rental-release-footer .form-actions { min-width: 0; flex-shrink: 1; flex-wrap: wrap; justify-content: flex-end; }
 #modal:has([data-handoff-request]) { width: min(680px, calc(100vw - 32px)); }
 @media (max-width: 600px) {

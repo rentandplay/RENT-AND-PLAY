@@ -400,3 +400,39 @@ dialog::backdrop { background: #3e302a4d; backdrop-filter: blur(7px); }
 @media(max-width:430px) { .topbar .top-pill-profile > span:not(.avatar), .topbar .top-pill-sep { display: none; } .topbar .page-heading h1 { font-size: 16px; } .workspace .topbar { padding-inline: 12px !important; } }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
 @media print { .workspace { background: #fff; color: #182d47; } .workspace .panel { box-shadow: none; } }
+
+
+/* Keep the terminal desk stable during background polling. */
+.workspace .verification-workspace,
+.workspace .verification-workspace .panel { animation: none; }
+.workspace .verification-workspace .terminal-pulse-dot.online { animation: none; box-shadow: none; }
+.workspace .verification-workspace .terminal-station-hub { padding: 18px 20px; margin-bottom: 16px; }
+.workspace .verification-workspace .terminal-station-top { padding-bottom: 12px; margin-bottom: 0; gap: 16px; }
+.workspace .verification-workspace .terminal-title-area h2 { font-size: 20px; margin-top: 8px; }
+.workspace .verification-workspace .terminal-badge-row { flex-wrap: wrap; }
+.workspace .verification-workspace .terminal-station-actions { flex-wrap: wrap; gap: 8px; }
+.workspace .verification-workspace .terminal-status-badge.online { color: var(--teal-ink, #24694b); }
+.workspace .verification-workspace .terminal-status-badge.offline { color: var(--ui-muted, #626262); }
+.workspace .verification-workspace .terminal-sync-label { white-space: nowrap; }
+.workspace .verification-workspace .terminal-device-details > summary { padding: 12px 0 0; width: fit-content; }
+.workspace .verification-workspace .terminal-last-seen { margin: 14px 0 10px; font-size: 12px; color: var(--ui-muted); }
+.workspace .verification-workspace .terminal-test-btn { margin-bottom: 14px; opacity: 1; border-style: solid !important; }
+.workspace .verification-workspace .terminal-idle-box { padding: 16px 20px; margin: 0; border: 0; border-top: 1px solid var(--ui-border); border-radius: 0; background: transparent; }
+.workspace .verification-workspace .idle-icon-badge.is-offline { color: var(--ui-muted); background: var(--ui-soft); }
+.workspace .verification-workspace .verification-queue-panel { margin-bottom: 12px; }
+.workspace .verification-workspace .verification-queue-panel .panel-title { padding: 16px 20px; }
+.workspace .verification-workspace .terminal-guide-disclosure { margin-bottom: 16px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface); }
+.workspace .verification-workspace .terminal-guide-disclosure > summary { padding: 12px 18px; font-size: 13px; color: var(--ui-muted); cursor: pointer; }
+.workspace .verification-workspace .terminal-guide-bar { margin: 0; border: 0; box-shadow: none; background: transparent; padding: 16px 18px; }
+.workspace .verification-workspace .verification-history-panel { margin-top: 0; }
+.workspace .verification-workspace .history-filter-toolbar { gap: 16px; flex-wrap: wrap; align-items: end; }
+.workspace .verification-workspace .history-filter-toolbar .module-search { flex: 1 1 300px; max-width: 480px; min-width: 220px; }
+.workspace .verification-workspace .history-filter-toolbar .module-search input { width: 100%; }
+.workspace .verification-workspace .type-pill.hardware-test { color: var(--ui-muted); background: var(--ui-soft); }
+@media (max-width: 680px) {
+  .workspace .verification-workspace .terminal-station-hub { padding: 16px; }
+  .workspace .verification-workspace .terminal-station-actions { width: 100%; }
+  .workspace .verification-workspace .terminal-station-actions > button { flex: 1 1 130px; }
+  .workspace .verification-workspace .history-filter-toolbar .module-search { min-width: 0; max-width: none; flex-basis: 100%; }
+  .workspace .verification-workspace .history-filter-toolbar .transaction-selects { width: 100%; flex-wrap: wrap; }
+}

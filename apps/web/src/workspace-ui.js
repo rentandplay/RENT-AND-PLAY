@@ -1,3 +1,4 @@
+import { renderRentalTaskProgress } from './rental-desk.js';
 import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
 import { calculateDetailedAnalytics, forecastScenario } from './analytics-insights.js';
@@ -119,13 +120,38 @@ export function createWorkspaceUI(h) {
     preloadTask = task;
     return task;
   };
-  const refresh = async () => {
+  let refreshInFlight = null;
+  const refresh = () => {
+    const key = workspaceRequest();
+    if (refreshInFlight?.key === key && refreshInFlight.version === cacheVersion) return refreshInFlight.promise;
+    const request = { key, version: null, promise: null };
+    refreshInFlight = request;
+    request.promise = refreshWorkspace().finally(() => {
+      if (refreshInFlight === request) refreshInFlight = null;
+    });
+    request.version = cacheVersion;
+    return request.promise;
+  };
+  const refreshWorkspace = async () => {
     if(searchPage==='Payments'){await financeUI.refresh();return true;}
     const previous = model ? JSON.stringify(Object.fromEntries(Object.entries(model).filter(([key]) => key !== 'refreshedAt'))) : '';
     const next = await load(true);
     return previous !== JSON.stringify(Object.fromEntries(Object.entries(next).filter(([key]) => key !== 'refreshedAt')));
   };
-  const workflow = createTransactionWorkflow({ ...h, model: () => model, refresh, redraw: () => redraw(), transactionDetails });
+  const applyResponse = response => {
+    if (!model) return;
+    // Only apply committed server records. Older page reads cannot undo a save.
+    invalidate();
+    for (const [field, value] of [['transactions', response?.rental], ['verification', response?.request]]) {
+      if (!value?.id) continue;
+      const rows = model[field] ||= [];
+      const index = rows.findIndex(row => String(row.id) === String(value.id));
+      if (index < 0) rows.push(value);
+      else rows[index] = { ...rows[index], ...value };
+    }
+    modelVersion = cacheVersion;
+  };
+  const workflow = createTransactionWorkflow({ ...h, model: () => model, refresh, applyResponse, redraw: () => redraw(), transactionDetails });
   const setRecordScope=async value=>{if(remoteStatus===value)return;remoteStatus=value;remote[searchPage]={cursor:'',previous:[]};await load(false).catch(()=>{});redraw();};
   const customerUI = createCustomerUI({ ...h, model: () => model, refresh, transactionDetails, onRecordScope:setRecordScope });
   const maintenanceUI = createMaintenanceUI({ ...h, model: () => model, refresh, redraw: () => redraw(), resetPage: () => { pages.Maintenance = 0; }, onRecordScope:setRecordScope, transactionDetails });
@@ -197,7 +223,7 @@ export function createWorkspaceUI(h) {
     const returnRequest = receiving && returnPending ? `<section class="record-section"><h3>Customer return request</h3><p>Reported condition: ${e(row.mobile_return_request?.reported_condition || 'Not recorded')}. ${e(row.mobile_return_request?.notes || '')}</p></section>` : '';
     const paymentAmount = value => typeof value === 'number' && Number.isFinite(value) ? e(money(value)) : 'Not recorded';
     const footer = row.status === 'APPROVED' ? `<div class="transaction-footer-copy"><strong>${['PREPARED','OUT_FOR_DELIVERY'].includes(row.delivery_status) ? (row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Ready for shop handover' : 'Ready for delivery') : 'Prepare assigned equipment'}</strong><small>Handoff deadline ${e(formatDate(row.handoff_expires_at || row.hold_expires_at))}</small></div><div class="form-actions"><button type="button" class="secondary" data-rental-assignment="${e(row.id)}">Change unit</button>${['PREPARED','OUT_FOR_DELIVERY'].includes(row.delivery_status) ? `<button type="button" class="primary" data-rental-release="${e(row.id)}">${row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Hand over at shop' : 'Deliver / Hand over equipment'}</button>` : `<button type="button" class="primary" data-rental-prepare="${e(row.id)}">${row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Prepare for handover' : 'Prepare for delivery'}</button>`}</div>` : needsAdminReview ? `<div class="transaction-footer-copy"><strong>Review customer request</strong><small>The timer starts after resort handoff.</small></div><div class="form-actions"><button type="button" class="secondary" data-mobile-rental-review="REJECT">Reject request</button><button type="button" class="primary" data-mobile-rental-review="APPROVE">${row.payment_method === 'QR' ? 'Review payment &amp; approve' : 'Approve rental request'}</button></div>` : receiving ? `<div class="transaction-footer-copy"><strong>${row.status === 'RETURN_PENDING_INSPECTION' ? 'Equipment received' : 'Receive returned equipment'}</strong><small>${row.status === 'RETURN_PENDING_INSPECTION' ? 'Complete the condition and accessory checks.' : 'Physical receipt stops the rental timer.'}</small></div><div class="form-actions">${returnPending ? '<button type="button" class="secondary" data-mobile-return-reject>Reject request</button>' : ''}<button type="button" class="primary" data-mobile-return-confirm>${row.status === 'RETURN_PENDING_INSPECTION' ? 'Complete inspection' : 'Receive equipment'}</button></div>` : '<div class="transaction-footer-copy"><strong>Transaction record</strong><small>Pricing and inspection history are saved with this rental.</small></div>';
-    showModal("Rental details", `<div class="transaction-record-modal"><div class="transaction-detail-overview"><div class="transaction-detail-head"><div><span class="eyebrow">${e(txCode(row))}</span><h3>${e(row.item_name || "Unknown equipment")}</h3><p>Assigned unit · ${e(row.item_code || "No item code")}</p></div>${status(txStatus(row))}</div><div class="transaction-detail-grid"><div><small>Customer</small><strong>${e(row.customer_name || "Unknown customer")}</strong></div><div><small>${row.status === 'APPROVED' || needsAdminReview ? 'Rental starts' : 'Due time'}</small><strong>${row.status === 'APPROVED' || needsAdminReview ? 'At handoff' : e(formatDate(row.due_at))}</strong></div></div></div><div class="transaction-detail-scroll">${outcome}${review}${returnRequest}${renderFeeBreakdown(row, h)}<section class="record-section"><h3>Payment</h3>${!Object.hasOwn(row, 'rental_paid_amount') ? '<p>Payment and refund receipts were not recorded for this historical rental.</p>' : `<dl class="record-fields"><div><dt>Payment status</dt><dd>${e(String(row.payment_status || 'Not recorded').replaceAll('_', ' '))}</dd></div><div><dt>Rental payment received</dt><dd>${paymentAmount(row.rental_paid_amount)}</dd></div><div><dt>Outstanding rental balance</dt><dd>${paymentAmount(row.balance_due)}</dd></div>${['COMPLETED','CANCELLED','REJECTED','EXPIRED'].includes(row.status) ? `<div><dt>Refund due</dt><dd>${paymentAmount(row.refund_due)}</dd></div>` : ''}</dl>`}${['COMPLETED','CANCELLED','REJECTED','EXPIRED'].includes(row.status) && Object.hasOwn(row,'rental_paid_amount') ? `<button type="button" class="secondary" data-rental-settlement="${e(row.id)}">Record payment or refund</button>` : ''}</section><details class="record-disclosure"><summary><span>Condition &amp; accessories</span><small>Release and return inspections</small></summary><div class="record-disclosure-body">${renderConditionSnapshots(row, model || {}, h)}</div></details><details class="record-disclosure"><summary><span>Activity &amp; verification</span><small>Timeline and admin confirmations</small></summary><div class="record-disclosure-body"><h3 class="transaction-detail-section-title">Transaction timeline</h3><ol class="transaction-timeline"><li class="done"><span></span><div><strong>Record created</strong><small>${e(formatDate(row.created_at))}</small></div></li>${rentalStage}<li class="${row.confirmed_return_at ? "done" : ""}"><span></span><div><strong>Due date</strong><small>${row.status === 'APPROVED' || needsAdminReview ? 'Set when equipment is released' : e(formatDate(row.due_at))}</small></div></li>${returnStage}</ol>${row.booking_qr_token ? renderAdminHandoff(row, h) : ""}${requests.length || !row.booking_qr_token ? `<section class="record-section"><h3>Full verification history · ${requests.length} attempt(s)</h3>${renderRequestHistory(requests, h)}</section>` : ""}</div></details></div><footer class="transaction-detail-footer">${row.request_source === 'WALK_IN' && row.confirmed_rental_at ? '<button type="button" class="secondary" data-print-walk-in-receipt>Bluetooth receipt</button><button type="button" class="secondary" data-receipt-pdf>PDF receipt</button>' : ''}${footer}</footer></div>`);
+    showModal("Rental details", `<div class="transaction-record-modal">${row.status === 'ACTIVE' && row.latest_return_request_status !== 'PENDING_ADMIN_APPROVAL' ? renderRentalTaskProgress(row, 'released') : ''}<div class="transaction-detail-overview"><div class="transaction-detail-head"><div><span class="eyebrow">${e(txCode(row))}</span><h3>${e(row.item_name || "Unknown equipment")}</h3><p>Assigned unit · ${e(row.item_code || "No item code")}</p></div>${status(txStatus(row))}</div><div class="transaction-detail-grid"><div><small>Customer</small><strong>${e(row.customer_name || "Unknown customer")}</strong></div><div><small>${row.status === 'APPROVED' || needsAdminReview ? 'Rental starts' : 'Due time'}</small><strong>${row.status === 'APPROVED' || needsAdminReview ? 'At handoff' : e(formatDate(row.due_at))}</strong></div></div></div><div class="transaction-detail-scroll">${outcome}${review}${returnRequest}${renderFeeBreakdown(row, h)}<section class="record-section"><h3>Payment</h3>${!Object.hasOwn(row, 'rental_paid_amount') ? '<p>Payment and refund receipts were not recorded for this historical rental.</p>' : `<dl class="record-fields"><div><dt>Payment status</dt><dd>${e(String(row.payment_status || 'Not recorded').replaceAll('_', ' '))}</dd></div><div><dt>Rental payment received</dt><dd>${paymentAmount(row.rental_paid_amount)}</dd></div><div><dt>Outstanding rental balance</dt><dd>${paymentAmount(row.balance_due)}</dd></div>${['COMPLETED','CANCELLED','REJECTED','EXPIRED'].includes(row.status) ? `<div><dt>Refund due</dt><dd>${paymentAmount(row.refund_due)}</dd></div>` : ''}</dl>`}${['COMPLETED','CANCELLED','REJECTED','EXPIRED'].includes(row.status) && Object.hasOwn(row,'rental_paid_amount') ? `<button type="button" class="secondary" data-rental-settlement="${e(row.id)}">Record payment or refund</button>` : ''}</section><details class="record-disclosure"><summary><span>Condition &amp; accessories</span><small>Release and return inspections</small></summary><div class="record-disclosure-body">${renderConditionSnapshots(row, model || {}, h)}</div></details><details class="record-disclosure"><summary><span>Activity &amp; verification</span><small>Timeline and admin confirmations</small></summary><div class="record-disclosure-body"><h3 class="transaction-detail-section-title">Transaction timeline</h3><ol class="transaction-timeline"><li class="done"><span></span><div><strong>Record created</strong><small>${e(formatDate(row.created_at))}</small></div></li>${rentalStage}<li class="${row.confirmed_return_at ? "done" : ""}"><span></span><div><strong>Due date</strong><small>${row.status === 'APPROVED' || needsAdminReview ? 'Set when equipment is released' : e(formatDate(row.due_at))}</small></div></li>${returnStage}</ol>${row.booking_qr_token ? renderAdminHandoff(row, h) : ""}${requests.length || !row.booking_qr_token ? `<section class="record-section"><h3>Full verification history · ${requests.length} attempt(s)</h3>${renderRequestHistory(requests, h)}</section>` : ""}</div></details></div><footer class="transaction-detail-footer">${row.request_source === 'WALK_IN' && row.confirmed_rental_at ? '<button type="button" class="secondary" data-print-walk-in-receipt>Bluetooth receipt</button><button type="button" class="secondary" data-receipt-pdf>PDF receipt</button>' : ''}${footer}</footer></div>`);
     workflow.bindInspections(modal); workflow.desk.bind(modal);
     const openReceiptPdf = () => {
       showModal('Walk-in rental receipt', '<iframe data-receipt-preview title="Rental receipt preview" sandbox="allow-same-origin allow-modals" style="width:100%;height:65vh;border:0;border-radius:8px;background:white"></iframe><div class="form-actions"><button type="button" class="secondary" data-receipt-back>Back to rental</button><button type="button" class="primary" data-receipt-print disabled>Print / Save PDF</button></div>');
@@ -595,9 +621,11 @@ export function createWorkspaceUI(h) {
       ? `<section class="panel module-load-error" role="alert">${icon('chip')}<h3>Couldn’t load this page</h3><p>${e(loadError)}</p>${retry}</section>`
       : `<section class="panel module-loading" role="status" aria-busy="true"><span class="session-spinner" aria-hidden="true"></span><p>Loading ${e(displayPage.toLowerCase())}…</p></section>`;
     const content = page === 'ESP32 terminal' ? workflow.verificationPage(search, { paged, table, status, empty }) : page === 'Customers' ? customers() : ['Rentals', 'Returns', 'Transaction History'].includes(page) ? transactions(page) : page === 'Rates & Fees' ? rates() : page === 'Maintenance' ? maintenance() : page === 'Reports' ? reports() : page === 'Settings' ? settings(user, appearance) : '';
-    const notice = modelVersion === cacheVersion || cached?.version === cacheVersion && !loadError ? '' : loadError
+    // Loaded pages refresh in the background without inserting a loading row.
+    // Keep visible feedback for failures and the separate initial-load state.
+    const notice = loadError
       ? `<div class="module-sync-notice connection-banner" role="alert"><span>${e(loadError)} Showing the last successfully loaded records.</span>${retry}</div>`
-      : `<div class="module-sync-notice" role="status"><span class="session-spinner" aria-hidden="true"></span><span>Updating ${e(displayPage.toLowerCase())}…</span></div>`;
+      : '';
     const filters = ['Customers', 'Maintenance'].includes(page) ? recordFilters(page) : '';
     const fallbackPager=['Customers','Rentals','Returns','Transaction History','Maintenance'].includes(page) && model.page_meta && !content.includes('data-remote-next') ? paged([],page).footer : '';
     return notice + filters + (page==='Rentals'?planning.calendar(model.transactions,remoteScheduledDay):'') + content + fallbackPager;
@@ -1036,7 +1064,16 @@ export function createWorkspaceUI(h) {
     });
   }
   async function openTransaction(id, meta = {}) {
-    let row = model?.transactions?.find(row => String(row.id) === String(id) || String(row.rental_code) === String(id)) || meta?.rental;
+    const matches = row => String(row.id) === String(id) || String(row.rental_code) === String(id);
+    let row = model?.transactions?.find(matches) || meta?.rental;
+    if (!row) {
+      // Navigation keeps recent page snapshots; reuse their rental details too.
+      for (const cached of [...viewModelCache.values()].reverse()) {
+        if (cached.version !== cacheVersion || clock() - cached.loadedAt >= snapshotTtlMs) continue;
+        row = cached.value.transactions?.find(matches);
+        if (row) break;
+      }
+    }
     if (row && !row.customer_name && row.customer) row.customer_name = row.customer;
     if (row) {
       if (!model) {
@@ -1053,6 +1090,8 @@ export function createWorkspaceUI(h) {
     }
     const code = meta?.rentalCode || (/^[A-Za-z0-9_-]{1,128}$/.test(String(id)) && String(id).startsWith('R-') ? String(id) : '');
     showModal('Rental details', `<div class="transaction-record-modal">${code ? `<div class="transaction-detail-overview"><div class="transaction-detail-head"><div><span class="eyebrow">${e(code)}</span><h3>Loading rental details...</h3></div></div></div>` : ''}<div class="transaction-detail-scroll" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;min-height:200px;gap:14px;text-align:center"><div class="session-spinner" role="status" style="width:30px;height:30px;border-width:3px"></div><p style="color:var(--ui-muted);font-size:0.95rem;margin:0">Loading rental details${code ? ` for ${e(code)}` : ''}...</p></div></div>`);
+    const loadingPanel = modal?.querySelector('.transaction-record-modal');
+    const stillLoading = () => modal?.open && modal.querySelector('.transaction-record-modal') === loadingPanel;
     try {
       let result;
       try {
@@ -1073,13 +1112,13 @@ export function createWorkspaceUI(h) {
       } else if (model) {
         model.transactions = [row];
       }
-      if (modal?.open) transactionDetails(row);
+      if (stillLoading()) transactionDetails(row);
     } catch (err) {
       if (meta?.rental) {
         transactionDetails(meta.rental);
         return;
       }
-      if (modal?.open) {
+      if (stillLoading()) {
         showModal('Rental details', `<div class="transaction-record-modal"><div class="workspace-empty" style="padding:32px 16px;text-align:center"><p class="form-error" role="alert" style="margin-bottom:16px">${e(err.message || 'Could not load rental details.')}</p><button type="button" class="primary" data-retry-rental-open>Retry</button></div></div>`);
         modal.querySelector('[data-retry-rental-open]')?.addEventListener('click', () => openTransaction(id, meta));
       }

@@ -17,7 +17,7 @@ test('Rentals lists mobile admin approval and Returns exposes staff receipt even
 });
 
 test('staff first records physical receipt, then submits inspection and penalty with separate retry keys', async () => {
-  let title, html, submit, form, refreshes = 0;
+  let title, html, submit, form, finishRefresh, refreshes = 0;
   const calls = [], data = { ...fixture(), transactions: [active] };
   const modal = { open: false, close() { this.open = false; }, querySelector: () => form };
   const field = value => ({ value, querySelector: () => ({ disabled: false }) });
@@ -35,7 +35,7 @@ test('staff first records physical receipt, then submits inspection and penalty 
       const rental = { ...active, status: path.endsWith('/receipt') ? 'RETURN_PENDING_INSPECTION' : 'COMPLETED', received_at: '2026-10-06T06:00:00Z' };
       data.transactions = [rental]; return { rental };
     },
-    refresh: async () => { refreshes++; }, redraw() {}, toast() {},
+    refresh: async () => { refreshes++; if (refreshes === 1) await new Promise(resolve => { finishRefresh = resolve; }); }, redraw() {}, toast() {},
   });
   const original = globalThis.FormData;
   globalThis.FormData = class { constructor(form) { this.form = form; } *[Symbol.iterator]() { for (const [name, field] of Object.entries(this.form.elements)) yield [name, field.value]; } };
@@ -43,7 +43,11 @@ test('staff first records physical receipt, then submits inspection and penalty 
     workflow.requestForm('RETURN', active.id);
     assert.equal(title, 'Record physical return'); assert.match(html, /stops overtime before inspection/);
     assert.equal(calls.length, 0);
-    await submit();
+    const receiving = submit();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(title, 'Inspect and confirm return', 'inspection opens even while workspace refresh is stalled');
+    finishRefresh();
+    await receiving;
     assert.equal(calls[0].path, '/rentals/mobile-rental/receipt');
     assert.equal(calls[0].payload.physicalReceiptConfirmed, true);
     assert.equal(calls[0].payload.inspection, undefined);

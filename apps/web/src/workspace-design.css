@@ -217,6 +217,53 @@ button:disabled { cursor: not-allowed; }
 .workspace .support-composer button[type=submit] { background: #b94b17; color: #fff; min-height: 40px; }
 .workspace .support-muted { opacity: 1; color: var(--ui-muted); font-size: 13px; }
 
+/* Enhanced Support Chat Workspace Layout */
+.workspace .support-conversation-body { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.workspace .support-conversation-main { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.workspace .support-context-rail { width: 270px; flex-shrink: 0; border-left: 1px solid var(--ui-border); background: var(--ui-surface); padding: 18px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+.workspace .context-card-header { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding-bottom: 14px; border-bottom: 1px solid var(--ui-border); }
+.workspace .context-avatar { width: 46px; height: 46px; border-radius: 50%; background: linear-gradient(135deg, #e36a28, #b84715); color: #fff; font-weight: 700; font-size: 15px; display: grid; place-items: center; box-shadow: 0 4px 12px rgba(184, 71, 21, 0.25); }
+.workspace .context-card-header h3 { margin: 0; font-size: 15px; color: var(--ui-text); }
+.workspace .context-status-pill { font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 2px 8px; border-radius: 12px; letter-spacing: 0.5px; }
+.workspace .context-status-pill.status-open { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
+.workspace .context-status-pill.status-resolved { background: rgba(148, 163, 184, 0.15); color: #64748b; }
+.workspace .context-details-group { display: flex; flex-direction: column; gap: 8px; }
+.workspace .context-details-group h4 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ui-muted); }
+.workspace .context-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; gap: 8px; }
+.workspace .context-row span { color: var(--ui-muted); }
+.workspace .context-row strong { color: var(--ui-text); text-align: right; }
+.workspace .context-tip-text { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ui-muted); background: var(--ui-soft); padding: 10px; border-radius: 8px; border: 1px solid var(--ui-border); }
+
+/* Quick Replies */
+.workspace .support-composer-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.workspace .support-quick-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.workspace .quick-chip-btn { font-size: 11px !important; padding: 4px 10px !important; border-radius: 14px !important; border: 1px solid var(--ui-border) !important; background: var(--ui-soft) !important; color: var(--ui-text) !important; cursor: pointer; transition: all 0.15s ease; }
+.workspace .quick-chip-btn:hover:not(:disabled) { background: rgba(239, 121, 40, 0.12) !important; border-color: #ef7928 !important; color: #b94b17 !important; }
+
+/* Role Tags & Bubble Header */
+.workspace .support-bubble-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+.workspace .support-role-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 6px; letter-spacing: 0.4px; }
+.workspace .support-role-tag.role-staff { background: rgba(239, 121, 40, 0.15); color: #d95d18; }
+.workspace .support-role-tag.role-customer { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+
+/* Typing Indicator Animation */
+.workspace .support-typing-bubble { background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 16px; align-self: flex-start; padding: 10px 14px; box-shadow: var(--shadow-card); }
+.workspace .typing-indicator-row { display: flex; align-items: center; gap: 8px; }
+.workspace .typing-label { font-size: 12px; color: var(--ui-muted); }
+.workspace .typing-dots { display: inline-flex; align-items: center; gap: 3px; height: 16px; }
+.workspace .typing-dots .dot { width: 6px; height: 6px; border-radius: 50%; background-color: #ef7928; display: inline-block; animation: typingBounce 1.4s infinite ease-in-out both; }
+.workspace .typing-dots .dot:nth-child(1) { animation-delay: -0.32s; }
+.workspace .typing-dots .dot:nth-child(2) { animation-delay: -0.16s; }
+.workspace .typing-dots .dot:nth-child(3) { animation-delay: 0s; }
+@keyframes typingBounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+  40% { transform: translateY(-5px); opacity: 1; }
+}
+
+@media (max-width: 960px) {
+  .workspace .support-context-rail { display: none; }
+}
+
 /* Dialogs: one header, content sized to the task, aligned controls and footer. */
 .workspace .workspace-status { max-width: 900px; margin: 24px auto; padding: 38px 32px; text-align: center; }
 .workspace-status-symbol { display: grid; place-items: center; margin: 0 auto 18px; width: 52px; height: 52px; border: 1px solid var(--glass-edge); background: var(--glass-active); color: var(--ui-accent); border-radius: 16px; }

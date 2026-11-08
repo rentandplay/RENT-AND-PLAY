@@ -70,6 +70,42 @@ export async function listChats(db, actor, { before, status } = {}) {
   return { threads: rows, next_cursor: result.docs.length > 30 ? rows.at(-1).sort_key : null };
 }
 
+const typingState = new Map();
+
+export function setTyping(actor, id, isTyping = true) {
+  checkActor(actor);
+  requiredId(id);
+  const now = Date.now();
+  let entry = typingState.get(id);
+  if (!entry) {
+    entry = { customer: null, staff: null };
+    typingState.set(id, entry);
+  }
+  const team = staff(actor);
+  const key = team ? 'staff' : 'customer';
+  if (isTyping) {
+    const raw = (actor.full_name || actor.name || (team ? 'Staff' : 'Customer')).trim();
+    const name = team ? `${raw.split(/\s+/)[0]} (Staff)` : raw;
+    entry[key] = { name, at: now };
+  } else {
+    entry[key] = null;
+  }
+  return { ok: true };
+}
+
+export function getTyping(actor, id) {
+  const entry = typingState.get(id);
+  if (!entry) return null;
+  const now = Date.now();
+  const team = staff(actor);
+  const otherKey = team ? 'customer' : 'staff';
+  const target = entry[otherKey];
+  if (target && now - target.at < 5000) {
+    return { is_typing: true, name: target.name, role: otherKey.toUpperCase() };
+  }
+  return null;
+}
+
 export async function chatMessages(db, actor, id, options = {}) {
   const ref = db.collection('chat_threads').doc(requiredId(id));
   const snapshot = await ref.get(), row = snapshot.exists ? snapshot.data() : null;
@@ -83,7 +119,8 @@ export async function chatMessages(db, actor, id, options = {}) {
   let rows = result.docs.slice(0, 50).map(doc => doc.data());
   if (!after) rows.reverse();
   return { thread: view(row, actor), messages: rows, has_more: result.docs.length > 50,
-    next_cursor: result.docs.length > 50 ? String(after ? rows.at(-1).seq : rows[0].seq) : null };
+    next_cursor: result.docs.length > 50 ? String(after ? rows.at(-1).seq : rows[0].seq) : null,
+    typing: getTyping(actor, id) };
 }
 
 export async function sendChatMessage(db, actor, id, input, now = new Date()) {
@@ -119,6 +156,8 @@ export async function sendChatMessage(db, actor, id, input, now = new Date()) {
     queueChatNotification(tx, db, row, message, now);
     return { message, thread: view(row, actor), duplicate: false };
   });
+  setTyping(actor, id, false);
+  return result;
 }
 
 export async function readChat(db, actor, id, input) {

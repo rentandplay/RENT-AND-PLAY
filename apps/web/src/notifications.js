@@ -43,12 +43,27 @@ export function createRentalNotifications({ api, onChange = () => {}, onAlert = 
   }
   async function markRead(ids) {
     const version = generation, selected = ids.filter(id => rows.has(id) && !rows.get(id).is_read);
-    for (let index = 0; index < selected.length; index += 60) {
-      const chunk = selected.slice(index, index + 60);
-      await api('/notifications/read', { method: 'POST', body: JSON.stringify({ ids: chunk }) });
-      if (version !== generation) return;
-      chunk.forEach(id => { readLocally.add(id); if (rows.has(id)) rows.set(id, { ...rows.get(id), is_read: true }); });
-      onChange(state());
+    if (!selected.length) return;
+    selected.forEach(id => {
+      readLocally.add(id);
+      if (rows.has(id)) rows.set(id, { ...rows.get(id), is_read: true });
+    });
+    onChange(state());
+    try {
+      for (let index = 0; index < selected.length; index += 60) {
+        const chunk = selected.slice(index, index + 60);
+        await api('/notifications/read', { method: 'POST', body: JSON.stringify({ ids: chunk }) });
+        if (version !== generation) return;
+      }
+    } catch (err) {
+      if (version === generation) {
+        selected.forEach(id => {
+          readLocally.delete(id);
+          if (rows.has(id)) rows.set(id, { ...rows.get(id), is_read: false });
+        });
+        onChange(state());
+      }
+      throw err;
     }
   }
   return { state, setAccount, refresh, markRead };
@@ -59,6 +74,6 @@ export function renderRentalNotifications(state, { escape: e, formatDate }) {
     const isSecurity = String(row.type || '').startsWith('SECURITY_') || row.category === 'SECURITY';
     const isUrgent = isSecurity || String(row.type || '').includes('REJECTED');
     const targetAttr = row.type === 'CHAT_MESSAGE' && row.thread_id ? ` data-notification-chat="${e(row.thread_id)}"` : row.rental_id ? ` data-notification-rental="${e(row.rental_id)}"` : ' data-notification-page="Settings"';
-    return `<button type="button" class="${row.is_read ? '' : 'notification-unread'}${isSecurity ? ' notification-security-item' : ''}" data-rental-notification="${e(row.id)}"${targetAttr}><span class="notification-mark ${isUrgent ? 'overdue-mark' : 'pending-mark'}">${isSecurity ? '🛡' : isUrgent ? '!' : '•'}</span><span><strong>${e(row.title)}</strong><small>${e(row.message)}</small><small class="notification-time">${e(row.rental_code || (isSecurity ? 'SECURITY' : ''))} · ${e(formatDate(row.created_at))}${row.is_read ? '' : ' · Unread'}</small></span></button>`;
+    return `<button type="button" class="${row.is_read ? '' : 'notification-unread'}${isSecurity ? ' notification-security-item' : ''}" data-rental-notification="${e(row.id)}"${targetAttr}${row.rental_code ? ` data-rental-code="${e(row.rental_code)}"` : ''}><span class="notification-mark ${isUrgent ? 'overdue-mark' : 'pending-mark'}">${isSecurity ? '🛡' : isUrgent ? '!' : '•'}</span><span><strong>${e(row.title)}</strong><small>${e(row.message)}</small><small class="notification-time">${e(row.rental_code || (isSecurity ? 'SECURITY' : ''))} · ${e(formatDate(row.created_at))}${row.is_read ? '' : ' · Unread'}</small></span></button>`;
   }).join('');
 }

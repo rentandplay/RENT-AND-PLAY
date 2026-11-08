@@ -2,6 +2,18 @@ import React, { useState, useEffect, useRef } from './react-shim.js';
 
 const retryKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
 const when = value => new Date(value).toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const initials = name => {
+  if (!name) return '??';
+  const parts = name.trim().split(/\s+/);
+  return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase();
+};
+
+const QUICK_REPLIES = [
+  { label: '🪪 Accepted IDs', text: 'Tumatanggap po kami ng National ID, Driver\'s License, Passport, UMID, Postal ID, o Valid School ID (basta currently enrolled with proof of registration).' },
+  { label: '📋 Rental Requirements', text: 'Kailangan lamang po ng 1 Valid ID (Government o School ID), pirma sa rental agreement, at active contact details.' },
+  { label: '⏰ Store Hours', text: 'Bukas po ang aming rental desk mula 8:00 AM hanggang 8:00 PM araw-araw para sa pickup at return.' },
+  { label: '📍 Pickup & Return', text: 'Maaari ninyong i-pickup at i-return ang equipment sa aming shop desk habang operating hours.' },
+];
 
 export function MessagesView({ api, user }) {
   const storageKey = `rental-support-drafts:${user.id}`;
@@ -14,11 +26,13 @@ export function MessagesView({ api, user }) {
   const [sending, setSending] = useState(false), [error, setError] = useState('');
   const [loading, setLoading] = useState(true), [synced, setSynced] = useState(null);
   const [listError, setListError] = useState('');
+  const [typing, setTyping] = useState(null);
   const listVersion = useRef(0), statusRef = useRef(status), retryConversation = useRef(() => {});
   statusRef.current = status;
   const generation = useRef(0), sequence = useRef(0), busy = useRef(false), listBusy = useRef(false), bottom = useRef(null);
   const drafts = useRef(saved('drafts')), failures = useRef(saved('pending'));
   const atBottom = useRef(true), hasOlderThreads = useRef(false);
+  const typingTimer = useRef(0);
   function persist() { try { sessionStorage.setItem(`${storageKey}:drafts`, JSON.stringify([...drafts.current])); sessionStorage.setItem(`${storageKey}:pending`, JSON.stringify([...failures.current])); } catch {} }
   const currentId = useRef(active); currentId.current = active;
   const apiRef = useRef(api); apiRef.current = api;
@@ -58,7 +72,7 @@ export function MessagesView({ api, user }) {
     const version = ++generation.current;
     sequence.current = 0; busy.current = false;
     atBottom.current = true;
-    setMessages([]); setThread(null); setOlder(null); setError(''); setSynced(null);
+    setMessages([]); setThread(null); setOlder(null); setError(''); setSynced(null); setTyping(null);
     setDraft(drafts.current.get(active) || ''); setPending(failures.current.get(active) || null);
     if (!active) return;
     async function sync() {
@@ -69,6 +83,7 @@ export function MessagesView({ api, user }) {
         const result = await request(`/chat/threads/${active}/messages${last ? `?after=${last}` : ''}`);
         if (version !== generation.current) return;
         setThread(result.thread);
+        setTyping(result.typing || null);
         if (!last) setOlder(result.next_cursor);
         if (result.messages.length) {
           sequence.current = result.messages.at(-1).seq;
@@ -90,10 +105,23 @@ export function MessagesView({ api, user }) {
     window.addEventListener('online', wake); document.addEventListener('visibilitychange', wake);
     return () => { generation.current++; retryConversation.current = () => {}; clearInterval(timer); window.removeEventListener('online', wake); document.removeEventListener('visibilitychange', wake); };
   }, [active]);
-  useEffect(() => { if (atBottom.current) bottom.current?.scrollIntoView({ block: 'nearest' }); }, [active, messages.at(-1)?.id]);
+  useEffect(() => { if (atBottom.current) bottom.current?.scrollIntoView({ block: 'nearest' }); }, [active, messages.at(-1)?.id, typing?.is_typing]);
+
+  function handleDraftChange(value) {
+    setDraft(value);
+    drafts.current.set(active, value);
+    persist();
+    if (!active || !value.trim()) return;
+    const now = Date.now();
+    if (now - typingTimer.current > 2500) {
+      typingTimer.current = now;
+      request(`/chat/threads/${active}/typing`, 'POST', { typing: true }).catch(() => {});
+    }
+  }
 
   async function send(event) {
-    event.preventDefault(); if (sending || !active) return;
+    if (event?.preventDefault) event.preventDefault();
+    if (sending || !active) return;
     const operation = pending || { text: draft.trim(), requestKey: retryKey() };
     if (!operation.text) return;
     const id = active; setSending(true); setError('');
@@ -103,7 +131,6 @@ export function MessagesView({ api, user }) {
       failures.current.delete(id); drafts.current.delete(id); persist();
       if (currentId.current === id) {
         setPending(null); setDraft(''); setThread(result.thread);
-        // Poll from the existing sequence to recover any intervening replies.
         setMessages(old => [...new Map([...old, result.message].map(row => [row.id, row])).values()].sort((a, b) => a.seq - b.seq));
       }
       loadThreads();
@@ -113,6 +140,7 @@ export function MessagesView({ api, user }) {
     }
     finally { setSending(false); }
   }
+
   async function loadOlder() {
     const id = active, cursor = older;
     try {
@@ -121,6 +149,7 @@ export function MessagesView({ api, user }) {
       setMessages(old => [...new Map([...result.messages, ...old].map(row => [row.id, row])).values()].sort((a, b) => a.seq - b.seq)); setOlder(result.next_cursor);
     } catch (problem) { setError(problem.message); }
   }
+
   async function changeStatus() {
     const id = active;
     try {
@@ -128,7 +157,9 @@ export function MessagesView({ api, user }) {
       if (currentId.current === id) setThread(result.thread); loadThreads();
     } catch (problem) { setError(problem.message); }
   }
+
   const filtered = threads.filter(row => `${row.customer_name} ${row.subject} ${row.rental_code || ''}`.toLowerCase().includes(search.toLowerCase()));
+
   return <section className="support-chat panel" aria-label="Customer rental support">
     <aside className="support-inbox">
       <h2>Customer inbox</h2>
@@ -148,20 +179,56 @@ export function MessagesView({ api, user }) {
       {!active ? <div className="support-empty"><h2>Rental support</h2><p>Select a conversation to help a customer.</p><p>Replies are saved and customers receive an alert. Staff share this inbox.</p></div> : <>
         <header className="support-header"><div><h2>{thread?.customer_name || 'Loading conversation…'}</h2><p>{thread?.subject} {thread?.rental_code && `· ${thread.rental_code}`}</p><small>{synced ? `Last synced ${synced.toLocaleTimeString()}` : 'Connecting…'}</small></div>
           {thread && <button disabled={sending} onClick={changeStatus}>{thread.status === 'OPEN' ? 'Resolve conversation' : 'Reopen conversation'}</button>}</header>
-        <div className="support-messages" role="log" aria-label="Messages" aria-live="polite" onScroll={e => { atBottom.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80; }}>
-          {older && <button onClick={loadOlder}>Load earlier messages</button>}
-          {messages.map(message => <article key={message.id} className={`support-bubble ${message.sender_role === 'STAFF' ? 'outgoing' : ''}`}>
-            <strong>{message.sender_role === 'STAFF' ? `${message.sender_name}${message.sender_id === user?.id ? ' (you)' : ''}` : thread?.customer_name}</strong>
-            <p>{message.text}</p><small>{when(message.created_at)}{message.sender_role === 'STAFF' ? ` · ${thread?.customer_read_seq >= message.seq ? 'Read' : 'Sent'}` : ''}</small>
-          </article>)}
-          {!messages.length && <p className="support-muted">{error ? 'Messages could not be updated. Your reply is kept below.' : thread ? 'No messages yet.' : 'Loading messages…'}</p>}<div ref={bottom} />
+        <div className="support-conversation-body">
+          <div className="support-conversation-main">
+            <div className="support-messages" role="log" aria-label="Messages" aria-live="polite" onScroll={e => { atBottom.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80; }}>
+              {older && <button onClick={loadOlder}>Load earlier messages</button>}
+              {messages.map(message => <article key={message.id} className={`support-bubble ${message.sender_role === 'STAFF' ? 'outgoing' : ''}`}>
+                <div className="support-bubble-header">
+                  <strong>{message.sender_role === 'STAFF' ? `${message.sender_name}${message.sender_id === user?.id ? ' (you)' : ''}` : thread?.customer_name}</strong>
+                  <span className={`support-role-tag role-${message.sender_role.toLowerCase()}`}>{message.sender_role === 'STAFF' ? 'Staff' : 'Customer'}</span>
+                </div>
+                <p>{message.text}</p>
+                <small>{when(message.created_at)}{message.sender_role === 'STAFF' ? ` · ${thread?.customer_read_seq >= message.seq ? 'Read' : 'Sent'}` : ''}</small>
+              </article>)}
+              {typing?.is_typing && <article className="support-bubble support-typing-bubble" role="status" aria-label={`${typing.name} is typing`}>
+                <div className="typing-indicator-row">
+                  <span className="typing-dots"><span className="dot"></span><span className="dot"></span><span className="dot"></span></span>
+                  <span className="typing-label"><strong>{typing.name}</strong> is typing…</span>
+                </div>
+              </article>}
+              {!messages.length && <p className="support-muted">{error ? 'Messages could not be updated. Your reply is kept below.' : thread ? 'No messages yet.' : 'Loading messages…'}</p>}<div ref={bottom} />
+            </div>
+            {thread?.status === 'RESOLVED' && <p className="support-muted">Resolved. Reopen to reply. A new customer message also reopens this conversation.</p>}
+            <form className="support-composer" onSubmit={send}>
+              <div className="support-composer-header">
+                <label htmlFor="support-reply">Reply to customer</label>
+                <div className="support-quick-chips">
+                  {QUICK_REPLIES.map(qr => <button key={qr.label} type="button" className="quick-chip-btn" disabled={!thread || thread?.status === 'RESOLVED'} onClick={() => handleDraftChange(qr.text)}>{qr.label}</button>)}
+                </div>
+              </div>
+              <textarea id="support-reply" rows="3" maxLength={2000} value={pending?.text ?? draft} disabled={!!pending || !thread || thread?.status === 'RESOLVED'} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!sending && !pending && (pending?.text ?? draft).trim()) send(e); } }} onChange={e => handleDraftChange(e.target.value)} placeholder="Help with availability, pricing, or a rental… (Press Enter to send)" />
+              <div><small>{(pending?.text ?? draft).length}/2000 · Press Enter to send, Shift+Enter for new line</small><button type="submit" disabled={sending || !thread || thread.status === 'RESOLVED' || !(pending?.text ?? draft).trim()}>{sending ? 'Sending…' : pending ? 'Retry message' : 'Send reply'}</button></div>
+            </form>
+          </div>
+          {thread && <aside className="support-context-rail">
+            <div className="context-card-header">
+              <div className="context-avatar">{initials(thread.customer_name)}</div>
+              <h3>{thread.customer_name}</h3>
+              <span className={`context-status-pill status-${thread.status.toLowerCase()}`}>{thread.status}</span>
+            </div>
+            <div className="context-details-group">
+              <h4>Inquiry Summary</h4>
+              <div className="context-row"><span>Type</span><strong>{thread.subject}</strong></div>
+              <div className="context-row"><span>Rental Reference</span><strong>{thread.rental_code || 'General inquiry'}</strong></div>
+              <div className="context-row"><span>Last Updated</span><time>{when(thread.updated_at)}</time></div>
+            </div>
+            <div className="context-details-group">
+              <h4>Operator Tips</h4>
+              <p className="context-tip-text">Customer views replies live in the mobile app. Double-check equipment availability, condition, and valid ID before confirming pickup.</p>
+            </div>
+          </aside>}
         </div>
-        {thread?.status === 'RESOLVED' && <p className="support-muted">Resolved. Reopen to reply. A new customer message also reopens this conversation.</p>}
-        <form className="support-composer" onSubmit={send}>
-          <label htmlFor="support-reply">Reply to customer</label>
-          <textarea id="support-reply" rows="3" maxLength={2000} value={pending?.text ?? draft} disabled={!!pending || !thread || thread?.status === 'RESOLVED'} onChange={e => { setDraft(e.target.value); drafts.current.set(active, e.target.value); persist(); }} placeholder="Help with availability, pricing, or a rental…" />
-          <div><small>{(pending?.text ?? draft).length}/2000 · Plain text</small><button type="submit" disabled={sending || !thread || thread.status === 'RESOLVED' || !(pending?.text ?? draft).trim()}>{sending ? 'Sending…' : pending ? 'Retry message' : 'Send reply'}</button></div>
-        </form>
       </>}
     </div>
   </section>;

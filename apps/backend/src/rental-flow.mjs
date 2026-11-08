@@ -750,12 +750,17 @@ export async function lookupRental(db, input, now = new Date()) {
   if (kind === 'RENTAL' || kind === 'BOOKING') {
     const rollingMatch = /^(rp-rental-[A-Za-z0-9_-]+)\.(\d+)\.([a-f0-9]{16})$/i.exec(code);
     const lookupCode = rollingMatch ? rollingMatch[1] : code;
-    const fields = ['booking_qr_token', 'rental_code', 'legacy_rental_code'];
-    const matches = (await Promise.all(fields.map(field => db.collection('rentals').where(field, '==', lookupCode).get()))).flatMap(snap => rows(snap));
-    if (/^[A-Za-z0-9_-]{1,128}$/.test(lookupCode)) { const doc = await record(db, 'rentals', lookupCode).get(); if (doc.exists) matches.push(docData(doc)); }
-    const unique = [...new Map(matches.map(row => [row.id, row])).values()];
-    if (unique.length !== 1) fail(404, 'No unique rental request matches that QR or rental code.');
-    rental = unique[0];
+    if (/^[A-Za-z0-9_-]{1,128}$/.test(lookupCode)) {
+      const doc = await record(db, 'rentals', lookupCode).get();
+      if (doc.exists) rental = docData(doc);
+    }
+    if (!rental) {
+      const fields = ['booking_qr_token', 'rental_code', 'legacy_rental_code'];
+      const matches = (await Promise.all(fields.map(field => db.collection('rentals').where(field, '==', lookupCode).get()))).flatMap(snap => rows(snap));
+      const unique = [...new Map(matches.map(row => [row.id, row])).values()];
+      if (unique.length !== 1) fail(404, 'No unique rental request matches that QR or rental code.');
+      rental = unique[0];
+    }
     if (rollingMatch) {
       const check = verifyTransactionQrCode(code, rental, now);
       if (!check.valid) fail(409, check.message);

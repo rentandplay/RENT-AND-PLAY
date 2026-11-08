@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { createHash } from 'node:crypto';
-import { openChat, listChats, chatMessages, sendChatMessage, readChat, setChatStatus } from './chat.mjs';
+import { openChat, listChats, chatMessages, sendChatMessage, readChat, setChatStatus, setTyping, getTyping } from './chat.mjs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
@@ -94,6 +94,8 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     openChat: (actor, input) => openChat(firestore, actor, input, now()),
     listChats: (actor, options) => listChats(firestore, actor, options),
     chatMessages: (actor, id, options) => chatMessages(firestore, actor, id, options),
+    setTyping: (actor, id, isTyping) => setTyping(actor, id, isTyping),
+    getTyping: (actor, id) => getTyping(actor, id),
     sendChatMessage: (actor, id, input) => sendChatMessage(firestore, actor, id, input, now()),
     readChat: (actor, id, input) => readChat(firestore, actor, id, input),
     setChatStatus: (actor, id, input) => setChatStatus(firestore, actor, id, input, now()),
@@ -600,7 +602,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         return send(res, 200, { ...await services.completeMobileRegistration(claims, input), firebaseProjectId: services.firebaseProjectId });
       }
       quotaBackoff.assertAvailable();
-      const chatRoute = path.match(/^\/api\/chat\/threads(?:\/([A-Za-z0-9_-]{1,128})(?:\/(messages|read|status))?)?$/);
+      const chatRoute = path.match(/^\/api\/chat\/threads(?:\/([A-Za-z0-9_-]{1,128})(?:\/(messages|read|status|typing))?)?$/);
       if (chatRoute) {
         const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = bearer ? await services.verifyMobileToken?.(bearer) : await sessions.verify(token);
@@ -621,6 +623,10 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         }
         if (id && action === 'read' && req.method === 'POST') return send(res, 200, await services.readChat(actor, id, await body(req)));
         if (id && action === 'status' && req.method === 'PATCH') return send(res, 200, await services.setChatStatus(actor, id, await body(req)));
+        if (id && action === 'typing' && req.method === 'POST') {
+          const input = await body(req).catch(() => ({}));
+          return send(res, 200, services.setTyping(actor, id, input?.typing !== false));
+        }
         return send(res, 405, { error: 'Method not allowed.' });
       }
       if (path === '/api/mobile/profile/photo') {

@@ -1186,6 +1186,17 @@ function ProfileView({
 // src/react/MessagesView.jsx
 var retryKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 var when = (value) => new Date(value).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+var initials2 = (name) => {
+  if (!name) return "??";
+  const parts = name.trim().split(/\s+/);
+  return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
+};
+var QUICK_REPLIES = [
+  { label: "\u{1FAAA} Accepted IDs", text: "Tumatanggap po kami ng National ID, Driver's License, Passport, UMID, Postal ID, o Valid School ID (basta currently enrolled with proof of registration)." },
+  { label: "\u{1F4CB} Rental Requirements", text: "Kailangan lamang po ng 1 Valid ID (Government o School ID), pirma sa rental agreement, at active contact details." },
+  { label: "\u23F0 Store Hours", text: "Bukas po ang aming rental desk mula 8:00 AM hanggang 8:00 PM araw-araw para sa pickup at return." },
+  { label: "\u{1F4CD} Pickup & Return", text: "Maaari ninyong i-pickup at i-return ang equipment sa aming shop desk habang operating hours." }
+];
 function MessagesView({ api, user }) {
   const storageKey = `rental-support-drafts:${user.id}`;
   function saved(kind) {
@@ -1211,12 +1222,14 @@ function MessagesView({ api, user }) {
   const [sending, setSending] = useState(false), [error, setError] = useState("");
   const [loading, setLoading] = useState(true), [synced, setSynced] = useState(null);
   const [listError, setListError] = useState("");
+  const [typing, setTyping] = useState(null);
   const listVersion = useRef(0), statusRef = useRef(status), retryConversation = useRef(() => {
   });
   statusRef.current = status;
   const generation = useRef(0), sequence = useRef(0), busy = useRef(false), listBusy = useRef(false), bottom = useRef(null);
   const drafts = useRef(saved("drafts")), failures = useRef(saved("pending"));
   const atBottom = useRef(true), hasOlderThreads = useRef(false);
+  const typingTimer = useRef(0);
   function persist() {
     try {
       sessionStorage.setItem(`${storageKey}:drafts`, JSON.stringify([...drafts.current]));
@@ -1288,6 +1301,7 @@ function MessagesView({ api, user }) {
     setOlder(null);
     setError("");
     setSynced(null);
+    setTyping(null);
     setDraft(drafts.current.get(active) || "");
     setPending(failures.current.get(active) || null);
     if (!active) return;
@@ -1299,6 +1313,7 @@ function MessagesView({ api, user }) {
         const result = await request(`/chat/threads/${active}/messages${last ? `?after=${last}` : ""}`);
         if (version !== generation.current) return;
         setThread(result.thread);
+        setTyping(result.typing || null);
         if (!last) setOlder(result.next_cursor);
         if (result.messages.length) {
           sequence.current = result.messages.at(-1).seq;
@@ -1336,9 +1351,21 @@ function MessagesView({ api, user }) {
   }, [active]);
   useEffect(() => {
     if (atBottom.current) bottom.current?.scrollIntoView({ block: "nearest" });
-  }, [active, messages.at(-1)?.id]);
+  }, [active, messages.at(-1)?.id, typing?.is_typing]);
+  function handleDraftChange(value) {
+    setDraft(value);
+    drafts.current.set(active, value);
+    persist();
+    if (!active || !value.trim()) return;
+    const now = Date.now();
+    if (now - typingTimer.current > 2500) {
+      typingTimer.current = now;
+      request(`/chat/threads/${active}/typing`, "POST", { typing: true }).catch(() => {
+      });
+    }
+  }
   async function send(event) {
-    event.preventDefault();
+    if (event?.preventDefault) event.preventDefault();
     if (sending || !active) return;
     const operation = pending || { text: draft.trim(), requestKey: retryKey() };
     if (!operation.text) return;
@@ -1393,13 +1420,14 @@ function MessagesView({ api, user }) {
     }
   }
   const filtered = threads.filter((row) => `${row.customer_name} ${row.subject} ${row.rental_code || ""}`.toLowerCase().includes(search.toLowerCase()));
-  return /* @__PURE__ */ React.createElement("section", { className: "support-chat panel", "aria-label": "Customer rental support" }, /* @__PURE__ */ React.createElement("aside", { className: "support-inbox" }, /* @__PURE__ */ React.createElement("h2", null, "Customer inbox"), /* @__PURE__ */ React.createElement("label", null, "Search shown conversations", /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Customer or rental reference" })), /* @__PURE__ */ React.createElement("label", null, "Status", /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "All conversations"), /* @__PURE__ */ React.createElement("option", { value: "OPEN" }, "Open"), /* @__PURE__ */ React.createElement("option", { value: "RESOLVED" }, "Resolved"))), /* @__PURE__ */ React.createElement("div", { className: "support-thread-list" }, filtered.map((row) => /* @__PURE__ */ React.createElement("button", { key: row.id, className: `support-thread ${active === row.id ? "selected" : ""}`, onClick: () => setActive(row.id) }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, row.customer_name), row.unread_count > 0 && /* @__PURE__ */ React.createElement("b", { className: "support-unread" }, row.unread_count)), /* @__PURE__ */ React.createElement("span", null, row.subject), /* @__PURE__ */ React.createElement("small", null, row.rental_code || "General inquiry", " \xB7 ", row.status.toLowerCase()), /* @__PURE__ */ React.createElement("p", null, row.last_message || "No messages yet"), /* @__PURE__ */ React.createElement("time", null, when(row.updated_at))))), listError && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, listError, threads.length ? " Showing previously loaded conversations." : ""), /* @__PURE__ */ React.createElement("button", { type: "button", disabled: loading, onClick: () => loadThreads() }, "Try again")), !filtered.length && !listError && /* @__PURE__ */ React.createElement("p", { className: "support-muted", role: "status" }, loading ? "Loading conversations\u2026" : search ? "No conversations match your search. Try another name or rental reference." : "No conversations yet. Customer inquiries will appear here."), next && /* @__PURE__ */ React.createElement("button", { disabled: loading, onClick: () => loadThreads(next) }, loading ? "Loading\u2026" : "Load more conversations")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation" }, error && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, error), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => retryConversation.current() }, "Refresh conversation")), !active ? /* @__PURE__ */ React.createElement("div", { className: "support-empty" }, /* @__PURE__ */ React.createElement("h2", null, "Rental support"), /* @__PURE__ */ React.createElement("p", null, "Select a conversation to help a customer."), /* @__PURE__ */ React.createElement("p", null, "Replies are saved and customers receive an alert. Staff share this inbox.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("header", { className: "support-header" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", null, thread?.customer_name || "Loading conversation\u2026"), /* @__PURE__ */ React.createElement("p", null, thread?.subject, " ", thread?.rental_code && `\xB7 ${thread.rental_code}`), /* @__PURE__ */ React.createElement("small", null, synced ? `Last synced ${synced.toLocaleTimeString()}` : "Connecting\u2026")), thread && /* @__PURE__ */ React.createElement("button", { disabled: sending, onClick: changeStatus }, thread.status === "OPEN" ? "Resolve conversation" : "Reopen conversation")), /* @__PURE__ */ React.createElement("div", { className: "support-messages", role: "log", "aria-label": "Messages", "aria-live": "polite", onScroll: (e) => {
+  return /* @__PURE__ */ React.createElement("section", { className: "support-chat panel", "aria-label": "Customer rental support" }, /* @__PURE__ */ React.createElement("aside", { className: "support-inbox" }, /* @__PURE__ */ React.createElement("h2", null, "Customer inbox"), /* @__PURE__ */ React.createElement("label", null, "Search shown conversations", /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Customer or rental reference" })), /* @__PURE__ */ React.createElement("label", null, "Status", /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "All conversations"), /* @__PURE__ */ React.createElement("option", { value: "OPEN" }, "Open"), /* @__PURE__ */ React.createElement("option", { value: "RESOLVED" }, "Resolved"))), /* @__PURE__ */ React.createElement("div", { className: "support-thread-list" }, filtered.map((row) => /* @__PURE__ */ React.createElement("button", { key: row.id, className: `support-thread ${active === row.id ? "selected" : ""}`, onClick: () => setActive(row.id) }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, row.customer_name), row.unread_count > 0 && /* @__PURE__ */ React.createElement("b", { className: "support-unread" }, row.unread_count)), /* @__PURE__ */ React.createElement("span", null, row.subject), /* @__PURE__ */ React.createElement("small", null, row.rental_code || "General inquiry", " \xB7 ", row.status.toLowerCase()), /* @__PURE__ */ React.createElement("p", null, row.last_message || "No messages yet"), /* @__PURE__ */ React.createElement("time", null, when(row.updated_at))))), listError && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, listError, threads.length ? " Showing previously loaded conversations." : ""), /* @__PURE__ */ React.createElement("button", { type: "button", disabled: loading, onClick: () => loadThreads() }, "Try again")), !filtered.length && !listError && /* @__PURE__ */ React.createElement("p", { className: "support-muted", role: "status" }, loading ? "Loading conversations\u2026" : search ? "No conversations match your search. Try another name or rental reference." : "No conversations yet. Customer inquiries will appear here."), next && /* @__PURE__ */ React.createElement("button", { disabled: loading, onClick: () => loadThreads(next) }, loading ? "Loading\u2026" : "Load more conversations")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation" }, error && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, error), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => retryConversation.current() }, "Refresh conversation")), !active ? /* @__PURE__ */ React.createElement("div", { className: "support-empty" }, /* @__PURE__ */ React.createElement("h2", null, "Rental support"), /* @__PURE__ */ React.createElement("p", null, "Select a conversation to help a customer."), /* @__PURE__ */ React.createElement("p", null, "Replies are saved and customers receive an alert. Staff share this inbox.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("header", { className: "support-header" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", null, thread?.customer_name || "Loading conversation\u2026"), /* @__PURE__ */ React.createElement("p", null, thread?.subject, " ", thread?.rental_code && `\xB7 ${thread.rental_code}`), /* @__PURE__ */ React.createElement("small", null, synced ? `Last synced ${synced.toLocaleTimeString()}` : "Connecting\u2026")), thread && /* @__PURE__ */ React.createElement("button", { disabled: sending, onClick: changeStatus }, thread.status === "OPEN" ? "Resolve conversation" : "Reopen conversation")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation-body" }, /* @__PURE__ */ React.createElement("div", { className: "support-conversation-main" }, /* @__PURE__ */ React.createElement("div", { className: "support-messages", role: "log", "aria-label": "Messages", "aria-live": "polite", onScroll: (e) => {
     atBottom.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80;
-  } }, older && /* @__PURE__ */ React.createElement("button", { onClick: loadOlder }, "Load earlier messages"), messages.map((message) => /* @__PURE__ */ React.createElement("article", { key: message.id, className: `support-bubble ${message.sender_role === "STAFF" ? "outgoing" : ""}` }, /* @__PURE__ */ React.createElement("strong", null, message.sender_role === "STAFF" ? `${message.sender_name}${message.sender_id === user?.id ? " (you)" : ""}` : thread?.customer_name), /* @__PURE__ */ React.createElement("p", null, message.text), /* @__PURE__ */ React.createElement("small", null, when(message.created_at), message.sender_role === "STAFF" ? ` \xB7 ${thread?.customer_read_seq >= message.seq ? "Read" : "Sent"}` : ""))), !messages.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, error ? "Messages could not be updated. Your reply is kept below." : thread ? "No messages yet." : "Loading messages\u2026"), /* @__PURE__ */ React.createElement("div", { ref: bottom })), thread?.status === "RESOLVED" && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Resolved. Reopen to reply. A new customer message also reopens this conversation."), /* @__PURE__ */ React.createElement("form", { className: "support-composer", onSubmit: send }, /* @__PURE__ */ React.createElement("label", { htmlFor: "support-reply" }, "Reply to customer"), /* @__PURE__ */ React.createElement("textarea", { id: "support-reply", rows: "3", maxLength: 2e3, value: pending?.text ?? draft, disabled: !!pending || !thread || thread?.status === "RESOLVED", onChange: (e) => {
-    setDraft(e.target.value);
-    drafts.current.set(active, e.target.value);
-    persist();
-  }, placeholder: "Help with availability, pricing, or a rental\u2026" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("small", null, (pending?.text ?? draft).length, "/2000 \xB7 Plain text"), /* @__PURE__ */ React.createElement("button", { type: "submit", disabled: sending || !thread || thread.status === "RESOLVED" || !(pending?.text ?? draft).trim() }, sending ? "Sending\u2026" : pending ? "Retry message" : "Send reply"))))));
+  } }, older && /* @__PURE__ */ React.createElement("button", { onClick: loadOlder }, "Load earlier messages"), messages.map((message) => /* @__PURE__ */ React.createElement("article", { key: message.id, className: `support-bubble ${message.sender_role === "STAFF" ? "outgoing" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "support-bubble-header" }, /* @__PURE__ */ React.createElement("strong", null, message.sender_role === "STAFF" ? `${message.sender_name}${message.sender_id === user?.id ? " (you)" : ""}` : thread?.customer_name), /* @__PURE__ */ React.createElement("span", { className: `support-role-tag role-${message.sender_role.toLowerCase()}` }, message.sender_role === "STAFF" ? "Staff" : "Customer")), /* @__PURE__ */ React.createElement("p", null, message.text), /* @__PURE__ */ React.createElement("small", null, when(message.created_at), message.sender_role === "STAFF" ? ` \xB7 ${thread?.customer_read_seq >= message.seq ? "Read" : "Sent"}` : ""))), typing?.is_typing && /* @__PURE__ */ React.createElement("article", { className: "support-bubble support-typing-bubble", role: "status", "aria-label": `${typing.name} is typing` }, /* @__PURE__ */ React.createElement("div", { className: "typing-indicator-row" }, /* @__PURE__ */ React.createElement("span", { className: "typing-dots" }, /* @__PURE__ */ React.createElement("span", { className: "dot" }), /* @__PURE__ */ React.createElement("span", { className: "dot" }), /* @__PURE__ */ React.createElement("span", { className: "dot" })), /* @__PURE__ */ React.createElement("span", { className: "typing-label" }, /* @__PURE__ */ React.createElement("strong", null, typing.name), " is typing\u2026"))), !messages.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, error ? "Messages could not be updated. Your reply is kept below." : thread ? "No messages yet." : "Loading messages\u2026"), /* @__PURE__ */ React.createElement("div", { ref: bottom })), thread?.status === "RESOLVED" && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Resolved. Reopen to reply. A new customer message also reopens this conversation."), /* @__PURE__ */ React.createElement("form", { className: "support-composer", onSubmit: send }, /* @__PURE__ */ React.createElement("div", { className: "support-composer-header" }, /* @__PURE__ */ React.createElement("label", { htmlFor: "support-reply" }, "Reply to customer"), /* @__PURE__ */ React.createElement("div", { className: "support-quick-chips" }, QUICK_REPLIES.map((qr) => /* @__PURE__ */ React.createElement("button", { key: qr.label, type: "button", className: "quick-chip-btn", disabled: !thread || thread?.status === "RESOLVED", onClick: () => handleDraftChange(qr.text) }, qr.label)))), /* @__PURE__ */ React.createElement("textarea", { id: "support-reply", rows: "3", maxLength: 2e3, value: pending?.text ?? draft, disabled: !!pending || !thread || thread?.status === "RESOLVED", onKeyDown: (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!sending && !pending && (pending?.text ?? draft).trim()) send(e);
+    }
+  }, onChange: (e) => handleDraftChange(e.target.value), placeholder: "Help with availability, pricing, or a rental\u2026 (Press Enter to send)" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("small", null, (pending?.text ?? draft).length, "/2000 \xB7 Press Enter to send, Shift+Enter for new line"), /* @__PURE__ */ React.createElement("button", { type: "submit", disabled: sending || !thread || thread.status === "RESOLVED" || !(pending?.text ?? draft).trim() }, sending ? "Sending\u2026" : pending ? "Retry message" : "Send reply")))), thread && /* @__PURE__ */ React.createElement("aside", { className: "support-context-rail" }, /* @__PURE__ */ React.createElement("div", { className: "context-card-header" }, /* @__PURE__ */ React.createElement("div", { className: "context-avatar" }, initials2(thread.customer_name)), /* @__PURE__ */ React.createElement("h3", null, thread.customer_name), /* @__PURE__ */ React.createElement("span", { className: `context-status-pill status-${thread.status.toLowerCase()}` }, thread.status)), /* @__PURE__ */ React.createElement("div", { className: "context-details-group" }, /* @__PURE__ */ React.createElement("h4", null, "Inquiry Summary"), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Type"), /* @__PURE__ */ React.createElement("strong", null, thread.subject)), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Rental Reference"), /* @__PURE__ */ React.createElement("strong", null, thread.rental_code || "General inquiry")), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Last Updated"), /* @__PURE__ */ React.createElement("time", null, when(thread.updated_at)))), /* @__PURE__ */ React.createElement("div", { className: "context-details-group" }, /* @__PURE__ */ React.createElement("h4", null, "Operator Tips"), /* @__PURE__ */ React.createElement("p", { className: "context-tip-text" }, "Customer views replies live in the mobile app. Double-check equipment availability, condition, and valid ID before confirming pickup.")))))));
 }
 
 // src/react/WorkspaceStatus.jsx
@@ -1831,7 +1859,8 @@ function WorkspaceShell({
     if (entry) {
       setNotificationsOpen(false);
       try {
-        await rentalNotifications.markRead([entry.dataset.rentalNotification]);
+        rentalNotifications.markRead([entry.dataset.rentalNotification]).catch(() => {
+        });
         if (entry.dataset.notificationChat) {
           window.dispatchEvent(new CustomEvent("rental-support-open", { detail: entry.dataset.notificationChat }));
           try {
@@ -1840,7 +1869,9 @@ function WorkspaceShell({
           }
           onNavigate("Messages");
         } else if (entry.dataset.notificationRental) {
-          await workspaceUI.openTransaction(entry.dataset.notificationRental);
+          await workspaceUI.openTransaction(entry.dataset.notificationRental, {
+            rentalCode: entry.dataset.rentalCode
+          });
         } else if (entry.dataset.notificationPage) {
           onNavigate(entry.dataset.notificationPage);
         }

@@ -481,13 +481,15 @@ export function WorkspaceShell({
     if (entry) {
       setNotificationsOpen(false);
       try {
-        await rentalNotifications.markRead([entry.dataset.rentalNotification]);
+        rentalNotifications.markRead([entry.dataset.rentalNotification]).catch(() => {});
         if (entry.dataset.notificationChat) {
           window.dispatchEvent(new CustomEvent('rental-support-open', { detail: entry.dataset.notificationChat }));
           try { sessionStorage.setItem('rental-support-open', entry.dataset.notificationChat); } catch {}
           onNavigate('Messages');
         } else if (entry.dataset.notificationRental) {
-          await workspaceUI.openTransaction(entry.dataset.notificationRental);
+          await workspaceUI.openTransaction(entry.dataset.notificationRental, {
+            rentalCode: entry.dataset.rentalCode
+          });
         } else if (entry.dataset.notificationPage) {
           onNavigate(entry.dataset.notificationPage);
         }

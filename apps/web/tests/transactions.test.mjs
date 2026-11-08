@@ -62,3 +62,56 @@ test('due return requests stay marked overdue until physical receipt and inspect
   assert.ok(returns.includes('Return requested · overdue by'));
   assert.ok(returns.includes('Received late · timer stopped · inspection pending'));
 });
+
+test('openTransaction immediately displays modal and does not make unnecessary workspace refreshes', async () => {
+  let modalTitle = '', modalBody = '', workspaceReads = 0, lookupCalls = 0;
+  const modalMock = {
+    open: true,
+    querySelector: () => ({ addEventListener() {}, onclick: null }),
+    querySelectorAll: () => []
+  };
+  const showModal = (title, body) => {
+    modalTitle = title;
+    modalBody = body;
+  };
+  const testRental = { ...row, id: 'rental-cached', rental_code: 'R-CACHED', status: 'ACTIVE' };
+  const uncachedRental = { ...row, id: 'rental-uncached', rental_code: 'R-UNCACHED', status: 'CANCELLED' };
+  
+  const ui = createWorkspaceUI({
+    ...h,
+    showModal,
+    modal: modalMock,
+    api: async (url, opts) => {
+      if (url.startsWith('/workspace')) {
+        workspaceReads++;
+        return { transactions: [testRental], customers: [], items: [], categories: [], rates: [], maintenance: [], users: [], settings: {}, terminals: [], verification: [] };
+      }
+      if (url === '/rentals/lookup') {
+        lookupCalls++;
+        const parsed = JSON.parse(opts?.body || '{}');
+        return { rental: parsed.code === 'rental-cached' ? testRental : uncachedRental };
+      }
+      return {};
+    }
+  });
+
+  await ui.load();
+  assert.equal(workspaceReads, 1);
+
+  // 1. Opening cached rental
+  await ui.openTransaction('rental-cached');
+  assert.equal(modalTitle, 'Rental details');
+  assert.ok(modalBody.includes('R-CACHED'));
+  assert.equal(workspaceReads, 1);
+
+  // 2. Opening uncached rental (like from notification for cancelled rental)
+  const openPromise = ui.openTransaction('rental-uncached', { rentalCode: 'R-UNCACHED' });
+  assert.equal(modalTitle, 'Rental details');
+  assert.ok(modalBody.includes('Loading rental details'));
+  assert.ok(modalBody.includes('R-UNCACHED'));
+  
+  await openPromise;
+  assert.equal(lookupCalls, 1);
+  assert.equal(workspaceReads, 1);
+  assert.ok(modalBody.includes('Cancelled'));
+});

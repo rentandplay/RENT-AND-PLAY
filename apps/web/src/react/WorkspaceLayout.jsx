@@ -5,6 +5,8 @@ import { renderRentalNotifications } from '../notifications.js';
 import { DashboardView } from './DashboardView.jsx';
 import { ProfileView } from './ProfileView.jsx';
 import { MessagesView } from './MessagesView.jsx';
+import { WorkspaceStatus } from './WorkspaceStatus.jsx';
+import { WorkspaceErrorBoundary } from './WorkspaceErrorBoundary.jsx';
 
 export const navGroups = [
   {
@@ -110,16 +112,12 @@ export function PageHeading({ page, reportSection }) {
   const displayDesc = page === 'Reports' && reportInfo ? reportInfo[1] : description;
 
   return (
-    <header className="page-heading">
+    <div className="page-heading" title={displayDesc}>
       <div className="page-heading-copy">
-        <span className="page-eyebrow">{displayCaption}</span>
+        <span className="sr-only">{displayCaption}</span>
         <h1>{title}</h1>
-        {displayDesc ? <p>{displayDesc}</p> : null}
       </div>
-      <span className="page-heading-icon" aria-hidden="true">
-        <Icon name={glyph} />
-      </span>
-    </header>
+    </div>
   );
 }
 
@@ -259,6 +257,8 @@ export function WorkspaceShell({
   page,
   reportSection,
   connectionError,
+  workspaceLoading = false,
+  offline = false,
   theme,
   onSetTheme,
   filter,
@@ -304,10 +304,23 @@ export function WorkspaceShell({
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width:720px)').matches : false
   );
+  const sidebarRail = sidebarCollapsed && !isMobileViewport;
+  const [sidebarFlyout, setSidebarFlyout] = useState(null);
+  const flyoutCloseTimer = useRef(null);
+  const keepFlyoutOpen = () => clearTimeout(flyoutCloseTimer.current);
+  const openSidebarFlyout = groupId => {
+    keepFlyoutOpen();
+    if (sidebarRail) setSidebarFlyout(groupId);
+  };
+  const closeSidebarFlyout = () => {
+    keepFlyoutOpen();
+    flyoutCloseTimer.current = setTimeout(() => setSidebarFlyout(null), 180);
+  };
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   const sidebarRef = useRef(null);
+  const sidebarFlyoutRef = useRef(null);
   const workspaceBodyRef = useRef(null);
   const mobileToggleRef = useRef(null);
   const accountToggleRef = useRef(null);
@@ -321,11 +334,27 @@ export function WorkspaceShell({
     const handleResize = () => {
       const mobile = window.matchMedia('(max-width:720px)').matches;
       setIsMobileViewport(mobile);
+      setSidebarFlyout(null);
       if (!mobile) setMobileDrawerOpen(false);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useLayoutEffect(() => {
+    if (!sidebarRail || !sidebarFlyout) return;
+    const button = document.getElementById(`nav-group-toggle-${sidebarFlyout}`);
+    const flyout = sidebarFlyoutRef.current;
+    if (!button || !flyout) return;
+    const anchor = button.getBoundingClientRect();
+    flyout.style.left = `${sidebarRef.current.getBoundingClientRect().right + 8}px`;
+    flyout.style.top = `${Math.max(8, Math.min(anchor.top, window.innerHeight - flyout.getBoundingClientRect().height - 8))}px`;
+  }, [sidebarRail, sidebarFlyout]);
+
+  useEffect(() => {
+    if (!sidebarRail) setSidebarFlyout(null);
+    return keepFlyoutOpen;
+  }, [sidebarRail]);
 
   useEffect(() => {
     const sidebar = sidebarRef.current;
@@ -335,9 +364,10 @@ export function WorkspaceShell({
   }, [isMobileViewport, mobileDrawerOpen]);
 
   useEffect(() => {
-    const handleDocClick = () => {
+    const handleDocClick = event => {
       setAccountMenuOpen(false);
       setNotificationsOpen(false);
+      if (!sidebarRef.current?.contains(event.target) && !sidebarFlyoutRef.current?.contains(event.target)) setSidebarFlyout(null);
     };
     document.addEventListener('click', handleDocClick);
     return () => document.removeEventListener('click', handleDocClick);
@@ -413,6 +443,7 @@ export function WorkspaceShell({
   const handleSidebarKeyDown = event => {
     if (event.key === 'Escape') {
       setMobileDrawerOpen(false);
+      setSidebarFlyout(null);
       mobileToggleRef.current?.focus();
     }
     if (event.key === 'Tab' && isMobileViewport && mobileDrawerOpen && sidebarRef.current) {
@@ -552,12 +583,41 @@ export function WorkspaceShell({
       ? localStorage.getItem(`rent_play_avatar_${user?.id || user?.email || 'active'}`)
       : '');
 
+  const flyoutGroup = sidebarRail ? navGroups.find(group => group.id === sidebarFlyout) : null;
+  const renderGroupLinks = group => group.items.map(([label, target, section]) => {
+    const active = section ? page === 'Reports' && reportSection === section : page === target;
+    const buttonLabel = section ? label : target;
+    return <button
+      key={`${target}-${section || ''}`}
+      type="button"
+      data-page={target}
+      data-analytics-section={section || undefined}
+      className={`nav-child${active ? ' active' : ''}`}
+      aria-label={buttonLabel}
+      title={buttonLabel}
+      aria-current={active ? 'page' : undefined}
+      onPointerEnter={() => queuePagePrefetch(target)}
+      onPointerLeave={cancelPagePrefetch}
+      onFocus={() => queuePagePrefetch(target)}
+      onBlur={cancelPagePrefetch}
+      onClick={event => {
+        event.preventDefault();
+        setMobileDrawerOpen(false);
+        setSidebarFlyout(null);
+        onNavigate(target, false, 'All rentals', '', section || '');
+      }}
+    >
+      <span className="sidebar-label">{label}</span>
+      {target === 'Rentals' ? <span className="nav-count">{data?.rentals?.length ?? '–'}</span> : null}
+    </button>;
+  });
+
   return (
     <>
       <a className="skip-link" href="#workspace-content">
         Skip to main content
       </a>
-      <div className={`workspace${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+      <div className={`workspace${sidebarRail ? ' sidebar-collapsed' : ''}`}>
         <aside
           id="workspace-navigation"
           ref={sidebarRef}
@@ -578,7 +638,7 @@ export function WorkspaceShell({
             <BrandLogo />
           </a>
 
-          <nav>
+          <nav onScroll={() => setSidebarFlyout(null)}>
             <button
               data-page="Dashboard"
               className={`nav-root${page === 'Dashboard' ? ' active' : ''}`}
@@ -609,17 +669,21 @@ export function WorkspaceShell({
                 <section
                   className={`nav-section${hasActiveChild ? ' has-active-child' : ''}`}
                   key={group.id}
+                  onPointerEnter={event => { if (event.pointerType !== 'touch') openSidebarFlyout(group.id); }}
+                  onPointerLeave={closeSidebarFlyout}
+                  onFocusCapture={() => openSidebarFlyout(group.id)}
+                  onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) closeSidebarFlyout(); }}
                 >
                   <button
                     type="button"
                     id={`nav-group-toggle-${group.id}`}
                     className={`nav-section-title${hasActiveChild ? ' group-active' : ''}`}
                     data-nav-group={group.id}
-                    aria-expanded={expanded}
-                    aria-controls={`nav-group-${group.id}`}
+                    aria-expanded={sidebarRail ? sidebarFlyout === group.id : expanded}
+                    aria-controls={!sidebarRail || sidebarFlyout === group.id ? `nav-group-${group.id}` : undefined}
                     aria-label={group.label}
                     title={group.label}
-                    onClick={() => onToggleNavGroup(group.id)}
+                    onClick={() => sidebarRail ? openSidebarFlyout(group.id) : onToggleNavGroup(group.id)}
                   >
                     <span className="nav-icon" aria-hidden="true">
                       <Icon name={group.icon || 'box'} />
@@ -629,46 +693,16 @@ export function WorkspaceShell({
                       <Icon name="chevron" />
                     </span>
                   </button>
-                  <div
+                  {!sidebarRail && <div
                     className="nav-section-items"
                     id={`nav-group-${group.id}`}
-                    hidden={!sidebarCollapsed && !expanded}
+                    hidden={!expanded}
                   >
                     <div className="nav-flyout-header" aria-hidden="true">
                       <span>{group.label}</span>
                     </div>
-                    {group.items.map(([label, target, section]) => {
-                      const active = section
-                        ? page === 'Reports' && reportSection === section
-                        : page === target;
-                      const buttonLabel = section ? label : target;
-                      return (
-                        <button
-                          key={`${target}-${section || ''}`}
-                          data-page={target}
-                          data-analytics-section={section || undefined}
-                          className={`nav-child${active ? ' active' : ''}`}
-                          aria-label={buttonLabel}
-                          title={buttonLabel}
-                          aria-current={active ? 'page' : undefined}
-                          onPointerEnter={() => queuePagePrefetch(target)}
-                          onPointerLeave={cancelPagePrefetch}
-                          onFocus={() => queuePagePrefetch(target)}
-                          onBlur={cancelPagePrefetch}
-                          onClick={e => {
-                            e.preventDefault();
-                            setMobileDrawerOpen(false);
-                            onNavigate(target, false, 'All rentals', '', section || '');
-                          }}
-                        >
-                          <span className="sidebar-label">{label}</span>
-                          {target === 'Rentals' ? (
-                            <span className="nav-count">{data?.rentals?.length ?? '–'}</span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
+                    {renderGroupLinks(group)}
+                  </div>}
                 </section>
               );
             })}
@@ -743,14 +777,31 @@ export function WorkspaceShell({
           </div>
         </aside>
 
+        {flyoutGroup && <nav
+          key={flyoutGroup.id}
+          ref={sidebarFlyoutRef}
+          id={`nav-group-${flyoutGroup.id}`}
+          className="sidebar-flyout"
+          aria-label={`${flyoutGroup.label} pages`}
+          onPointerEnter={keepFlyoutOpen}
+          onPointerLeave={closeSidebarFlyout}
+          onFocusCapture={keepFlyoutOpen}
+          onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) closeSidebarFlyout(); }}
+          onKeyDown={handleSidebarKeyDown}
+        >
+          <div className="sidebar-flyout-title">{flyoutGroup.label}</div>
+          {renderGroupLinks(flyoutGroup)}
+        </nav>}
+
         <div className="workspace-body" ref={workspaceBodyRef}>
           <header className="topbar">
+            <div className="topbar-leading">
             <button
               ref={mobileToggleRef}
               className="icon-button menu-toggle"
               id="mobile-menu"
               aria-controls="workspace-navigation"
-              aria-expanded={isMobileViewport ? mobileDrawerOpen : !sidebarCollapsed}
+              aria-expanded={isMobileViewport ? mobileDrawerOpen : !sidebarRail}
               aria-label={mobileToggleLabel}
               title={mobileToggleLabel}
               onClick={handleMobileMenuClick}
@@ -760,6 +811,8 @@ export function WorkspaceShell({
             >
               <Icon name="menu" />
             </button>
+            <PageHeading page={page} reportSection={reportSection} />
+            </div>
 
             <div className="top-actions">
               <div className="unified-top-pill" role="toolbar" aria-label="Quick actions">
@@ -921,23 +974,10 @@ export function WorkspaceShell({
           </header>
 
           <main className="content" id="workspace-content" tabIndex={-1}>
-            <PageHeading page={page} reportSection={reportSection} />
-            {connectionError ? (
-              <div className="connection-banner dashboard-connection-banner" role="alert">
-                {connectionError}
-                {data ? ' Showing the last successfully loaded records.' : ''}
-              </div>
-            ) : null}
+            {page === 'Dashboard' && <WorkspaceStatus loading={workspaceLoading} error={connectionError} offline={offline} hasData={Boolean(data)} onRetry={onManualRefresh} />}
 
-            {!data ? (
-              <section className="panel">
-                <div className="empty-state">
-                  <Icon name="box" />
-                  <h3>Waiting for your database</h3>
-                  <p>Check the backend connection, then select Refresh.</p>
-                </div>
-              </section>
-            ) : page === 'Dashboard' ? (
+            <WorkspaceErrorBoundary key={page} onRetry={onManualRefresh} onHome={() => onNavigate('Dashboard')}>
+            {page === 'Dashboard' ? (data &&
               <DashboardView
                 data={data}
                 filter={filter}
@@ -995,16 +1035,17 @@ export function WorkspaceShell({
               </section>
             )}
 
+            </WorkspaceErrorBoundary>
             <footer className="content-footer">
               <span>© {new Date().getFullYear()} Rent &amp; Play</span>
               <span>
-                {data
+                {page === 'Dashboard' && data?.refreshedAt && Number.isFinite(Date.parse(data.refreshedAt))
                   ? `Updated ${new Intl.DateTimeFormat('en-PH', {
                       hour: 'numeric',
                       minute: '2-digit',
                       timeZone: 'Asia/Manila'
                     }).format(new Date(data.refreshedAt))}`
-                  : 'Waiting for database'}
+                  : offline ? 'Offline' : workspaceLoading ? 'Loading latest records…' : 'Rent & Play workspace'}
               </span>
             </footer>
           </main>

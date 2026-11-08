@@ -1,4 +1,4 @@
-// source/apps/web/src/react/react-shim.js
+// src/react/react-shim.js
 import {
   React,
   React as React2,
@@ -16,7 +16,8 @@ import {
   flushSync
 } from "./react-vendor.js";
 
-// source/apps/web/src/react/icons.jsx
+// src/react/icons.jsx
+import { publicErrorMessage } from "./request-errors.js";
 var icons = {
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
@@ -147,17 +148,9 @@ function SportArtSvg() {
     }
   )), /* @__PURE__ */ React.createElement("g", { transform: "rotate(21 92 166)" }, /* @__PURE__ */ React.createElement("rect", { x: "39", y: "127", width: "109", height: "67", rx: "29", fill: "#223957" }), /* @__PURE__ */ React.createElement("path", { d: "M62 148v23M50 159h24", stroke: "#fff", strokeWidth: "5" }), /* @__PURE__ */ React.createElement("circle", { cx: "122", cy: "153", r: "5", fill: "#fb9b50" }), /* @__PURE__ */ React.createElement("circle", { cx: "112", cy: "166", r: "5", fill: "#91b7aa" })), /* @__PURE__ */ React.createElement("g", { transform: "rotate(14 263 166)" }, /* @__PURE__ */ React.createElement("rect", { x: "236", y: "136", width: "54", height: "54", rx: "10", fill: "#fff", stroke: "#ddc6b0" }), /* @__PURE__ */ React.createElement("g", { fill: "#203750" }, /* @__PURE__ */ React.createElement("circle", { cx: "249", cy: "149", r: "3" }), /* @__PURE__ */ React.createElement("circle", { cx: "277", cy: "149", r: "3" }), /* @__PURE__ */ React.createElement("circle", { cx: "263", cy: "163", r: "3" }), /* @__PURE__ */ React.createElement("circle", { cx: "249", cy: "177", r: "3" }), /* @__PURE__ */ React.createElement("circle", { cx: "277", cy: "177", r: "3" }))));
 }
-function cleanErrorMessage(msg) {
-  if (!msg) return "";
-  const str = String(msg);
-  const lower = str.toLowerCase();
-  if (lower.includes("npm run dev") || lower.includes("backend is not running") || lower.includes("apps/backend") || lower.includes("failed to fetch") || lower.includes("econnrefused") || lower.includes("cannot reach the server")) {
-    return "Unable to connect to the server. Please check your connection or try again later.";
-  }
-  return str;
-}
+var cleanErrorMessage = (problem) => problem ? publicErrorMessage(problem) : "";
 
-// source/apps/web/src/react/LoginView.jsx
+// src/react/LoginView.jsx
 import {
   bindAccountValidation,
   emailError,
@@ -456,7 +449,7 @@ function LoginView({
   )), /* @__PURE__ */ React.createElement("label", { className: "checkbox" }, /* @__PURE__ */ React.createElement("input", { id: "remember", type: "checkbox" }), " Remember me on this device"), /* @__PURE__ */ React.createElement("p", { id: "login-error", role: "alert" }, errorMsg), /* @__PURE__ */ React.createElement("button", { className: "primary login-submit", type: "submit" }, "Sign in")), /* @__PURE__ */ React.createElement("p", { className: "login-foot" }, "Your account. Your equipment. Your workspace.")), /* @__PURE__ */ React.createElement("footer", null, "\xA9 ", (/* @__PURE__ */ new Date()).getFullYear(), " Rent & Play ", /* @__PURE__ */ React.createElement("span", null, "Built for more play."))));
 }
 
-// source/apps/web/src/react/PasswordChangeView.jsx
+// src/react/PasswordChangeView.jsx
 import {
   bindAccountValidation as bindAccountValidation2,
   passwordError as passwordError2,
@@ -580,11 +573,11 @@ function PasswordChangeView({
   ), " ", "Show passwords"), /* @__PURE__ */ React.createElement("p", { className: "form-error", role: "alert" }, errorMsg), /* @__PURE__ */ React.createElement("button", { className: "primary", type: "submit" }, "Update password"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", id: "change-signout", onClick: handleSignOut }, "Sign out"))));
 }
 
-// source/apps/web/src/react/WorkspaceLayout.jsx
+// src/react/WorkspaceLayout.jsx
 import { pageInfo } from "./workspace-navigation.js";
 import { renderRentalNotifications } from "./notifications.js";
 
-// source/apps/web/src/react/DashboardView.jsx
+// src/react/DashboardView.jsx
 function StatCard({ label, value, note, glyph, color, page, target = "", filter = "", onNavigate }) {
   const handleClick = (e) => {
     e.preventDefault();
@@ -621,10 +614,11 @@ function getDueInfo(r) {
   if (isNaN(due)) return { badge: "Philippine time", isOverdue: false, isDueSoon: false };
   const diffMs = due - now;
   if (diffMs < 0) {
-    const hours = Math.max(1, Math.floor(-diffMs / 36e5));
-    const mins = Math.floor(-diffMs % 36e5 / 6e4);
+    const minutes = Math.max(1, Math.floor(-diffMs / 6e4));
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
     return {
-      badge: `Overdue by ${hours}h ${mins > 0 ? `${mins}m` : ""}`.trim(),
+      badge: `Overdue by ${hours ? `${hours}h ` : ""}${mins ? `${mins}m` : ""}`.trim(),
       isOverdue: true,
       isDueSoon: false
     };
@@ -655,6 +649,8 @@ function DashboardView({
   api,
   toast
 }) {
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [testingTerminal, setTestingTerminal] = useState(false);
   const s = data.stats;
   const pageSize = 5;
   const allRows = data.rentals.filter(
@@ -680,8 +676,8 @@ function DashboardView({
   };
   const openWorkflowModal = () => {
     showModal(
-      "Rental workflow",
-      '<p><strong>Walk-in Counter Flow:</strong> Approve or create the walk-in rental, scan the assigned equipment QR, inspect condition &amp; accessories, and confirm handover on the <strong>ESP32 Counter Terminal</strong> (or web fallback) to start the timer.</p><p><strong>Resort Stay Delivery Flow:</strong> Scan the unit QR at the shop and confirm <strong>Resort Dispatch on the ESP32 Terminal</strong> (marks unit Out for Delivery while keeping the timer stopped). At the resort villa/gate, scan the customer Rental QR to start the timer.</p><div class="info-box">On return, scanning the equipment QR immediately stops the rental timer and overtime. Final return inspection is confirmed on the ESP32 Counter Terminal before updating inventory availability.</div>'
+      "How rentals work",
+      "<p><strong>Store pickup.</strong> Create the rental, scan the assigned unit, and review the customer, payment, agreement, and equipment checks. Confirm handover at the counter terminal to start the timer.</p><p><strong>Resort delivery.</strong> Prepare and confirm dispatch at the shop. The timer starts after staff verifies the customer ticket and confirms handover at the resort.</p><p><strong>Returns.</strong> Record physical receipt to stop the timer, then inspect the equipment and complete the return.</p>"
     );
   };
   const handleRowClick = (e, rentalId) => {
@@ -706,7 +702,7 @@ function DashboardView({
   const t = data.terminals[0];
   const queue = t ? data.pending.filter((p) => p.terminal_code === t.terminal_code) : [];
   const firstPending = queue[0] || data.pending?.[0];
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("section", { className: "counter-command-bar", role: "toolbar", "aria-label": "Counter command actions" }, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "dashboard-workspace" }, /* @__PURE__ */ React.createElement("section", { className: "counter-command-bar", role: "toolbar", "aria-label": "Counter command actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -721,7 +717,7 @@ function DashboardView({
       }
     },
     /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble" }, /* @__PURE__ */ React.createElement(Icon, { name: "plus" })),
-    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "+ New Walk-in Rental"), /* @__PURE__ */ React.createElement("small", null, "Quick Counter Checkout"))
+    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "New walk-in rental"), /* @__PURE__ */ React.createElement("small", null, "Create a rental at the counter"))
   ), /* @__PURE__ */ React.createElement(
     "button",
     {
@@ -737,7 +733,7 @@ function DashboardView({
       }
     },
     /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble" }, /* @__PURE__ */ React.createElement(Icon, { name: "search" })),
-    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Scan QR / Lookup"), /* @__PURE__ */ React.createElement("small", null, "Camera / Barcode Scanner"))
+    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Find rental"), /* @__PURE__ */ React.createElement("small", null, "Scan a QR code or enter a reference"))
   ), /* @__PURE__ */ React.createElement(
     "button",
     {
@@ -753,33 +749,8 @@ function DashboardView({
       }
     },
     /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble" }, /* @__PURE__ */ React.createElement(Icon, { name: "undo" })),
-    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Quick Return"), /* @__PURE__ */ React.createElement("small", null, "Stop Timer & Inspect"))
-  ), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      type: "button",
-      className: "command-bar-btn terminal-btn",
-      id: "cmd-ping-terminal",
-      title: "Sends test chime & OLED alert to the ESP32 terminal",
-      onClick: async () => {
-        try {
-          if (api) {
-            await api("/terminals/test-ping", {
-              method: "POST",
-              body: JSON.stringify({ terminalCode: t?.terminal_code || "TERM-01" })
-            });
-            toast?.("ESP32 Counter Station pinged! Buzzer chime and OLED alert triggered.");
-          } else {
-            toast?.("Counter station is ready.");
-          }
-        } catch (err) {
-          toast?.(err.message || "Counter station test ping triggered.");
-        }
-      }
-    },
-    /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble terminal-pulse" }, /* @__PURE__ */ React.createElement(Icon, { name: "chip" })),
-    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Ping ESP32 Station"), /* @__PURE__ */ React.createElement("small", null, t?.online ? "Online & polling" : "Station check"))
-  )), queue.length > 0 && firstPending ? /* @__PURE__ */ React.createElement("aside", { className: "terminal-live-action-banner", role: "alert" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-pulse", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", { className: "pulse-ring" }), /* @__PURE__ */ React.createElement(Icon, { name: "chip" })), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-body" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-badge-row" }, /* @__PURE__ */ React.createElement("span", { className: "terminal-banner-badge" }, "AWAITING ESP32 HARDWARE CONFIRMATION"), /* @__PURE__ */ React.createElement("span", { className: "terminal-queue-count" }, queue.length, " Pending at Counter")), /* @__PURE__ */ React.createElement("strong", null, firstPending.item_name || "Equipment", " \xB7 ", firstPending.customer || "Customer"), /* @__PURE__ */ React.createElement("p", null, "Code: ", /* @__PURE__ */ React.createElement("code", null, firstPending.rental_code || firstPending.verification_code || firstPending.id), " \xB7 Station: ", /* @__PURE__ */ React.createElement("strong", null, firstPending.terminal_code || "TERM-01"), " \xB7 Press physical ", /* @__PURE__ */ React.createElement("strong", null, "GPIO 35 Button"), " on the counter terminal to finalize transaction.")), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-actions" }, /* @__PURE__ */ React.createElement(
+    /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Receive return"), /* @__PURE__ */ React.createElement("small", null, "Record receipt and inspect equipment"))
+  )), queue.length > 0 && firstPending ? /* @__PURE__ */ React.createElement("aside", { className: "terminal-live-action-banner", role: "alert" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-pulse", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", { className: "pulse-ring" }), /* @__PURE__ */ React.createElement(Icon, { name: "chip" })), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-body" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-badge-row" }, /* @__PURE__ */ React.createElement("span", { className: "terminal-banner-badge" }, "Terminal confirmation needed"), /* @__PURE__ */ React.createElement("span", { className: "terminal-queue-count" }, queue.length, " pending")), /* @__PURE__ */ React.createElement("strong", null, firstPending.item_name || "Equipment", " \xB7 ", firstPending.customer || "Customer"), /* @__PURE__ */ React.createElement("p", null, "Code: ", /* @__PURE__ */ React.createElement("code", null, firstPending.rental_code || firstPending.verification_code || firstPending.id), " \xB7 Terminal: ", /* @__PURE__ */ React.createElement("strong", null, firstPending.terminal_code || "TERM-01"), " \xB7 Review the request, then press the terminal button to confirm.")), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -792,13 +763,13 @@ function DashboardView({
         }
       }
     },
-    "Open Verification Gate \u2192"
+    "Review request \u2192"
   ))) : null, /* @__PURE__ */ React.createElement("div", { className: "stats" }, /* @__PURE__ */ React.createElement(
     StatCard,
     {
       label: "Active rentals",
       value: s.active,
-      note: "Confirmed rentals currently out",
+      note: "Currently with customers",
       glyph: "clock",
       color: "blue",
       page: "Rentals",
@@ -807,9 +778,9 @@ function DashboardView({
   ), /* @__PURE__ */ React.createElement(
     StatCard,
     {
-      label: "Available items",
+      label: "Available units",
       value: s.available,
-      note: "Ready for their next adventure",
+      note: "Ready to rent",
       glyph: "box",
       color: "green",
       page: "Inventory",
@@ -820,7 +791,7 @@ function DashboardView({
     {
       label: "Due today",
       value: s.dueToday,
-      note: `${s.overdue} overdue rental(s) need attention`,
+      note: "Scheduled to return today",
       glyph: "bell",
       color: "amber",
       page: "Dashboard",
@@ -831,15 +802,17 @@ function DashboardView({
   ), /* @__PURE__ */ React.createElement(
     StatCard,
     {
-      label: "Rental fees",
-      value: money(s.fees),
-      note: "From current active rentals",
-      glyph: "money",
-      color: "purple",
-      page: "Rentals",
+      label: "Overdue",
+      value: s.overdue,
+      note: s.overdue ? "Follow up on these returns" : "No overdue rentals",
+      glyph: "clock",
+      color: "red",
+      page: "Dashboard",
+      target: "rental-panel",
+      filter: "Overdue",
       onNavigate
     }
-  )), /* @__PURE__ */ React.createElement("div", { className: "dashboard-grid" }, /* @__PURE__ */ React.createElement("div", { className: "main-column" }, /* @__PURE__ */ React.createElement("section", { className: "panel rental-panel", id: "rental-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rentals to keep an eye on"), /* @__PURE__ */ React.createElement("p", null, "Active rentals and requests awaiting verification.")), /* @__PURE__ */ React.createElement("div", { className: "rental-panel-actions" }, /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { className: "dashboard-grid" }, /* @__PURE__ */ React.createElement("div", { className: "main-column" }, /* @__PURE__ */ React.createElement("section", { className: "panel rental-panel", id: "rental-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rental activity"), /* @__PURE__ */ React.createElement("p", null, "Open rentals and requests that need your attention.")), /* @__PURE__ */ React.createElement("div", { className: "rental-panel-actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -847,8 +820,7 @@ function DashboardView({
       id: "rental-workflow",
       onClick: openWorkflowModal
     },
-    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" }),
-    " Rental workflow"
+    "How rentals work"
   ), /* @__PURE__ */ React.createElement(
     "button",
     {
@@ -882,7 +854,7 @@ function DashboardView({
         onRentalPageChange(0);
       }
     }
-  ))), /* @__PURE__ */ React.createElement("div", { className: "table-scroll" }, /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", null, "ITEM / RENTAL ID"), /* @__PURE__ */ React.createElement("th", null, "CUSTOMER"), /* @__PURE__ */ React.createElement("th", null, "DUE DATE"), /* @__PURE__ */ React.createElement("th", null, "STATUS"), /* @__PURE__ */ React.createElement("th", null))), /* @__PURE__ */ React.createElement("tbody", null, rows.length > 0 ? rows.map((r) => {
+  ))), /* @__PURE__ */ React.createElement("div", { className: "table-scroll" }, /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", null, "EQUIPMENT"), /* @__PURE__ */ React.createElement("th", null, "CUSTOMER"), /* @__PURE__ */ React.createElement("th", null, "DUE DATE"), /* @__PURE__ */ React.createElement("th", null, "STATUS"), /* @__PURE__ */ React.createElement("th", null))), /* @__PURE__ */ React.createElement("tbody", null, rows.length > 0 ? rows.map((r) => {
     const itemCategory = data.items.find((i) => String(i.id) === String(r.item_id))?.category || "";
     const label = r.rental_code || r.item_name;
     const dueInfo = getDueInfo(r);
@@ -900,7 +872,7 @@ function DashboardView({
         onKeyDown: (e) => handleRowKeyDown(e, r.id)
       },
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "item-cell" }, /* @__PURE__ */ React.createElement("span", { className: "item-symbol" }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: itemCategory })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, r.item_name), /* @__PURE__ */ React.createElement("small", null, r.rental_code)))),
-      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "customer-cell-wrap" }, /* @__PURE__ */ React.createElement("span", { className: "mini-avatar" }, initials(r.customer)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, r.customer), isResort ? /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag resort", title: r.delivery_location || "Resort delivery" }, "Resort: ", r.delivery_location ? r.delivery_location.split(",")[0].trim() : "Villa") : /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag shop", title: "Shop counter handover" }, "Shop Counter")))),
+      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "customer-cell-wrap" }, /* @__PURE__ */ React.createElement("span", { className: "mini-avatar" }, initials(r.customer)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, r.customer), isResort ? /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag resort", title: r.delivery_location || "Resort delivery" }, r.delivery_location ? r.delivery_location.split(",")[0].trim() : "Resort delivery") : /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag shop", title: "Shop counter handover" }, "Store pickup")))),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("strong", null, formatDate(r.due_at)), /* @__PURE__ */ React.createElement("small", { className: dueInfo.isOverdue ? "due-overdue-alert" : dueInfo.isDueSoon ? "due-soon-alert" : "" }, dueInfo.badge)),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(StatusBadge, { status: r.displayStatus })),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(
@@ -914,7 +886,7 @@ function DashboardView({
         /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
       ))
     );
-  }) : /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 5, className: "empty" }, "No open rentals match this view."))))), /* @__PURE__ */ React.createElement("div", { className: "table-footer" }, /* @__PURE__ */ React.createElement("span", null, allRows.length ? `${start + 1}\u2013${Math.min(start + pageSize, allRows.length)} of ${allRows.length}` : "0 rentals", " ", "\xB7 Page ", allRows.length ? clampedPage + 1 : 0, " of", " ", Math.ceil(allRows.length / pageSize)), /* @__PURE__ */ React.createElement("div", { className: "inv-pagination" }, /* @__PURE__ */ React.createElement(
+  }) : /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 5, className: "empty" }, "No open rentals match this view."))))), /* @__PURE__ */ React.createElement("div", { className: "table-footer" }, /* @__PURE__ */ React.createElement("span", null, allRows.length ? `${start + 1}\u2013${Math.min(start + pageSize, allRows.length)} of ${allRows.length}` : "0 rentals", " ", "\xB7 Page ", allRows.length ? clampedPage + 1 : 0, " of", " ", Math.ceil(allRows.length / pageSize)), pageCount > 1 && /* @__PURE__ */ React.createElement("div", { className: "inv-pagination" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       className: "secondary",
@@ -932,13 +904,16 @@ function DashboardView({
       onClick: () => onRentalPageChange(clampedPage + 1)
     },
     "Next \u2192"
-  )))), /* @__PURE__ */ React.createElement("section", { className: "panel revenue-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Confirmed rental fees"), /* @__PURE__ */ React.createElement("p", null, "Grouped by the date each rental was confirmed.")), /* @__PURE__ */ React.createElement("div", { className: "revenue-actions" }, /* @__PURE__ */ React.createElement(
+  )))), /* @__PURE__ */ React.createElement("section", { className: "panel revenue-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rental fees"), /* @__PURE__ */ React.createElement("p", null, "Recorded charges by confirmation date. Not cash collected.")), /* @__PURE__ */ React.createElement("div", { className: "revenue-actions" }, /* @__PURE__ */ React.createElement(
     "select",
     {
       id: "period",
       "aria-label": "Revenue period",
       value: period,
-      onChange: (e) => onPeriodChange(e.target.value)
+      onChange: (e) => {
+        setSelectedDay(null);
+        onPeriodChange(e.target.value);
+      }
     },
     /* @__PURE__ */ React.createElement("option", { value: "This week" }, "This week"),
     /* @__PURE__ */ React.createElement("option", { value: "Last week" }, "Last week")
@@ -949,24 +924,39 @@ function DashboardView({
       "data-page": "Reports",
       onClick: () => onNavigate("Reports")
     },
-    "Detailed analytics \u2192"
+    "View analytics \u2192"
   ))), /* @__PURE__ */ React.createElement("div", { className: "revenue-total" }, money(amounts.reduce((a, b) => a + b, 0)), /* @__PURE__ */ React.createElement("span", null, "Recorded rental charges")), /* @__PURE__ */ React.createElement("div", { className: "chart" }, /* @__PURE__ */ React.createElement("div", { className: "axis" }, [1, 0.75, 0.5, 0.25, 0].map((x) => /* @__PURE__ */ React.createElement("span", { key: x }, money(scale * x)))), /* @__PURE__ */ React.createElement("div", { className: "bars" }, amounts.map((amount, i) => /* @__PURE__ */ React.createElement("div", { className: "bar-column", key: days[i] }, /* @__PURE__ */ React.createElement(
-    "div",
+    "button",
     {
+      type: "button",
       className: `bar ${amount === max ? "highlight" : ""}`,
-      style: { height: `${amount / scale * 100}%` },
-      title: `${days[i]}: ${money(amount)}`
+      style: { height: "100%" },
+      title: `${days[i]}: ${money(amount)}`,
+      "aria-label": `${days[i]}: ${money(amount)} in rental fees`,
+      "aria-pressed": selectedDay === i,
+      onClick: () => setSelectedDay(i)
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "dashboard-bar-fill", style: { height: `${Math.max(2, amount / scale * 100)}%` } })
+  ), /* @__PURE__ */ React.createElement("span", null, days[i]))))), /* @__PURE__ */ React.createElement("div", { className: "dashboard-chart-detail", "aria-live": "polite" }, selectedDay === null ? /* @__PURE__ */ React.createElement("span", null, "Select a day to see its rental fees.") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", null, days[selectedDay]), /* @__PURE__ */ React.createElement("strong", null, money(amounts[selectedDay])), /* @__PURE__ */ React.createElement("span", null, "in recorded charges"))), amounts.every((v) => v === 0) ? /* @__PURE__ */ React.createElement("p", { className: "chart-empty" }, "No confirmed rental fees in this period.") : null)), /* @__PURE__ */ React.createElement("aside", { className: "right-column" }, /* @__PURE__ */ React.createElement("section", { className: "panel terminal-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " ESP32 terminal")), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-status", "data-online": Boolean(t?.online) }, /* @__PURE__ */ React.createElement("span", { className: "dashboard-status-dot", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, t ? t.online ? "Connected" : "Offline" : "Not configured"), /* @__PURE__ */ React.createElement("span", null, t ? `${t.name || "Counter terminal"} \xB7 ${t.terminal_code}` : "Set up a terminal to confirm counter handovers."))), /* @__PURE__ */ React.createElement("div", { className: "terminal-meta" }, /* @__PURE__ */ React.createElement("span", null, "Awaiting confirmation"), /* @__PURE__ */ React.createElement("strong", null, queue.length)), /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, "Confirm counter handovers, delivery dispatches, and completed inspections."), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", id: "cmd-ping-terminal", disabled: !t || !api || testingTerminal, onClick: async () => {
+    setTestingTerminal(true);
+    try {
+      await api("/terminals/test-ping", { method: "POST", body: JSON.stringify({ terminalCode: t.terminal_code }) });
+      toast?.("Test sent. Check the terminal for a response.");
+    } catch (err) {
+      toast?.(err.message || "The terminal test could not be sent.");
+    } finally {
+      setTestingTerminal(false);
     }
-  ), /* @__PURE__ */ React.createElement("span", null, days[i]))))), amounts.every((v) => v === 0) ? /* @__PURE__ */ React.createElement("p", { className: "chart-empty" }, "No confirmed rental fees in this period.") : null)), /* @__PURE__ */ React.createElement("aside", { className: "right-column" }, /* @__PURE__ */ React.createElement("section", { className: "panel terminal-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " ESP32 terminal"), /* @__PURE__ */ React.createElement("span", { className: t?.online ? "online-dot" : "offline-dot" }, t?.online ? "Online" : queue.length > 0 ? "Pending" : "Counter Kiosk")), /* @__PURE__ */ React.createElement("div", { className: "device" }, /* @__PURE__ */ React.createElement("span", null, t?.terminal_code || "TERM-01"), /* @__PURE__ */ React.createElement("strong", null, queue.length > 0 ? "AWAITING BUTTON PRESS" : t?.online ? "ONLINE & READY" : "COUNTER STATION READY"), /* @__PURE__ */ React.createElement("small", null, t?.name || "Counter Kiosk Verification Station"), /* @__PURE__ */ React.createElement("div", { className: "device-led" })), /* @__PURE__ */ React.createElement("div", { className: "terminal-meta" }, /* @__PURE__ */ React.createElement("span", null, "Pending terminal requests"), /* @__PURE__ */ React.createElement("strong", null, queue.length)), /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " Counter OLED, LED/buzzer & physical GPIO 35 button verify walk-in handovers, resort dispatches, and return inspections."), /* @__PURE__ */ React.createElement(
+  } }, testingTerminal ? "Sending test\u2026" : "Test terminal")), /* @__PURE__ */ React.createElement(
     "button",
     {
       className: "secondary wide",
       "data-page": "ESP32 terminal",
       onClick: () => onNavigate("ESP32 terminal")
     },
-    "View terminal records ",
+    "Open terminal ",
     /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
-  )), /* @__PURE__ */ React.createElement("section", { className: "panel category-panel" }, /* @__PURE__ */ React.createElement("h3", null, "A little of everything"), /* @__PURE__ */ React.createElement("p", null, "Your equipment at a glance."), data.categories.length > 0 ? data.categories.map((c, i) => /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("section", { className: "panel category-panel" }, /* @__PURE__ */ React.createElement("h3", null, "Equipment by category"), /* @__PURE__ */ React.createElement("p", null, "Select a category to view its inventory."), data.categories.length > 0 ? data.categories.map((c, i) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: c.name || i,
@@ -976,10 +966,10 @@ function DashboardView({
     /* @__PURE__ */ React.createElement("span", { className: `category-symbol ${categoryThemeClass(c.name)}` }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: c.name })),
     /* @__PURE__ */ React.createElement("span", null, c.name, /* @__PURE__ */ React.createElement("small", null, c.count, " items in inventory")),
     /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
-  )) : /* @__PURE__ */ React.createElement("p", null, "No categories recorded.")), /* @__PURE__ */ React.createElement("div", { className: "counter-tip" }, /* @__PURE__ */ React.createElement("span", null, "\u2726"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "A small counter tip"), /* @__PURE__ */ React.createElement("p", null, "Check item condition before confirming a return."))))));
+  )) : /* @__PURE__ */ React.createElement("p", null, "No categories recorded.")))));
 }
 
-// source/apps/web/src/react/ProfileView.jsx
+// src/react/ProfileView.jsx
 function ProfileView({
   user,
   profileEditing,
@@ -1193,7 +1183,7 @@ function ProfileView({
   ))))));
 }
 
-// source/apps/web/src/react/MessagesView.jsx
+// src/react/MessagesView.jsx
 var retryKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 var when = (value) => new Date(value).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 function MessagesView({ api, user }) {
@@ -1220,6 +1210,10 @@ function MessagesView({ api, user }) {
   const [draft, setDraft] = useState(""), [pending, setPending] = useState(null);
   const [sending, setSending] = useState(false), [error, setError] = useState("");
   const [loading, setLoading] = useState(true), [synced, setSynced] = useState(null);
+  const [listError, setListError] = useState("");
+  const listVersion = useRef(0), statusRef = useRef(status), retryConversation = useRef(() => {
+  });
+  statusRef.current = status;
   const generation = useRef(0), sequence = useRef(0), busy = useRef(false), listBusy = useRef(false), bottom = useRef(null);
   const drafts = useRef(saved("drafts")), failures = useRef(saved("pending"));
   const atBottom = useRef(true), hasOlderThreads = useRef(false);
@@ -1241,25 +1235,33 @@ function MessagesView({ api, user }) {
     return () => window.removeEventListener("rental-support-open", open);
   }, []);
   async function loadThreads(before = null) {
-    if (listBusy.current) return;
-    listBusy.current = true;
+    const version = listVersion.current, selectedStatus = statusRef.current;
+    if (listBusy.current?.version === version) return;
+    const operation = { version };
+    listBusy.current = operation;
+    setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (status) params.set("status", status);
+      if (selectedStatus) params.set("status", selectedStatus);
       if (before) params.set("before", before);
       const result = await request(`/chat/threads?${params}`);
+      if (version !== listVersion.current) return;
+      setListError("");
       if (before) hasOlderThreads.current = true;
       setThreads((old) => before || hasOlderThreads.current ? [...new Map([...old, ...result.threads].map((row) => [row.id, row])).values()].sort((a, b) => b.sort_key.localeCompare(a.sort_key)) : result.threads);
       if (before || !hasOlderThreads.current) setNext(result.next_cursor);
     } catch (problem) {
-      setError(problem.message);
+      if (version === listVersion.current) setListError(problem.message);
     } finally {
-      listBusy.current = false;
-      setLoading(false);
+      if (listBusy.current === operation) listBusy.current = null;
+      if (version === listVersion.current) setLoading(false);
     }
   }
   useEffect(() => {
     hasOlderThreads.current = false;
+    setThreads([]);
+    setNext(null);
+    setListError("");
     loadThreads();
     const timer = setInterval(() => {
       if (!document.hidden) loadThreads();
@@ -1268,9 +1270,12 @@ function MessagesView({ api, user }) {
       if (!document.hidden) loadThreads();
     };
     document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("online", refresh);
     return () => {
+      listVersion.current++;
       clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("online", refresh);
     };
   }, [status]);
   useEffect(() => {
@@ -1282,6 +1287,7 @@ function MessagesView({ api, user }) {
     setThread(null);
     setOlder(null);
     setError("");
+    setSynced(null);
     setDraft(drafts.current.get(active) || "");
     setPending(failures.current.get(active) || null);
     if (!active) return;
@@ -1313,6 +1319,7 @@ function MessagesView({ api, user }) {
         if (version === generation.current) busy.current = false;
       }
     }
+    retryConversation.current = sync;
     sync();
     const timer = setInterval(sync, 4e3);
     const wake = () => sync();
@@ -1320,6 +1327,8 @@ function MessagesView({ api, user }) {
     document.addEventListener("visibilitychange", wake);
     return () => {
       generation.current++;
+      retryConversation.current = () => {
+      };
       clearInterval(timer);
       window.removeEventListener("online", wake);
       document.removeEventListener("visibilitychange", wake);
@@ -1384,16 +1393,39 @@ function MessagesView({ api, user }) {
     }
   }
   const filtered = threads.filter((row) => `${row.customer_name} ${row.subject} ${row.rental_code || ""}`.toLowerCase().includes(search.toLowerCase()));
-  return /* @__PURE__ */ React.createElement("section", { className: "support-chat panel", "aria-label": "Customer rental support" }, /* @__PURE__ */ React.createElement("aside", { className: "support-inbox" }, /* @__PURE__ */ React.createElement("h2", null, "Customer inbox"), /* @__PURE__ */ React.createElement("label", null, "Find in loaded conversations", /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Customer or rental reference" })), /* @__PURE__ */ React.createElement("label", null, "Status", /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "All conversations"), /* @__PURE__ */ React.createElement("option", { value: "OPEN" }, "Open"), /* @__PURE__ */ React.createElement("option", { value: "RESOLVED" }, "Resolved"))), /* @__PURE__ */ React.createElement("div", { className: "support-thread-list" }, filtered.map((row) => /* @__PURE__ */ React.createElement("button", { key: row.id, className: `support-thread ${active === row.id ? "selected" : ""}`, onClick: () => setActive(row.id) }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, row.customer_name), row.unread_count > 0 && /* @__PURE__ */ React.createElement("b", { className: "support-unread" }, row.unread_count)), /* @__PURE__ */ React.createElement("span", null, row.subject), /* @__PURE__ */ React.createElement("small", null, row.rental_code || "General inquiry", " \xB7 ", row.status.toLowerCase()), /* @__PURE__ */ React.createElement("p", null, row.last_message || "No messages yet"), /* @__PURE__ */ React.createElement("time", null, when(row.updated_at))))), !filtered.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, loading ? "Loading conversations\u2026" : "No conversations to show."), next && /* @__PURE__ */ React.createElement("button", { onClick: () => loadThreads(next) }, "Load more conversations")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation" }, error && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, error, /* @__PURE__ */ React.createElement("button", { onClick: () => loadThreads() }, "Refresh inbox")), !active ? /* @__PURE__ */ React.createElement("div", { className: "support-empty" }, /* @__PURE__ */ React.createElement("h2", null, "Rental support"), /* @__PURE__ */ React.createElement("p", null, "Select a conversation to help a customer."), /* @__PURE__ */ React.createElement("p", null, "Replies are saved and customers receive an alert. Staff share this inbox.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("header", { className: "support-header" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", null, thread?.customer_name || "Loading conversation\u2026"), /* @__PURE__ */ React.createElement("p", null, thread?.subject, " ", thread?.rental_code && `\xB7 ${thread.rental_code}`), /* @__PURE__ */ React.createElement("small", null, synced ? `Last synced ${synced.toLocaleTimeString()}` : "Connecting\u2026")), thread && /* @__PURE__ */ React.createElement("button", { disabled: sending, onClick: changeStatus }, thread.status === "OPEN" ? "Resolve conversation" : "Reopen conversation")), /* @__PURE__ */ React.createElement("div", { className: "support-messages", role: "log", "aria-label": "Messages", "aria-live": "polite", onScroll: (e) => {
+  return /* @__PURE__ */ React.createElement("section", { className: "support-chat panel", "aria-label": "Customer rental support" }, /* @__PURE__ */ React.createElement("aside", { className: "support-inbox" }, /* @__PURE__ */ React.createElement("h2", null, "Customer inbox"), /* @__PURE__ */ React.createElement("label", null, "Search shown conversations", /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Customer or rental reference" })), /* @__PURE__ */ React.createElement("label", null, "Status", /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "All conversations"), /* @__PURE__ */ React.createElement("option", { value: "OPEN" }, "Open"), /* @__PURE__ */ React.createElement("option", { value: "RESOLVED" }, "Resolved"))), /* @__PURE__ */ React.createElement("div", { className: "support-thread-list" }, filtered.map((row) => /* @__PURE__ */ React.createElement("button", { key: row.id, className: `support-thread ${active === row.id ? "selected" : ""}`, onClick: () => setActive(row.id) }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, row.customer_name), row.unread_count > 0 && /* @__PURE__ */ React.createElement("b", { className: "support-unread" }, row.unread_count)), /* @__PURE__ */ React.createElement("span", null, row.subject), /* @__PURE__ */ React.createElement("small", null, row.rental_code || "General inquiry", " \xB7 ", row.status.toLowerCase()), /* @__PURE__ */ React.createElement("p", null, row.last_message || "No messages yet"), /* @__PURE__ */ React.createElement("time", null, when(row.updated_at))))), listError && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, listError, threads.length ? " Showing previously loaded conversations." : ""), /* @__PURE__ */ React.createElement("button", { type: "button", disabled: loading, onClick: () => loadThreads() }, "Try again")), !filtered.length && !listError && /* @__PURE__ */ React.createElement("p", { className: "support-muted", role: "status" }, loading ? "Loading conversations\u2026" : search ? "No conversations match your search. Try another name or rental reference." : "No conversations yet. Customer inquiries will appear here."), next && /* @__PURE__ */ React.createElement("button", { disabled: loading, onClick: () => loadThreads(next) }, loading ? "Loading\u2026" : "Load more conversations")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation" }, error && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, error), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => retryConversation.current() }, "Refresh conversation")), !active ? /* @__PURE__ */ React.createElement("div", { className: "support-empty" }, /* @__PURE__ */ React.createElement("h2", null, "Rental support"), /* @__PURE__ */ React.createElement("p", null, "Select a conversation to help a customer."), /* @__PURE__ */ React.createElement("p", null, "Replies are saved and customers receive an alert. Staff share this inbox.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("header", { className: "support-header" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", null, thread?.customer_name || "Loading conversation\u2026"), /* @__PURE__ */ React.createElement("p", null, thread?.subject, " ", thread?.rental_code && `\xB7 ${thread.rental_code}`), /* @__PURE__ */ React.createElement("small", null, synced ? `Last synced ${synced.toLocaleTimeString()}` : "Connecting\u2026")), thread && /* @__PURE__ */ React.createElement("button", { disabled: sending, onClick: changeStatus }, thread.status === "OPEN" ? "Resolve conversation" : "Reopen conversation")), /* @__PURE__ */ React.createElement("div", { className: "support-messages", role: "log", "aria-label": "Messages", "aria-live": "polite", onScroll: (e) => {
     atBottom.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80;
-  } }, older && /* @__PURE__ */ React.createElement("button", { onClick: loadOlder }, "Load earlier messages"), messages.map((message) => /* @__PURE__ */ React.createElement("article", { key: message.id, className: `support-bubble ${message.sender_role === "STAFF" ? "outgoing" : ""}` }, /* @__PURE__ */ React.createElement("strong", null, message.sender_role === "STAFF" ? `${message.sender_name}${message.sender_id === user?.id ? " (you)" : ""}` : thread?.customer_name), /* @__PURE__ */ React.createElement("p", null, message.text), /* @__PURE__ */ React.createElement("small", null, when(message.created_at), message.sender_role === "STAFF" ? ` \xB7 ${thread?.customer_read_seq >= message.seq ? "Read" : "Sent"}` : ""))), !messages.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Messages will appear here."), /* @__PURE__ */ React.createElement("div", { ref: bottom })), thread?.status === "RESOLVED" && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Resolved. Reopen to reply. A new customer message also reopens this conversation."), /* @__PURE__ */ React.createElement("form", { className: "support-composer", onSubmit: send }, /* @__PURE__ */ React.createElement("label", { htmlFor: "support-reply" }, "Reply to customer"), /* @__PURE__ */ React.createElement("textarea", { id: "support-reply", rows: "3", maxLength: 2e3, value: pending?.text ?? draft, disabled: !!pending || thread?.status === "RESOLVED", onChange: (e) => {
+  } }, older && /* @__PURE__ */ React.createElement("button", { onClick: loadOlder }, "Load earlier messages"), messages.map((message) => /* @__PURE__ */ React.createElement("article", { key: message.id, className: `support-bubble ${message.sender_role === "STAFF" ? "outgoing" : ""}` }, /* @__PURE__ */ React.createElement("strong", null, message.sender_role === "STAFF" ? `${message.sender_name}${message.sender_id === user?.id ? " (you)" : ""}` : thread?.customer_name), /* @__PURE__ */ React.createElement("p", null, message.text), /* @__PURE__ */ React.createElement("small", null, when(message.created_at), message.sender_role === "STAFF" ? ` \xB7 ${thread?.customer_read_seq >= message.seq ? "Read" : "Sent"}` : ""))), !messages.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, error ? "Messages could not be updated. Your reply is kept below." : thread ? "No messages yet." : "Loading messages\u2026"), /* @__PURE__ */ React.createElement("div", { ref: bottom })), thread?.status === "RESOLVED" && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Resolved. Reopen to reply. A new customer message also reopens this conversation."), /* @__PURE__ */ React.createElement("form", { className: "support-composer", onSubmit: send }, /* @__PURE__ */ React.createElement("label", { htmlFor: "support-reply" }, "Reply to customer"), /* @__PURE__ */ React.createElement("textarea", { id: "support-reply", rows: "3", maxLength: 2e3, value: pending?.text ?? draft, disabled: !!pending || !thread || thread?.status === "RESOLVED", onChange: (e) => {
     setDraft(e.target.value);
     drafts.current.set(active, e.target.value);
     persist();
   }, placeholder: "Help with availability, pricing, or a rental\u2026" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("small", null, (pending?.text ?? draft).length, "/2000 \xB7 Plain text"), /* @__PURE__ */ React.createElement("button", { type: "submit", disabled: sending || !thread || thread.status === "RESOLVED" || !(pending?.text ?? draft).trim() }, sending ? "Sending\u2026" : pending ? "Retry message" : "Send reply"))))));
 }
 
-// source/apps/web/src/react/WorkspaceLayout.jsx
+// src/react/WorkspaceStatus.jsx
+function WorkspaceStatus({ loading, error, offline, hasData, onRetry }) {
+  if (hasData && !error && !offline) return null;
+  if (hasData) return /* @__PURE__ */ React.createElement("div", { className: "workspace-recovery-notice", role: "status" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, offline ? "You\u2019re offline" : "Updates are temporarily paused"), /* @__PURE__ */ React.createElement("p", null, offline ? "Reconnect to get the latest updates." : error, " Showing the last loaded records; they may have changed.")), /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", onClick: onRetry, disabled: loading || offline }, loading ? "Checking\u2026" : "Try again"));
+  const waiting = loading && !offline;
+  return /* @__PURE__ */ React.createElement("section", { className: "panel workspace-status", role: waiting ? "status" : "alert", "aria-busy": waiting }, /* @__PURE__ */ React.createElement("div", { className: "workspace-status-symbol", "aria-hidden": "true" }, waiting ? /* @__PURE__ */ React.createElement("span", { className: "session-spinner" }) : /* @__PURE__ */ React.createElement(Icon, { name: "refresh" })), /* @__PURE__ */ React.createElement("h2", null, offline ? "You\u2019re offline" : waiting ? "Opening your workspace" : "We couldn\u2019t load your workspace"), /* @__PURE__ */ React.createElement("p", null, offline ? "Reconnect to the internet. We\u2019ll check for updates when you\u2019re back online." : waiting ? "Getting your latest rentals and equipment ready\u2026" : error || "Please try again. If this continues, contact your system administrator."), !waiting && /* @__PURE__ */ React.createElement("button", { type: "button", className: "primary", onClick: onRetry, disabled: offline }, "Try again"), waiting && /* @__PURE__ */ React.createElement("div", { className: "workspace-status-skeleton", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("i", null), /* @__PURE__ */ React.createElement("i", null), /* @__PURE__ */ React.createElement("i", null)));
+}
+
+// src/react/WorkspaceErrorBoundary.jsx
+var WorkspaceErrorBoundary = class extends React.Component {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return /* @__PURE__ */ React.createElement("section", { className: "panel workspace-status", role: "alert" }, /* @__PURE__ */ React.createElement("h2", null, "This page was interrupted"), /* @__PURE__ */ React.createElement("p", null, "Please try opening it again. If this continues, contact your system administrator."), /* @__PURE__ */ React.createElement("button", { className: "primary", type: "button", onClick: () => {
+      this.setState({ failed: false });
+      this.props.onRetry?.();
+    } }, "Try again"), this.props.onHome && /* @__PURE__ */ React.createElement("button", { className: "secondary", type: "button", onClick: this.props.onHome }, "Go to Dashboard"));
+  }
+};
+
+// src/react/WorkspaceLayout.jsx
 var navGroups = [
   {
     id: "management",
@@ -1487,7 +1519,7 @@ function PageHeading({ page, reportSection }) {
   }[reportSection] || "Performance" : pageLabels[page] || page;
   const displayCaption = page === "Reports" && reportInfo ? reportInfo[0] : caption;
   const displayDesc = page === "Reports" && reportInfo ? reportInfo[1] : description;
-  return /* @__PURE__ */ React.createElement("header", { className: "page-heading" }, /* @__PURE__ */ React.createElement("div", { className: "page-heading-copy" }, /* @__PURE__ */ React.createElement("span", { className: "page-eyebrow" }, displayCaption), /* @__PURE__ */ React.createElement("h1", null, title), displayDesc ? /* @__PURE__ */ React.createElement("p", null, displayDesc) : null), /* @__PURE__ */ React.createElement("span", { className: "page-heading-icon", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: glyph })));
+  return /* @__PURE__ */ React.createElement("div", { className: "page-heading", title: displayDesc }, /* @__PURE__ */ React.createElement("div", { className: "page-heading-copy" }, /* @__PURE__ */ React.createElement("span", { className: "sr-only" }, displayCaption), /* @__PURE__ */ React.createElement("h1", null, title)));
 }
 var SKELETON_HTML = `<div class="inv-loading-copy"><span class="inv-loading-spinner" aria-hidden="true"></span><div><strong>Loading your equipment</strong><small>Getting your collection and availability ready\u2026</small></div></div>
   <div class="inv-loading-stats" aria-hidden="true">${Array.from(
@@ -1611,6 +1643,8 @@ function WorkspaceShell({
   page,
   reportSection,
   connectionError,
+  workspaceLoading = false,
+  offline = false,
   theme,
   onSetTheme,
   filter,
@@ -1658,9 +1692,22 @@ function WorkspaceShell({
   const [isMobileViewport, setIsMobileViewport] = useState(
     () => typeof window !== "undefined" ? window.matchMedia("(max-width:720px)").matches : false
   );
+  const sidebarRail = sidebarCollapsed && !isMobileViewport;
+  const [sidebarFlyout, setSidebarFlyout] = useState(null);
+  const flyoutCloseTimer = useRef(null);
+  const keepFlyoutOpen = () => clearTimeout(flyoutCloseTimer.current);
+  const openSidebarFlyout = (groupId) => {
+    keepFlyoutOpen();
+    if (sidebarRail) setSidebarFlyout(groupId);
+  };
+  const closeSidebarFlyout = () => {
+    keepFlyoutOpen();
+    flyoutCloseTimer.current = setTimeout(() => setSidebarFlyout(null), 180);
+  };
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const sidebarRef = useRef(null);
+  const sidebarFlyoutRef = useRef(null);
   const workspaceBodyRef = useRef(null);
   const mobileToggleRef = useRef(null);
   const accountToggleRef = useRef(null);
@@ -1673,11 +1720,25 @@ function WorkspaceShell({
     const handleResize = () => {
       const mobile = window.matchMedia("(max-width:720px)").matches;
       setIsMobileViewport(mobile);
+      setSidebarFlyout(null);
       if (!mobile) setMobileDrawerOpen(false);
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+  useLayoutEffect(() => {
+    if (!sidebarRail || !sidebarFlyout) return;
+    const button = document.getElementById(`nav-group-toggle-${sidebarFlyout}`);
+    const flyout = sidebarFlyoutRef.current;
+    if (!button || !flyout) return;
+    const anchor = button.getBoundingClientRect();
+    flyout.style.left = `${sidebarRef.current.getBoundingClientRect().right + 8}px`;
+    flyout.style.top = `${Math.max(8, Math.min(anchor.top, window.innerHeight - flyout.getBoundingClientRect().height - 8))}px`;
+  }, [sidebarRail, sidebarFlyout]);
+  useEffect(() => {
+    if (!sidebarRail) setSidebarFlyout(null);
+    return keepFlyoutOpen;
+  }, [sidebarRail]);
   useEffect(() => {
     const sidebar = sidebarRef.current;
     const body = workspaceBodyRef.current;
@@ -1685,9 +1746,10 @@ function WorkspaceShell({
     if (body) body.inert = Boolean(isMobileViewport && mobileDrawerOpen);
   }, [isMobileViewport, mobileDrawerOpen]);
   useEffect(() => {
-    const handleDocClick = () => {
+    const handleDocClick = (event) => {
       setAccountMenuOpen(false);
       setNotificationsOpen(false);
+      if (!sidebarRef.current?.contains(event.target) && !sidebarFlyoutRef.current?.contains(event.target)) setSidebarFlyout(null);
     };
     document.addEventListener("click", handleDocClick);
     return () => document.removeEventListener("click", handleDocClick);
@@ -1735,6 +1797,7 @@ function WorkspaceShell({
   const handleSidebarKeyDown = (event) => {
     if (event.key === "Escape") {
       setMobileDrawerOpen(false);
+      setSidebarFlyout(null);
       mobileToggleRef.current?.focus();
     }
     if (event.key === "Tab" && isMobileViewport && mobileDrawerOpen && sidebarRef.current) {
@@ -1853,7 +1916,37 @@ function WorkspaceShell({
   const showNotificationDot = !unreadCount && !notificationsOpen && Boolean(notificationFingerprint) && notificationFingerprint !== notificationsSeen;
   const mobileToggleLabel = isMobileViewport ? mobileDrawerOpen ? "Close navigation" : "Open navigation" : sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar";
   const userAvatar = user?.avatar || (typeof window !== "undefined" && window.localStorage ? localStorage.getItem(`rent_play_avatar_${user?.id || user?.email || "active"}`) : "");
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("a", { className: "skip-link", href: "#workspace-content" }, "Skip to main content"), /* @__PURE__ */ React.createElement("div", { className: `workspace${sidebarCollapsed ? " sidebar-collapsed" : ""}` }, /* @__PURE__ */ React.createElement(
+  const flyoutGroup = sidebarRail ? navGroups.find((group) => group.id === sidebarFlyout) : null;
+  const renderGroupLinks = (group) => group.items.map(([label, target, section]) => {
+    const active = section ? page === "Reports" && reportSection === section : page === target;
+    const buttonLabel = section ? label : target;
+    return /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        key: `${target}-${section || ""}`,
+        type: "button",
+        "data-page": target,
+        "data-analytics-section": section || void 0,
+        className: `nav-child${active ? " active" : ""}`,
+        "aria-label": buttonLabel,
+        title: buttonLabel,
+        "aria-current": active ? "page" : void 0,
+        onPointerEnter: () => queuePagePrefetch(target),
+        onPointerLeave: cancelPagePrefetch,
+        onFocus: () => queuePagePrefetch(target),
+        onBlur: cancelPagePrefetch,
+        onClick: (event) => {
+          event.preventDefault();
+          setMobileDrawerOpen(false);
+          setSidebarFlyout(null);
+          onNavigate(target, false, "All rentals", "", section || "");
+        }
+      },
+      /* @__PURE__ */ React.createElement("span", { className: "sidebar-label" }, label),
+      target === "Rentals" ? /* @__PURE__ */ React.createElement("span", { className: "nav-count" }, data?.rentals?.length ?? "\u2013") : null
+    );
+  });
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("a", { className: "skip-link", href: "#workspace-content" }, "Skip to main content"), /* @__PURE__ */ React.createElement("div", { className: `workspace${sidebarRail ? " sidebar-collapsed" : ""}` }, /* @__PURE__ */ React.createElement(
     "aside",
     {
       id: "workspace-navigation",
@@ -1876,7 +1969,7 @@ function WorkspaceShell({
       },
       /* @__PURE__ */ React.createElement(BrandLogo, null)
     ),
-    /* @__PURE__ */ React.createElement("nav", null, /* @__PURE__ */ React.createElement(
+    /* @__PURE__ */ React.createElement("nav", { onScroll: () => setSidebarFlyout(null) }, /* @__PURE__ */ React.createElement(
       "button",
       {
         "data-page": "Dashboard",
@@ -1902,7 +1995,15 @@ function WorkspaceShell({
         "section",
         {
           className: `nav-section${hasActiveChild ? " has-active-child" : ""}`,
-          key: group.id
+          key: group.id,
+          onPointerEnter: (event) => {
+            if (event.pointerType !== "touch") openSidebarFlyout(group.id);
+          },
+          onPointerLeave: closeSidebarFlyout,
+          onFocusCapture: () => openSidebarFlyout(group.id),
+          onBlurCapture: (event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) closeSidebarFlyout();
+          }
         },
         /* @__PURE__ */ React.createElement(
           "button",
@@ -1911,51 +2012,25 @@ function WorkspaceShell({
             id: `nav-group-toggle-${group.id}`,
             className: `nav-section-title${hasActiveChild ? " group-active" : ""}`,
             "data-nav-group": group.id,
-            "aria-expanded": expanded,
-            "aria-controls": `nav-group-${group.id}`,
+            "aria-expanded": sidebarRail ? sidebarFlyout === group.id : expanded,
+            "aria-controls": !sidebarRail || sidebarFlyout === group.id ? `nav-group-${group.id}` : void 0,
             "aria-label": group.label,
             title: group.label,
-            onClick: () => onToggleNavGroup(group.id)
+            onClick: () => sidebarRail ? openSidebarFlyout(group.id) : onToggleNavGroup(group.id)
           },
           /* @__PURE__ */ React.createElement("span", { className: "nav-icon", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: group.icon || "box" })),
           /* @__PURE__ */ React.createElement("span", { className: "sidebar-label" }, group.label),
           /* @__PURE__ */ React.createElement("span", { className: "nav-group-chevron" }, /* @__PURE__ */ React.createElement(Icon, { name: "chevron" }))
         ),
-        /* @__PURE__ */ React.createElement(
+        !sidebarRail && /* @__PURE__ */ React.createElement(
           "div",
           {
             className: "nav-section-items",
             id: `nav-group-${group.id}`,
-            hidden: !sidebarCollapsed && !expanded
+            hidden: !expanded
           },
           /* @__PURE__ */ React.createElement("div", { className: "nav-flyout-header", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, group.label)),
-          group.items.map(([label, target, section]) => {
-            const active = section ? page === "Reports" && reportSection === section : page === target;
-            const buttonLabel = section ? label : target;
-            return /* @__PURE__ */ React.createElement(
-              "button",
-              {
-                key: `${target}-${section || ""}`,
-                "data-page": target,
-                "data-analytics-section": section || void 0,
-                className: `nav-child${active ? " active" : ""}`,
-                "aria-label": buttonLabel,
-                title: buttonLabel,
-                "aria-current": active ? "page" : void 0,
-                onPointerEnter: () => queuePagePrefetch(target),
-                onPointerLeave: cancelPagePrefetch,
-                onFocus: () => queuePagePrefetch(target),
-                onBlur: cancelPagePrefetch,
-                onClick: (e) => {
-                  e.preventDefault();
-                  setMobileDrawerOpen(false);
-                  onNavigate(target, false, "All rentals", "", section || "");
-                }
-              },
-              /* @__PURE__ */ React.createElement("span", { className: "sidebar-label" }, label),
-              target === "Rentals" ? /* @__PURE__ */ React.createElement("span", { className: "nav-count" }, data?.rentals?.length ?? "\u2013") : null
-            );
-          })
+          renderGroupLinks(group)
         )
       );
     })),
@@ -2015,14 +2090,32 @@ function WorkspaceShell({
       /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, user.name), /* @__PURE__ */ React.createElement("small", null, user.role)),
       /* @__PURE__ */ React.createElement("span", { className: "nav-tooltip", "aria-hidden": "true" }, "Profile")
     ))
-  ), /* @__PURE__ */ React.createElement("div", { className: "workspace-body", ref: workspaceBodyRef }, /* @__PURE__ */ React.createElement("header", { className: "topbar" }, /* @__PURE__ */ React.createElement(
+  ), flyoutGroup && /* @__PURE__ */ React.createElement(
+    "nav",
+    {
+      key: flyoutGroup.id,
+      ref: sidebarFlyoutRef,
+      id: `nav-group-${flyoutGroup.id}`,
+      className: "sidebar-flyout",
+      "aria-label": `${flyoutGroup.label} pages`,
+      onPointerEnter: keepFlyoutOpen,
+      onPointerLeave: closeSidebarFlyout,
+      onFocusCapture: keepFlyoutOpen,
+      onBlurCapture: (event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) closeSidebarFlyout();
+      },
+      onKeyDown: handleSidebarKeyDown
+    },
+    /* @__PURE__ */ React.createElement("div", { className: "sidebar-flyout-title" }, flyoutGroup.label),
+    renderGroupLinks(flyoutGroup)
+  ), /* @__PURE__ */ React.createElement("div", { className: "workspace-body", ref: workspaceBodyRef }, /* @__PURE__ */ React.createElement("header", { className: "topbar" }, /* @__PURE__ */ React.createElement("div", { className: "topbar-leading" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       ref: mobileToggleRef,
       className: "icon-button menu-toggle",
       id: "mobile-menu",
       "aria-controls": "workspace-navigation",
-      "aria-expanded": isMobileViewport ? mobileDrawerOpen : !sidebarCollapsed,
+      "aria-expanded": isMobileViewport ? mobileDrawerOpen : !sidebarRail,
       "aria-label": mobileToggleLabel,
       title: mobileToggleLabel,
       onClick: handleMobileMenuClick,
@@ -2031,7 +2124,7 @@ function WorkspaceShell({
       }
     },
     /* @__PURE__ */ React.createElement(Icon, { name: "menu" })
-  ), /* @__PURE__ */ React.createElement("div", { className: "top-actions" }, /* @__PURE__ */ React.createElement("div", { className: "unified-top-pill", role: "toolbar", "aria-label": "Quick actions" }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(PageHeading, { page, reportSection })), /* @__PURE__ */ React.createElement("div", { className: "top-actions" }, /* @__PURE__ */ React.createElement("div", { className: "unified-top-pill", role: "toolbar", "aria-label": "Quick actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       className: `top-pill-btn top-pill-refresh${manualRefreshPending ? " spinning" : ""}`,
@@ -2178,7 +2271,7 @@ function WorkspaceShell({
         " Sign out"
       )
     )
-  )))), /* @__PURE__ */ React.createElement("main", { className: "content", id: "workspace-content", tabIndex: -1 }, /* @__PURE__ */ React.createElement(PageHeading, { page, reportSection }), connectionError ? /* @__PURE__ */ React.createElement("div", { className: "connection-banner dashboard-connection-banner", role: "alert" }, connectionError, data ? " Showing the last successfully loaded records." : "") : null, !data ? /* @__PURE__ */ React.createElement("section", { className: "panel" }, /* @__PURE__ */ React.createElement("div", { className: "empty-state" }, /* @__PURE__ */ React.createElement(Icon, { name: "box" }), /* @__PURE__ */ React.createElement("h3", null, "Waiting for your database"), /* @__PURE__ */ React.createElement("p", null, "Check the backend connection, then select Refresh."))) : page === "Dashboard" ? /* @__PURE__ */ React.createElement(
+  )))), /* @__PURE__ */ React.createElement("main", { className: "content", id: "workspace-content", tabIndex: -1 }, page === "Dashboard" && /* @__PURE__ */ React.createElement(WorkspaceStatus, { loading: workspaceLoading, error: connectionError, offline, hasData: Boolean(data), onRetry: onManualRefresh }), /* @__PURE__ */ React.createElement(WorkspaceErrorBoundary, { key: page, onRetry: onManualRefresh, onHome: () => onNavigate("Dashboard") }, page === "Dashboard" ? data && /* @__PURE__ */ React.createElement(
     DashboardView,
     {
       data,
@@ -2226,11 +2319,11 @@ function WorkspaceShell({
       onTriggerRender,
       onNavigate
     }
-  ) : /* @__PURE__ */ React.createElement("section", { className: "panel" }, /* @__PURE__ */ React.createElement("div", { className: "empty-state" }, /* @__PURE__ */ React.createElement(Icon, { name: "box" }), /* @__PURE__ */ React.createElement("h3", null, "Page unavailable"), /* @__PURE__ */ React.createElement("p", null, "Choose another workspace section."))), /* @__PURE__ */ React.createElement("footer", { className: "content-footer" }, /* @__PURE__ */ React.createElement("span", null, "\xA9 ", (/* @__PURE__ */ new Date()).getFullYear(), " Rent & Play"), /* @__PURE__ */ React.createElement("span", null, data ? `Updated ${new Intl.DateTimeFormat("en-PH", {
+  ) : /* @__PURE__ */ React.createElement("section", { className: "panel" }, /* @__PURE__ */ React.createElement("div", { className: "empty-state" }, /* @__PURE__ */ React.createElement(Icon, { name: "box" }), /* @__PURE__ */ React.createElement("h3", null, "Page unavailable"), /* @__PURE__ */ React.createElement("p", null, "Choose another workspace section.")))), /* @__PURE__ */ React.createElement("footer", { className: "content-footer" }, /* @__PURE__ */ React.createElement("span", null, "\xA9 ", (/* @__PURE__ */ new Date()).getFullYear(), " Rent & Play"), /* @__PURE__ */ React.createElement("span", null, page === "Dashboard" && data?.refreshedAt && Number.isFinite(Date.parse(data.refreshedAt)) ? `Updated ${new Intl.DateTimeFormat("en-PH", {
     hour: "numeric",
     minute: "2-digit",
     timeZone: "Asia/Manila"
-  }).format(new Date(data.refreshedAt))}` : "Waiting for database")))), /* @__PURE__ */ React.createElement(
+  }).format(new Date(data.refreshedAt))}` : offline ? "Offline" : workspaceLoading ? "Loading latest records\u2026" : "Rent & Play workspace")))), /* @__PURE__ */ React.createElement(
     "button",
     {
       className: "sidebar-backdrop",
@@ -2244,7 +2337,7 @@ function WorkspaceShell({
   )));
 }
 
-// source/apps/web/src/react/App.jsx
+// src/react/App.jsx
 import { createInventory } from "./inventory.js";
 import { createWorkspaceUI } from "./workspace-ui.js";
 import { createConfirmationDialog } from "./confirmation-dialog.js";
@@ -2257,17 +2350,22 @@ import {
 import { createApiClient } from "./api-client.js";
 import { createRentalNotifications, syncLiveRentalUpdate } from "./notifications.js";
 import { initHardwareBarcodeScanner } from "./qr-reader.js";
+import { installFormUX, prepareModalUX } from "./form-ux.js";
+import { requestError } from "./request-errors.js";
 var dashboardSnapshot = (value) => value ? JSON.stringify(
   Object.fromEntries(Object.entries(value).filter(([key]) => key !== "refreshedAt"))
 ) : "";
 var liveRentalPages = /* @__PURE__ */ new Set(["Rentals", "Returns", "Transaction History"]);
 function App() {
+  useEffect(() => installFormUX(document), []);
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState(null);
   const [loginError, setLoginError] = useState("");
   const [rememberSession, setRememberSession] = useState(false);
   const [data, setData] = useState(null);
   const [connectionError, setConnectionError] = useState("");
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [offline, setOffline] = useState(() => navigator.onLine === false);
   const [page, setPage] = useState(() => pageForPath(location.pathname));
   const [reportSection, setReportSection] = useState(
     () => reportSectionForPath(location.pathname)
@@ -2366,6 +2464,7 @@ function App() {
     });
     const updateModalLayout = () => {
       if (!modal) return;
+      prepareModalUX(modal);
       const form = modal.querySelector(
         ":scope > .admin-form:not(.pricing-form):not(.customer-form):not(.rental-release-form)"
       );
@@ -2389,7 +2488,7 @@ function App() {
       confirmation.cancel();
       modal.innerHTML = `<div class="modal-heading"><h2>${escape(
         title
-      )}</h2><button class="icon-button" id="close-modal" aria-label="Close dialog">\u2715</button></div>${body}`;
+      )}</h2><button type="button" class="icon-button" id="close-modal" aria-label="Close dialog">\u2715</button></div>${body}`;
       modal.setAttribute("aria-label", title);
       updateModalLayout();
       if (!modal.open) modal.showModal();
@@ -2425,6 +2524,7 @@ function App() {
       const c = controllersRef.current;
       c.confirmation.cancel();
       userRef.current = null;
+      refreshingRef.current = null;
       dataRef.current = null;
       setUser(null);
       setData(null);
@@ -2555,37 +2655,55 @@ function App() {
     async ({ force = false } = {}) => {
       const currentUser = userRef.current;
       if (currentUser?.mustChangePassword) return;
-      if (!currentUser || refreshingRef.current) return;
+      if (!currentUser) return;
+      if (refreshingRef.current) return refreshingRef.current;
       const sessionUser = currentUser;
-      refreshingRef.current = true;
+      setWorkspaceLoading(true);
       const c = controllersRef.current;
-      try {
-        const nextData = await api(
-          "/dashboard",
-          force ? { headers: { "Cache-Control": "no-cache" } } : {}
-        );
-        const changed = dashboardSnapshot(dataRef.current) !== dashboardSnapshot(nextData);
-        if (userRef.current !== sessionUser) return;
-        dataRef.current = nextData;
-        setData(nextData);
-        setConnectionError("");
-        if (pageRef.current === "Inventory" && document.querySelector("#inventory-root")) {
-          await c.inventoryController.refresh();
-        } else if (changed && ["Dashboard", "ESP32 terminal"].includes(pageRef.current)) {
-          triggerRender();
+      const pending = (async () => {
+        try {
+          const nextData = await api(
+            "/dashboard",
+            force ? { headers: { "Cache-Control": "no-cache" } } : {}
+          );
+          if (!nextData.stats || !nextData.revenue || !["rentals", "pending", "items", "categories", "terminals"].every((key) => Array.isArray(nextData[key]))) {
+            throw requestError({ code: "INVALID_RESPONSE" });
+          }
+          const changed = dashboardSnapshot(dataRef.current) !== dashboardSnapshot(nextData);
+          if (userRef.current !== sessionUser) return;
+          dataRef.current = nextData;
+          setData(nextData);
+          setConnectionError("");
+          if (pageRef.current === "Inventory" && document.querySelector("#inventory-root")) {
+            await c.inventoryController.refresh();
+          } else if (changed && ["Dashboard", "ESP32 terminal"].includes(pageRef.current)) {
+            triggerRender();
+          }
+        } catch (error) {
+          if (userRef.current !== sessionUser) return;
+          if (error.status === 401) {
+            endSession();
+          } else {
+            setConnectionError(cleanErrorMessage(error));
+          }
+        } finally {
+          if (refreshingRef.current === pending) refreshingRef.current = null;
+          if (userRef.current === sessionUser) setWorkspaceLoading(false);
         }
-      } catch (error) {
-        if (error.status === 401) {
-          endSession();
-        } else {
-          setConnectionError(error.message);
-        }
-      } finally {
-        refreshingRef.current = false;
-      }
+      })();
+      refreshingRef.current = pending;
+      return pending;
     },
     [api, endSession, triggerRender]
   );
+  useEffect(() => {
+    if (!user || !connectionError || offline) return;
+    const timer = setInterval(() => {
+      const c = controllersRef.current;
+      if (document.visibilityState === "visible" && !c.modal?.open && c.apiClient.canRefresh()) void refresh({ force: true });
+    }, 3e4);
+    return () => clearInterval(timer);
+  }, [user, connectionError, offline, refresh]);
   const scheduleRentalEventSync = useCallback(() => {
     clearTimeout(rentalEventSyncTimerRef.current);
     rentalEventSyncTimerRef.current = setTimeout(async () => {
@@ -2759,12 +2877,15 @@ function App() {
       }
     };
     const handleOnline = () => {
+      setOffline(false);
       if (userRef.current && !userRef.current.mustChangePassword) {
+        void refresh({ force: true });
         rentalEventsDisabledRef.current = false;
         syncRentalEventStream(userRef.current.id);
         scheduleRentalEventSync();
       }
     };
+    const handleOffline = () => setOffline(true);
     const handlePopState = () => {
       const nextPage = pageForPath(location.pathname);
       pageRef.current = nextPage;
@@ -2783,6 +2904,7 @@ function App() {
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
     window.addEventListener("popstate", handlePopState);
     const focusGuardSelector = "#rental-search:focus,#module-search:focus,.admin-form input:focus,.admin-form textarea:focus,.admin-form select:focus,#profile-form input:focus,.analytics-filters input:focus,.analytics-filters select:focus,#analytics-sort:focus,.sidebar.open,#profile-dropdown:not([hidden]),#notification-dropdown:not([hidden])";
     const liveRentalTimer = setInterval(() => {
@@ -2865,6 +2987,7 @@ function App() {
       modal?.removeEventListener("click", handleModalClick);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
       window.removeEventListener("popstate", handlePopState);
       clearInterval(liveRentalTimer);
       clearInterval(terminalTimer);
@@ -2904,7 +3027,7 @@ function App() {
           try {
             const health = await api("/health");
             if (health.database === false) {
-              setLoginError(health.warning || "The database is temporarily unavailable.");
+              setLoginError("Sign-in is temporarily unavailable. Please try again shortly. If this continues, contact your system administrator.");
             }
           } catch (healthError) {
             setLoginError(cleanErrorMessage(healthError.message));
@@ -2991,26 +3114,14 @@ function App() {
     }
   };
   const handleToggleNavGroup = (groupId) => {
-    if (sidebarCollapsed && !window.matchMedia("(max-width:720px)").matches) {
-      setSidebarCollapsed(false);
-      setNavGroupExpanded((prev) => {
-        const next = { ...prev, [groupId]: true };
-        try {
-          localStorage.setItem("rent-play-nav-groups", JSON.stringify(next));
-        } catch {
-        }
-        return next;
-      });
-    } else {
-      setNavGroupExpanded((prev) => {
-        const next = { ...prev, [groupId]: !prev[groupId] };
-        try {
-          localStorage.setItem("rent-play-nav-groups", JSON.stringify(next));
-        } catch {
-        }
-        return next;
-      });
-    }
+    setNavGroupExpanded((prev) => {
+      const next = { ...prev, [groupId]: !prev[groupId] };
+      try {
+        localStorage.setItem("rent-play-nav-groups", JSON.stringify(next));
+      } catch {
+      }
+      return next;
+    });
     requestAnimationFrame(() => {
       document.getElementById(`nav-group-toggle-${groupId}`)?.focus();
     });
@@ -3063,6 +3174,8 @@ function App() {
       page,
       reportSection,
       connectionError,
+      workspaceLoading,
+      offline,
       theme,
       onSetTheme: setTheme,
       filter,
@@ -3102,7 +3215,7 @@ function App() {
   );
 }
 
-// source/apps/web/src/react/index.jsx
+// src/react/index.jsx
 function mountReactApp(container = document.querySelector("#app")) {
   if (!container) return null;
   const root = createRoot(container);
@@ -3121,6 +3234,7 @@ export {
   SessionLoadingView,
   WorkspaceModuleSection,
   WorkspaceShell,
+  WorkspaceStatus,
   mountReactApp,
   navGroups,
   pageLabels,

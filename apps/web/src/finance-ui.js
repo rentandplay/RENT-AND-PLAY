@@ -13,6 +13,7 @@ export function createFinanceUI(h) {
   let { from, to } = financeDateRange();
   let summary = null, ledger = null, rentals = null, error = '', loading = false, generation = 0;
   let cursor = '', previous = [], redraw = () => {}, period = '30', type = '', method = '', tab = 'rentals', search = '';
+  let loadedRecordKey = '';
   const operationKey = () => [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, '0')).join('');
   const value = number => number == null ? '<span class="finance-unknown">Not recorded</span>' : e(money(number));
   const badge = (label, tone = '') => `<span class="finance-badge ${tone}">${e(label)}</span>`;
@@ -22,13 +23,17 @@ export function createFinanceUI(h) {
     if (!from || !to || from > to || Date.parse(to) - Date.parse(from) > 366 * 86400000) {
       error = 'Choose a start and end date within one year.'; loading = false; redraw(); return;
     }
-    loading = true; error = ''; redraw();
+    loading = true; error = '';
     const query = new URLSearchParams({ from, to, limit: String(pageSize), ...(cursor ? { cursor } : {}), ...(tab === 'ledger' ? { ...(type ? { type } : {}), ...(method ? { method } : {}) } : search ? { search } : {}) });
+    const recordKey = tab + '?' + query;
+    if (loadedRecordKey !== recordKey) { rentals = null; ledger = null; }
+    redraw();
     const options = force ? { headers: { 'Cache-Control': 'no-cache' } } : {};
     try {
       const [a, b] = await Promise.all([api('/finance/summary?' + new URLSearchParams({ from, to }), options), api('/finance/' + (tab === 'rentals' ? 'rentals' : 'ledger') + '?' + query, options)]);
       if (version !== generation) return;
       summary = a; if (tab === 'rentals') rentals = b; else ledger = b;
+      loadedRecordKey = recordKey;
     } catch (problem) { if (version === generation) error = problem.message; }
     finally { if (version === generation) { loading = false; redraw(); } }
   }
@@ -64,7 +69,7 @@ export function createFinanceUI(h) {
     const heads = tab === 'rentals' ? ['Rental / customer', 'Charges', 'Saved paid', 'Balance', 'Receipt status', 'Actions'] : ['Receipt / date', 'Rental / description', 'Entry / method', 'Amount', 'Recorded by'];
     return `<div class="finance-workspace" aria-busy="${loading}"><section class="panel finance-controls"><div class="finance-section-heading"><div><h3>Payment overview</h3><p>Track rental balances, confirmed receipts, and expenses.</p></div><div class="finance-actions"><button type="button" class="secondary" data-finance-closeout>Cash drawer count (Z-Reading)</button><button type="button" class="secondary" data-finance-receipt>Record receipt</button><button type="button" class="primary" data-finance-expense>Record expense</button></div></div>
       <div class="finance-period"><label>Period<select id="finance-period">${[['today','Today'],['7','Last 7 days'],['30','Last 30 days'],['90','Last 90 days'],['month','This month'],['custom','Custom dates']].map(([id,label]) => `<option value="${id}" ${period === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>From<input type="date" id="finance-from" value="${e(from)}"/></label><span class="finance-date-separator" aria-hidden="true">→</span><label>To<input type="date" id="finance-to" value="${e(to)}"/></label><button class="secondary" data-finance-refresh ${loading ? 'disabled' : ''}>${loading ? 'Loading…' : 'Refresh'}</button></div></section>
-      ${error ? `<div class="finance-error" role="alert">${e(error)} <button class="text-button" data-finance-refresh>Retry</button></div>` : ''}${summaryHtml()}
+      ${error ? `<div class="finance-error" role="alert">${e(error)}${summary ? ' Showing the last loaded totals; they may have changed.' : ''} <button class="text-button" data-finance-refresh>Try again</button></div>` : ''}${summaryHtml()}
       <section class="panel finance-records"><div class="finance-tabs" role="tablist" aria-label="Payment records"><button role="tab" aria-selected="${tab === 'rentals'}" data-finance-tab="rentals">Rental payments</button><button role="tab" aria-selected="${tab === 'ledger'}" data-finance-tab="ledger">Receipts & expenses</button></div>
       <div class="finance-table-toolbar"><div><h3>${tab === 'rentals' ? 'Rental payment status' : 'Receipt ledger'}</h3><p>${tab === 'rentals' ? 'Rentals created within the selected dates. Saved paid amounts include historical payments.' : 'Money received, refunded, or spent within the selected dates.'}</p></div>${tab === 'rentals' ? `<form data-finance-search><input aria-label="Find rental reference" name="reference" value="${e(search)}" placeholder="Rental reference, e.g. R-0003"/><button class="secondary" ${loading ? 'disabled' : ''}>Find</button></form>` : `<div class="finance-ledger-filters"><label>Entry<select id="finance-type"><option value="">All entries</option>${[['COLLECTION','Collections'],['REFUND','Refunds'],['EXPENSE','Expenses'],['EXPENSE_REVERSAL','Expense reversals']].map(([id,label]) => `<option value="${id}" ${type === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Method<select id="finance-method"><option value="">Cash & QR</option>${['CASH','QR'].map(id => `<option ${method === id ? 'selected' : ''}>${id}</option>`).join('')}</select></label></div>`}</div>
       <div class="admin-table-scroll" role="region" aria-label="${tab === 'rentals' ? 'Rental payments' : 'Receipt ledger'}" tabindex="0"><table class="admin-table finance-table"><thead><tr>${heads.map(label => `<th>${label}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${heads.length}"><div class="finance-table-empty"><strong>${loading ? 'Loading payment records…' : error ? 'Could not load payment records' : tab === 'rentals' ? 'No rentals in this date range' : 'No dated receipts or expenses in this view'}</strong><span>${loading || error ? 'Please wait or retry the request.' : 'Try a wider date range or review the rental payments tab.'}</span></div></td></tr>`}</tbody></table></div><div class="module-pagination"><span>${loaded} ${loaded === 1 ? 'record' : 'records'} loaded · ${pageSize} per page</span><div><button class="secondary" data-finance-prev ${previous.length && !loading ? '' : 'disabled'}>Previous</button><button class="secondary" data-finance-next ${page?.nextCursor && !loading ? '' : 'disabled'}>Next</button></div></div></section><p class="finance-footnote">Rental charges are amounts owed. Dated collections are confirmed money received. Adding a historical receipt date does not add a second payment.</p></div>`;
@@ -227,5 +232,5 @@ export function createFinanceUI(h) {
     document.querySelector('[data-finance-next]')?.addEventListener('click', () => { const page = tab === 'rentals' ? rentals : ledger; if (page?.nextCursor) { previous.push(cursor); cursor = page.nextCursor; load(); } });
     document.querySelector('[data-finance-prev]')?.addEventListener('click', () => { cursor = previous.pop() || ''; load(); });
   }
-  return { render, bind, cashDrawerForm, prefetch: () => !summary && !loading ? load() : Promise.resolve(), refresh: () => load({ force: true }), reset() { generation++; loading = false; summary = null; ledger = null; rentals = null; error = ''; cursor = ''; previous = []; } };
+  return { render, bind, cashDrawerForm, prefetch: () => !summary && !loading ? load() : Promise.resolve(), refresh: () => load({ force: true }), reset() { generation++; loading = false; summary = null; ledger = null; rentals = null; loadedRecordKey = ''; error = ''; cursor = ''; previous = []; } };
 }

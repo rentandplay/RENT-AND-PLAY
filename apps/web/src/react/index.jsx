@@ -7,6 +7,7 @@ export { PasswordChangeView } from './PasswordChangeView.jsx';
 export { DashboardView } from './DashboardView.jsx';
 export { ProfileView } from './ProfileView.jsx';
 export { MessagesView } from './MessagesView.jsx';
+export { WorkspaceStatus } from './WorkspaceStatus.jsx';
 export {
   WorkspaceShell,
   PageHeading,

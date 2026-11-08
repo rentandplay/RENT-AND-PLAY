@@ -34,6 +34,12 @@ test('VS Code can open the ready web server and every browser module loads', asy
       const origin = `http://127.0.0.1:${port}`;
       assert.equal(readyPattern.exec(output.toString())?.[1], origin, `${mode}: VS Code must recognize the startup URL`);
       const html = await fetch(origin).then(response => response.text());
+      for (const link of html.matchAll(/<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"/g)) {
+        const response = await fetch(new URL(link[1], origin));
+        assert.equal(response.status, 200, `${mode}: stylesheet ${link[1]} must ship`);
+        assert.match(response.headers.get('content-type'), /text\/css/);
+        assert.ok((await response.text()).length > 0);
+      }
       for (const route of Object.values(pageRoutes)) {
         const response = await fetch(origin + route);
         assert.equal(response.status, 200, `${mode}: direct page ${route} must load`);

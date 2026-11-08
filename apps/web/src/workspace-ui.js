@@ -41,7 +41,7 @@ export function createWorkspaceUI(h) {
   let preferences = readPreferences();
   try { preferences = readPreferences(localStorage); } catch { }
   let settingsTab = 'business', businessDraft = null, businessDirty = false, businessSaving = false, preferencesDraft = null, businessSubTab = 'profile';
-  let activeSessions = null, securityAlerts = null, securityLoading = false;
+  let activeSessions = null, securityAlerts = null, securityLoading = false, securityErrors = {}, securityAttempted = false, securityEpoch = 0;
   const analyticsSelection = { period: preferences.reportPeriod, from: '', to: '', categoryId: '', itemId: '', groupBy: preferences.reportGrouping };
   const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', forecastScenario: 'baseline', recommendationType: 'all', details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
@@ -490,7 +490,7 @@ export function createWorkspaceUI(h) {
   }
 
   function settings(user, appearance) {
-    return renderSettings({ model, user, appearance, tab: settingsTab, draft: businessDraft, dirty: businessDirty, saving: businessSaving, preferences: preferencesDraft || preferences, users: () => users(user.id), activeSessions, securityAlerts, businessSubTab }, { escape: e, icon, formatDate });
+    return renderSettings({ model, user, appearance, tab: settingsTab, draft: businessDraft, dirty: businessDirty, saving: businessSaving, preferences: preferencesDraft || preferences, users: () => users(user.id), activeSessions, securityAlerts, securityErrors, securityLoading, businessSubTab }, { escape: e, icon, formatDate });
   }
 
   function users(currentUserId) {
@@ -887,24 +887,29 @@ export function createWorkspaceUI(h) {
       catch (problem) { message.textContent = problem.message; button.disabled = false; }
     });
     const loadAccountSecurityData = async (force = false) => {
-      if (securityLoading && !force) return;
-      securityLoading = true;
+      if (securityLoading) return;
+      const epoch = securityEpoch;
+      securityLoading = true; securityAttempted = true;
+      rerender();
       try {
-        const [sessionsResp, alertsResp] = await Promise.all([
-          api('/auth/sessions').catch(() => ({ sessions: [] })),
-          api('/security/alerts?limit=15').catch(() => ({ alerts: [] }))
+        const [sessionsResp, alertsResp] = await Promise.allSettled([
+          api('/auth/sessions'), api('/security/alerts?limit=15')
         ]);
-        activeSessions = sessionsResp.sessions || [];
-        securityAlerts = alertsResp.alerts || [];
-        rerender();
+        if (epoch !== securityEpoch) return;
+        securityErrors = {};
+        if (sessionsResp.status === 'fulfilled') activeSessions = sessionsResp.value.sessions || [];
+        else securityErrors.sessions = sessionsResp.reason.message;
+        if (alertsResp.status === 'fulfilled') securityAlerts = alertsResp.value.alerts || [];
+        else securityErrors.alerts = alertsResp.reason.message;
       } finally {
-        securityLoading = false;
+        if (epoch === securityEpoch) { securityLoading = false; rerender(); }
       }
     };
-    if (page === 'Settings' && settingsTab === 'account' && activeSessions === null && !securityLoading) {
+    if (page === 'Settings' && settingsTab === 'account' && !securityAttempted && !securityLoading) {
       loadAccountSecurityData(false);
     }
     document.querySelector('#settings-refresh-sessions')?.addEventListener('click', () => loadAccountSecurityData(true));
+    document.querySelector('#settings-refresh-alerts')?.addEventListener('click', () => loadAccountSecurityData(true));
     document.querySelector('#settings-revoke-other-sessions')?.addEventListener('click', async event => {
       const button = event.currentTarget, statusNote = document.querySelector('[data-sessions-status]');
       if (button.disabled) return;
@@ -1001,5 +1006,5 @@ export function createWorkspaceUI(h) {
     if(!row){const result=await api('/rentals/lookup',{method:'POST',body:JSON.stringify({kind:'RENTAL',code:String(id)})});row=result.rental;model.transactions.push(row);}
     transactionDetails(row);
   }
-  return { load, refresh, invalidate, prefetch, preloadPages, cancelPreload, syncIfNeeded, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: () => financeUI.cashDrawerForm(), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); viewModelCache.clear(); pendingLoads.clear(); modelKey = ''; model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; settingsTab = 'business'; businessSubTab = 'profile'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
+  return { load, refresh, invalidate, prefetch, preloadPages, cancelPreload, syncIfNeeded, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: () => financeUI.cashDrawerForm(), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); viewModelCache.clear(); pendingLoads.clear(); modelKey = ''; model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; securityErrors = {}; securityAttempted = false; securityEpoch++; settingsTab = 'business'; businessSubTab = 'profile'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
 }

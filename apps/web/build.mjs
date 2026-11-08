@@ -35,7 +35,7 @@ export async function compileReactBundles(appRoot = root, { force = false } = {}
       platform: 'browser',
       target: ['es2022'],
       banner: {
-        js: `if (typeof process !== 'undefined' && process.versions?.node && globalThis.MessageChannel) { const _MC = globalThis.MessageChannel; globalThis.MessageChannel = class extends _MC { constructor() { super(); this.port1.unref?.(); this.port2.unref?.(); } }; }`
+        js: `if (typeof process !== 'undefined' && process.versions?.node && globalThis.MessageChannel) { const _MC = globalThis.MessageChannel; globalThis.MessageChannel = class extends _MC { constructor() { super(); this.port1.unref?.(); this.port2.unref?.(); queueMicrotask(() => { this.port1.unref?.(); this.port2.unref?.(); }); } }; }`
       },
       define: { 'process.env.NODE_ENV': '"production"' },
       logLevel: 'silent'
@@ -74,11 +74,13 @@ const sourceFiles = [
   'react-vendor.js',
   'react-ui.js',
   'api-client.js',
+  'request-errors.js',
   'account-validation.js',
   'notifications.js',
   'date-time.js',
   'workspace-navigation.js',
   'confirmation-dialog.js',
+  'form-ux.js',
   'record-links.js',
   'record-codes.js',
   'record-details.js',
@@ -107,7 +109,8 @@ const sourceFiles = [
   'analytics-workspace.js',
   'analytics-insights.js',
   'analytics-charts.js',
-  'styles.css'
+  'styles.css',
+  'workspace-design.css'
 ];
 
 await compileReactBundles(root, { force: process.argv.includes('--force') });

@@ -61,6 +61,12 @@ export function createConfirmationDialog({ dialog, parentModal, notify = () => {
         if (!await confirmAction(typeof options === 'function' ? options() : options) || !form.isConnected || parent && !parent.open) return;
         if (signature !== formSignature(form)) { notify('The details changed. Review the form and confirm again.'); return; }
         if (form.reportValidity()) await submit();
+      } catch (problem) {
+        if (form.isConnected) {
+          let message = form.querySelector('.form-error');
+          if (!message) { message = form.ownerDocument.createElement('p'); message.className = 'form-error'; message.setAttribute('role', 'alert'); form.append(message); }
+          message.textContent = publicErrorMessage(problem);
+        }
       } finally {
         busy = false;
         buttons.forEach(([button, disabled]) => { button.disabled = disabled; });
@@ -71,3 +77,5 @@ export function createConfirmationDialog({ dialog, parentModal, notify = () => {
 
   return { confirmAction, confirmSubmit, cancel: () => settle(false), isOpen: () => Boolean(pending) };
 }
+import { publicErrorMessage } from './request-errors.js';
+

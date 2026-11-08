@@ -24,6 +24,7 @@ function setup(t) {
   const button = { disabled: false, isConnected: true, focus: () => { document.activeElement = button; } };
   document.activeElement = button;
   const form = { ownerDocument: document, fields: [['name', 'Basketball']], isConnected: true, valid: true,
+    errorNode: { textContent: '' }, querySelector() { return this.errorNode; },
     reportValidity() { return this.valid; }, closest: () => parentModal, querySelectorAll: () => [button] };
   t.mock.method(globalThis, 'FormData', function(value) { return value.fields[Symbol.iterator](); });
   parentModal.showModal();
@@ -140,7 +141,9 @@ test('detached forms and closed parent dialogs cannot save after confirmation', 
 test('failed operations release the submit lock and require confirmation on retry', async t => {
   const s = setup(t); let attempts = 0;
   s.confirmSubmit(s.form, options, async () => { attempts++; if (attempts === 1) throw new Error('Write failed'); });
-  const first = s.submit(); s.yes(); await assert.rejects(first, /Write failed/);
+  const first = s.submit(); s.yes(); await first;
+  assert.equal(s.form.errorNode.textContent, 'Write failed');
+  assert.deepEqual(s.form.fields, [['name', 'Basketball']], 'the draft survives a failed save');
   assert.equal(s.button.disabled, false);
   const retry = s.submit(); assert.equal(attempts, 1); s.yes(); await retry;
   assert.equal(attempts, 2);

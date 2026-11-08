@@ -29,6 +29,8 @@ import {
 import { createApiClient } from '../api-client.js';
 import { createRentalNotifications, syncLiveRentalUpdate } from '../notifications.js';
 import { initHardwareBarcodeScanner } from '../qr-reader.js';
+import { installFormUX, prepareModalUX } from '../form-ux.js';
+import { requestError } from '../request-errors.js';
 
 const dashboardSnapshot = value =>
   value
@@ -40,12 +42,15 @@ const dashboardSnapshot = value =>
 const liveRentalPages = new Set(['Rentals', 'Returns', 'Transaction History']);
 
 export function App() {
+  useEffect(() => installFormUX(document), []);
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState(null);
   const [loginError, setLoginError] = useState('');
   const [rememberSession, setRememberSession] = useState(false);
   const [data, setData] = useState(null);
   const [connectionError, setConnectionError] = useState('');
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [offline, setOffline] = useState(() => navigator.onLine === false);
   const [page, setPage] = useState(() => pageForPath(location.pathname));
   const [reportSection, setReportSection] = useState(() =>
     reportSectionForPath(location.pathname)
@@ -155,6 +160,7 @@ export function App() {
 
     const updateModalLayout = () => {
       if (!modal) return;
+      prepareModalUX(modal);
       const form = modal.querySelector(
         ':scope > .admin-form:not(.pricing-form):not(.customer-form):not(.rental-release-form)'
       );
@@ -182,7 +188,7 @@ export function App() {
       confirmation.cancel();
       modal.innerHTML = `<div class="modal-heading"><h2>${escape(
         title
-      )}</h2><button class="icon-button" id="close-modal" aria-label="Close dialog">✕</button></div>${body}`;
+      )}</h2><button type="button" class="icon-button" id="close-modal" aria-label="Close dialog">✕</button></div>${body}`;
       modal.setAttribute('aria-label', title);
       updateModalLayout();
       if (!modal.open) modal.showModal();
@@ -221,6 +227,7 @@ export function App() {
       const c = controllersRef.current;
       c.confirmation.cancel();
       userRef.current = null;
+      refreshingRef.current = null;
       dataRef.current = null;
       setUser(null);
       setData(null);
@@ -375,15 +382,20 @@ export function App() {
     async ({ force = false } = {}) => {
       const currentUser = userRef.current;
       if (currentUser?.mustChangePassword) return;
-      if (!currentUser || refreshingRef.current) return;
+      if (!currentUser) return;
+      if (refreshingRef.current) return refreshingRef.current;
       const sessionUser = currentUser;
-      refreshingRef.current = true;
+      setWorkspaceLoading(true);
       const c = controllersRef.current;
+      const pending = (async () => {
       try {
         const nextData = await api(
           '/dashboard',
           force ? { headers: { 'Cache-Control': 'no-cache' } } : {}
         );
+        if (!nextData.stats || !nextData.revenue || !['rentals', 'pending', 'items', 'categories', 'terminals'].every(key => Array.isArray(nextData[key]))) {
+          throw requestError({ code: 'INVALID_RESPONSE' });
+        }
         const changed = dashboardSnapshot(dataRef.current) !== dashboardSnapshot(nextData);
         if (userRef.current !== sessionUser) return;
         dataRef.current = nextData;
@@ -395,17 +407,32 @@ export function App() {
           triggerRender();
         }
       } catch (error) {
+        if (userRef.current !== sessionUser) return;
         if (error.status === 401) {
           endSession();
         } else {
-          setConnectionError(error.message);
+          setConnectionError(cleanErrorMessage(error));
         }
       } finally {
-        refreshingRef.current = false;
+        if (refreshingRef.current === pending) refreshingRef.current = null;
+        if (userRef.current === sessionUser) setWorkspaceLoading(false);
       }
+      })();
+      refreshingRef.current = pending;
+      return pending;
     },
     [api, endSession, triggerRender]
   );
+
+  // Only retry reads. A disconnected save must never be repeated automatically.
+  useEffect(() => {
+    if (!user || !connectionError || offline) return;
+    const timer = setInterval(() => {
+      const c = controllersRef.current;
+      if (document.visibilityState === 'visible' && !c.modal?.open && c.apiClient.canRefresh()) void refresh({ force: true });
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [user, connectionError, offline, refresh]);
 
   const scheduleRentalEventSync = useCallback(() => {
     clearTimeout(rentalEventSyncTimerRef.current);
@@ -605,12 +632,15 @@ export function App() {
       }
     };
     const handleOnline = () => {
+      setOffline(false);
       if (userRef.current && !userRef.current.mustChangePassword) {
+        void refresh({ force: true });
         rentalEventsDisabledRef.current = false;
         syncRentalEventStream(userRef.current.id);
         scheduleRentalEventSync();
       }
     };
+    const handleOffline = () => setOffline(true);
     const handlePopState = () => {
       const nextPage = pageForPath(location.pathname);
       pageRef.current = nextPage;
@@ -630,6 +660,7 @@ export function App() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
     window.addEventListener('popstate', handlePopState);
 
     const focusGuardSelector =
@@ -748,6 +779,7 @@ export function App() {
       modal?.removeEventListener('click', handleModalClick);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('popstate', handlePopState);
       clearInterval(liveRentalTimer);
       clearInterval(terminalTimer);
@@ -788,7 +820,7 @@ export function App() {
           try {
             const health = await api('/health');
             if (health.database === false) {
-              setLoginError(health.warning || 'The database is temporarily unavailable.');
+              setLoginError('Sign-in is temporarily unavailable. Please try again shortly. If this continues, contact your system administrator.');
             }
           } catch (healthError) {
             setLoginError(cleanErrorMessage(healthError.message));
@@ -882,16 +914,6 @@ export function App() {
   };
 
   const handleToggleNavGroup = groupId => {
-    if (sidebarCollapsed && !window.matchMedia('(max-width:720px)').matches) {
-      setSidebarCollapsed(false);
-      setNavGroupExpanded(prev => {
-        const next = { ...prev, [groupId]: true };
-        try {
-          localStorage.setItem('rent-play-nav-groups', JSON.stringify(next));
-        } catch {}
-        return next;
-      });
-    } else {
       setNavGroupExpanded(prev => {
         const next = { ...prev, [groupId]: !prev[groupId] };
         try {
@@ -899,7 +921,6 @@ export function App() {
         } catch {}
         return next;
       });
-    }
     requestAnimationFrame(() => {
       document.getElementById(`nav-group-toggle-${groupId}`)?.focus();
     });
@@ -958,6 +979,8 @@ export function App() {
       page={page}
       reportSection={reportSection}
       connectionError={connectionError}
+      workspaceLoading={workspaceLoading}
+      offline={offline}
       theme={theme}
       onSetTheme={setTheme}
       filter={filter}

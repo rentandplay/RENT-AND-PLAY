@@ -31,7 +31,8 @@ test('React SessionLoadingView and LoginView render accessible markup and theme 
   assert.match(loginHtml, /OWNER \/ OPERATOR WORKSPACE/);
   assert.match(loginHtml, /id="login-theme"/);
   assert.match(loginHtml, /Switch to light mode/);
-  assert.match(loginHtml, /Unable to connect to the server/);
+  assert.match(loginHtml, /temporarily unavailable/);
+  assert.doesNotMatch(loginHtml, /ECONNREFUSED|127\.0\.0\.1|database|backend/i);
 });
 
 test('React PasswordChangeView and ProfileView render user account details and edit mode', () => {
@@ -138,6 +139,12 @@ test('React DashboardView and PageHeading render live stats, rental rows, revenu
   );
 
   assert.match(dashHtml, /Active rentals/);
+  assert.match(dashHtml, />New walk-in rental</);
+  assert.doesNotMatch(dashHtml, /\+ New|Scan QR \/ Lookup|GPIO 35|COUNTER STATION READY/);
+  assert.match(dashHtml, /Available units/);
+  assert.match(dashHtml, /Overdue: 2/);
+  assert.match(dashHtml, /Not configured|Offline|Connected/);
+  assert.match(dashHtml, /aria-label="Fri: ₱500 in rental fees"/);
   assert.match(dashHtml, /Nintendo Switch/);
   assert.match(dashHtml, /RNT-101/);
   assert.match(dashHtml, /Maria Clara/);
@@ -145,6 +152,15 @@ test('React DashboardView and PageHeading render live stats, rental rows, revenu
   assert.match(dashHtml, /Front Desk Terminal/);
   assert.match(dashHtml, /Sports Equipment/);
   assert.match(dashHtml, /12 items in inventory/);
+
+  const recentlyOverdueHtml = renderToStaticMarkup(React.createElement(DashboardView, {
+    data: { ...dashboardData, rentals: [{ ...dashboardData.rentals[0], due_at: new Date(Date.now() - 30 * 60000).toISOString() }] },
+    filter: 'All rentals', query: '', rentalPage: 0, period: 'This week',
+    onNavigate() {}, onFilterChange() {}, onQueryChange() {}, onRentalPageChange() {}, onPeriodChange() {}, showModal() {}
+  }));
+  assert.match(recentlyOverdueHtml, /Overdue by 30m/);
+  assert.doesNotMatch(recentlyOverdueHtml, /Overdue by 1h 30m/);
+
 });
 
 test.after(() => {

@@ -432,7 +432,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         rentalId: rId,
         customerId: cId
       });
-      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger']);
+      rentalEvents.publishDataChange?.('verification.changed', { requestId: value?.id || value?.requestId || '', status: value?.status || 'UPDATED' });
+      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger', 'terminals']);
       pushWorker?.wake();
       holdWorker?.wake();
     }
@@ -445,7 +446,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       rentalEvents.publishInventory();
     }
     if (collections.has('rentals') || collections.has('rental_payment_proofs')) {
-      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger']);
+      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger', 'terminals']);
       rentalEvents.publishRental({ allCustomers: true });
     }
     if (collections.has('maintenance_records') || collections.has('maintenance_photos')) {
@@ -761,7 +762,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         }
         user.role = normalizeRole(user.role);
         const queryOptions=Object.fromEntries(new URL(req.url,'http://localhost').searchParams);
-        if (terminalTestRoute && req.method === 'POST') return send(res, 201, await services.testTerminalPing(user, terminalTestRoute[1]));
+        if (terminalTestRoute && req.method === 'POST') { const pingResult = await services.testTerminalPing(user, terminalTestRoute[1]); rentalEvents.publishDataChange?.('verification.changed', { requestId: pingResult.request?.id }); return send(res, 201, pingResult); }
         if (recordsRoute && req.method === 'GET') return send(res,200,await services.recordPage(recordsRoute[1],queryOptions));
         if (customerTrustRoute && req.method === 'GET') return send(res, 200, await services.mobileCustomerTrust(customerTrustRoute[1]));
         if (path === '/api/finance/summary' && req.method === 'GET') return send(res,200,await services.financeSummary(queryOptions));

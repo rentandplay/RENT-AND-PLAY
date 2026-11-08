@@ -20,7 +20,7 @@ export function createTransactionWorkflow(h) {
   const getIcon = name => typeof icon === 'function' ? icon(name) : '';
   const desk = createRentalDesk({ ...h, showHandoff: (request, rental) => showHandoff(request, rental) });
   const filters = { status: 'ALL', type: 'ALL', terminal: 'ALL' };
-  let handoff = null, handoffRefreshing = false, handoffPollTimer = null;
+  let handoff = null, handoffRefreshing = false, handoffPollTimer = null, pagePollTimer = null;
   function handoffRental(request, rental = {}) {
     if (request.status !== 'PENDING' || String(request.transaction_type || request.type).toUpperCase() !== 'RETURN') return rental;
     return { ...rental, fee_breakdown: { ...rental.fee_breakdown, actual_return_at: request.actual_return_at || rental.fee_breakdown?.actual_return_at, penalty_amount: request.penalty_amount, penalty_reason: request.penalty_reason } };
@@ -173,7 +173,7 @@ export function createTransactionWorkflow(h) {
     const terminal = model.terminals.find(row => String(row.id) === String(id));
     if (!terminal && !attempts.length) { toast('This terminal record is no longer available. Refresh the page.'); return; }
     const latest = attempts[0], terminalCode = terminal?.terminal_code || (String(latest?.confirmed_terminal_id) === String(id) ? latest.confirmed_terminal_code : latest?.terminal_code) || 'Not assigned';
-    const online = terminal?.status === 'ONLINE' && terminal.is_active !== false && transactionTime(terminal.last_seen_at) && Date.now() - transactionTime(terminal.last_seen_at) < 25000;
+    const online = terminal?.status === 'ONLINE' && terminal.is_active !== false && transactionTime(terminal.last_seen_at) && Date.now() - transactionTime(terminal.last_seen_at) < 60000;
     const state = !terminal ? 'Unregistered' : terminal.is_active === false ? 'Inactive' : online ? 'Online' : 'Offline';
     showModal('Terminal details', `<section class="record-detail-modal"><div class="record-detail-heading"><h3>${e(terminal?.name || 'Unregistered terminal')}</h3><p>${e(terminalCode)}</p></div><dl class="record-fields"><div><dt>Terminal code</dt><dd>${e(terminalCode)}</dd></div><div><dt>Status</dt><dd>${e(state)}</dd></div><div><dt>Last seen</dt><dd>${e(formatDate(terminal?.last_seen_at))}</dd></div><div><dt>Device credential</dt><dd>${terminal ? terminal.credentials_configured ? 'Configured' : 'Not configured' : 'Not recorded'}</dd></div><div><dt>Recorded attempts</dt><dd>${attempts.length}</dd></div></dl><section class="record-section"><h3>Latest verification attempts</h3>${attempts.length ? `<div class="admin-table-scroll"><table class="admin-table"><thead><tr><th>REQUEST</th><th>TYPE</th><th>STATUS</th><th>REQUESTED</th></tr></thead><tbody>${attempts.slice(0, 5).map(request => `<tr ${recordAttrs('verification', request.id, recordCode(request, 'verification'))}><td><strong>${e(recordCode(request))}</strong><small>${e(recordCode(request, 'verification'))}</small></td><td>${e(request.transaction_type || request.type)}</td><td>${e(request.status)}</td><td>${e(formatDate(request.requested_at))}</td></tr>`).join('')}</tbody></table></div>${attempts.length > 5 ? `<p>Showing the latest 5 of ${attempts.length} attempts.</p>` : ''}` : '<p>No verification attempts recorded.</p>'}</section></section>`);
     bindInspections(modal);
@@ -214,7 +214,7 @@ export function createTransactionWorkflow(h) {
     const heads = ['RENTAL / REQUEST', 'TYPE', 'TERMINAL', 'STATUS', 'TIMES', 'REASON / ACTIONS'];
 
     const terminal = model.terminals?.[0];
-    const isOnline = terminal?.status === 'ONLINE' && terminal.is_active !== false && transactionTime(terminal.last_seen_at) && (Date.now() - transactionTime(terminal.last_seen_at) < 25000);
+    const isOnline = terminal?.status === 'ONLINE' && terminal.is_active !== false && transactionTime(terminal.last_seen_at) && (Date.now() - transactionTime(terminal.last_seen_at) < 60000);
     const lastSeenStr = terminal?.last_seen_at ? formatDate(terminal.last_seen_at) : 'Never';
 
     const heroCard = `
@@ -357,7 +357,7 @@ export function createTransactionWorkflow(h) {
     return heroCard + workflowGuide + queueSection + historySection;
   }
   function bind(page, rerender, pages) {
-    bindInspections();
+    bindInspections(); clearInterval(pagePollTimer); if (page === 'ESP32 terminal' && (getModel()?.verification || []).some(r => r.status === 'PENDING')) { pagePollTimer = setInterval(async () => { if (document.visibilityState !== 'visible') return; try { const changed = await refresh(); if (changed) rerender(); } catch {} }, 2000); }
     document.querySelector('#rental-request-add')?.addEventListener('click', () => requestForm('RENTAL'));
     document.querySelector('#return-request-add')?.addEventListener('click', () => requestForm('RETURN'));
     document.querySelector('#btn-terminal-test-ping')?.addEventListener('click', async event => {
@@ -366,7 +366,7 @@ export function createTransactionWorkflow(h) {
       btn.textContent = 'Dispatching to ESP32...';
       try {
         await api('/terminals/TERM-01/test-ping', { method: 'POST' });
-        toast('Test dispatched! Check your ESP32 OLED screen & buzzer, then press the push button to confirm!');
+        toast('Test dispatched! Check ESP32 OLED & buzzers, then press the physical button (GPIO 35) to confirm.');
         await refresh();
         rerender();
       } catch (err) {

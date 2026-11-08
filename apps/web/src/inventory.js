@@ -287,7 +287,7 @@ export function createInventory(h) {
               <button type="button" class="inv-stepper-btn" id="inv-form-qty-plus" aria-label="Increase stock">＋</button>
             </div>
             <div class="inv-stock-delta-feedback" id="inv-form-stock-feedback"></div>
-            <small id="inv-form-stock-help">${item ? `${Number(item.available_quantity || 0)} currently available. Include rented, reserved, and maintained units in the total.` : 'All units appear under one equipment entry, each with its own QR and history.'}</small>
+            <small id="inv-form-stock-help">${item ? `${Number(item.available_quantity || 0)} currently available. Include rented, reserved, and maintained units in the total.` : ''}</small>
           </label>
           <div class="inv-category-input">
             <label for="inv-form-category">Category<select id="inv-form-category" name="categoryId" required>${categories.map(c => `<option value="${e(c.id)}" ${String(c.id) === (item?.category_id || cat) ? 'selected' : ''}>${e(c.name)}</option>`).join('')}</select></label>

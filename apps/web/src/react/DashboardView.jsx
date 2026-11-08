@@ -1,4 +1,4 @@
-import React from './react-shim.js';
+import React, { useState } from './react-shim.js';
 import {
   Icon,
   CategorySymbol,
@@ -54,10 +54,11 @@ function getDueInfo(r) {
   if (isNaN(due)) return { badge: 'Philippine time', isOverdue: false, isDueSoon: false };
   const diffMs = due - now;
   if (diffMs < 0) {
-    const hours = Math.max(1, Math.floor(-diffMs / 3600000));
-    const mins = Math.floor((-diffMs % 3600000) / 60000);
+    const minutes = Math.max(1, Math.floor(-diffMs / 60000));
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
     return {
-      badge: `Overdue by ${hours}h ${mins > 0 ? `${mins}m` : ''}`.trim(),
+      badge: `Overdue by ${hours ? `${hours}h ` : ''}${mins ? `${mins}m` : ''}`.trim(),
       isOverdue: true,
       isDueSoon: false
     };
@@ -89,6 +90,8 @@ export function DashboardView({
   api,
   toast
 }) {
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [testingTerminal, setTestingTerminal] = useState(false);
   const s = data.stats;
   const pageSize = 5;
   const allRows = data.rentals.filter(
@@ -118,8 +121,8 @@ export function DashboardView({
 
   const openWorkflowModal = () => {
     showModal(
-      'Rental workflow',
-      '<p><strong>Walk-in Counter Flow:</strong> Approve or create the walk-in rental, scan the assigned equipment QR, inspect condition &amp; accessories, and confirm handover on the <strong>ESP32 Counter Terminal</strong> (or web fallback) to start the timer.</p><p><strong>Resort Stay Delivery Flow:</strong> Scan the unit QR at the shop and confirm <strong>Resort Dispatch on the ESP32 Terminal</strong> (marks unit Out for Delivery while keeping the timer stopped). At the resort villa/gate, scan the customer Rental QR to start the timer.</p><div class="info-box">On return, scanning the equipment QR immediately stops the rental timer and overtime. Final return inspection is confirmed on the ESP32 Counter Terminal before updating inventory availability.</div>'
+      'How rentals work',
+      '<p><strong>Store pickup.</strong> Create the rental, scan the assigned unit, and review the customer, payment, agreement, and equipment checks. Confirm handover at the counter terminal to start the timer.</p><p><strong>Resort delivery.</strong> Prepare and confirm dispatch at the shop. The timer starts after staff verifies the customer ticket and confirms handover at the resort.</p><p><strong>Returns.</strong> Record physical receipt to stop the timer, then inspect the equipment and complete the return.</p>'
     );
   };
 
@@ -152,7 +155,7 @@ export function DashboardView({
   const firstPending = queue[0] || data.pending?.[0];
 
   return (
-    <>
+    <div className="dashboard-workspace">
       {/* 1. Counter Command Bar */}
       <section className="counter-command-bar" role="toolbar" aria-label="Counter command actions">
         <button
@@ -169,8 +172,8 @@ export function DashboardView({
         >
           <span className="btn-icon-bubble"><Icon name="plus" /></span>
           <div className="btn-text-wrap">
-            <strong>+ New Walk-in Rental</strong>
-            <small>Quick Counter Checkout</small>
+            <strong>New walk-in rental</strong>
+            <small>Create a rental at the counter</small>
           </div>
         </button>
 
@@ -188,8 +191,8 @@ export function DashboardView({
         >
           <span className="btn-icon-bubble"><Icon name="search" /></span>
           <div className="btn-text-wrap">
-            <strong>Scan QR / Lookup</strong>
-            <small>Camera / Barcode Scanner</small>
+            <strong>Find rental</strong>
+            <small>Scan a QR code or enter a reference</small>
           </div>
         </button>
 
@@ -207,38 +210,12 @@ export function DashboardView({
         >
           <span className="btn-icon-bubble"><Icon name="undo" /></span>
           <div className="btn-text-wrap">
-            <strong>Quick Return</strong>
-            <small>Stop Timer &amp; Inspect</small>
+            <strong>Receive return</strong>
+            <small>Record receipt and inspect equipment</small>
           </div>
         </button>
 
-        <button
-          type="button"
-          className="command-bar-btn terminal-btn"
-          id="cmd-ping-terminal"
-          title="Sends test chime &amp; OLED alert to the ESP32 terminal"
-          onClick={async () => {
-            try {
-              if (api) {
-                await api('/terminals/test-ping', {
-                  method: 'POST',
-                  body: JSON.stringify({ terminalCode: t?.terminal_code || 'TERM-01' })
-                });
-                toast?.('ESP32 Counter Station pinged! Buzzer chime and OLED alert triggered.');
-              } else {
-                toast?.('Counter station is ready.');
-              }
-            } catch (err) {
-              toast?.(err.message || 'Counter station test ping triggered.');
-            }
-          }}
-        >
-          <span className="btn-icon-bubble terminal-pulse"><Icon name="chip" /></span>
-          <div className="btn-text-wrap">
-            <strong>Ping ESP32 Station</strong>
-            <small>{t?.online ? 'Online & polling' : 'Station check'}</small>
-          </div>
-        </button>
+        {/* Terminal diagnostics belong with the terminal status below. */}
       </section>
 
       {/* 2. Real-Time ESP32 Pending Verification Banner */}
@@ -250,16 +227,16 @@ export function DashboardView({
           </div>
           <div className="terminal-banner-body">
             <div className="terminal-banner-badge-row">
-              <span className="terminal-banner-badge">AWAITING ESP32 HARDWARE CONFIRMATION</span>
-              <span className="terminal-queue-count">{queue.length} Pending at Counter</span>
+              <span className="terminal-banner-badge">Terminal confirmation needed</span>
+              <span className="terminal-queue-count">{queue.length} pending</span>
             </div>
             <strong>
               {firstPending.item_name || 'Equipment'} &middot; {firstPending.customer || 'Customer'}
             </strong>
             <p>
-              Code: <code>{firstPending.rental_code || firstPending.verification_code || firstPending.id}</code> &middot; 
-              Station: <strong>{firstPending.terminal_code || 'TERM-01'}</strong> &middot; 
-              Press physical <strong>GPIO 35 Button</strong> on the counter terminal to finalize transaction.
+              Code: <code>{firstPending.rental_code || firstPending.verification_code || firstPending.id}</code> &middot;
+              Terminal: <strong>{firstPending.terminal_code || 'TERM-01'}</strong> &middot;
+              Review the request, then press the terminal button to confirm.
             </p>
           </div>
           <div className="terminal-banner-actions">
@@ -274,7 +251,7 @@ export function DashboardView({
                 }
               }}
             >
-              Open Verification Gate →
+              Review request →
             </button>
           </div>
         </aside>
@@ -284,16 +261,16 @@ export function DashboardView({
         <StatCard
           label="Active rentals"
           value={s.active}
-          note="Confirmed rentals currently out"
+          note="Currently with customers"
           glyph="clock"
           color="blue"
           page="Rentals"
           onNavigate={onNavigate}
         />
         <StatCard
-          label="Available items"
+          label="Available units"
           value={s.available}
-          note="Ready for their next adventure"
+          note="Ready to rent"
           glyph="box"
           color="green"
           page="Inventory"
@@ -302,7 +279,7 @@ export function DashboardView({
         <StatCard
           label="Due today"
           value={s.dueToday}
-          note={`${s.overdue} overdue rental(s) need attention`}
+          note="Scheduled to return today"
           glyph="bell"
           color="amber"
           page="Dashboard"
@@ -311,12 +288,14 @@ export function DashboardView({
           onNavigate={onNavigate}
         />
         <StatCard
-          label="Rental fees"
-          value={money(s.fees)}
-          note="From current active rentals"
-          glyph="money"
-          color="purple"
-          page="Rentals"
+          label="Overdue"
+          value={s.overdue}
+          note={s.overdue ? 'Follow up on these returns' : 'No overdue rentals'}
+          glyph="clock"
+          color="red"
+          page="Dashboard"
+          target="rental-panel"
+          filter="Overdue"
           onNavigate={onNavigate}
         />
       </div>
@@ -326,8 +305,8 @@ export function DashboardView({
           <section className="panel rental-panel" id="rental-panel">
             <div className="panel-title">
               <div>
-                <h3>Rentals to keep an eye on</h3>
-                <p>Active rentals and requests awaiting verification.</p>
+                <h3>Rental activity</h3>
+                <p>Open rentals and requests that need your attention.</p>
               </div>
               <div className="rental-panel-actions">
                 <button
@@ -336,7 +315,7 @@ export function DashboardView({
                   id="rental-workflow"
                   onClick={openWorkflowModal}
                 >
-                  <Icon name="arrow" /> Rental workflow
+                  How rentals work
                 </button>
                 <button
                   className="text-button"
@@ -384,7 +363,7 @@ export function DashboardView({
               <table>
                 <thead>
                   <tr>
-                    <th>ITEM / RENTAL ID</th>
+                    <th>EQUIPMENT</th>
                     <th>CUSTOMER</th>
                     <th>DUE DATE</th>
                     <th>STATUS</th>
@@ -428,11 +407,11 @@ export function DashboardView({
                                 <span>{r.customer}</span>
                                 {isResort ? (
                                   <small className="fulfillment-tag resort" title={r.delivery_location || 'Resort delivery'}>
-                                    Resort: {r.delivery_location ? r.delivery_location.split(',')[0].trim() : 'Villa'}
+                                    {r.delivery_location ? r.delivery_location.split(',')[0].trim() : 'Resort delivery'}
                                   </small>
                                 ) : (
                                   <small className="fulfillment-tag shop" title="Shop counter handover">
-                                    Shop Counter
+                                    Store pickup
                                   </small>
                                 )}
                               </div>
@@ -479,7 +458,7 @@ export function DashboardView({
                 · Page {allRows.length ? clampedPage + 1 : 0} of{' '}
                 {Math.ceil(allRows.length / pageSize)}
               </span>
-              <div className="inv-pagination">
+              {pageCount > 1 && <div className="inv-pagination">
                 <button
                   className="secondary"
                   id="rental-prev"
@@ -496,22 +475,22 @@ export function DashboardView({
                 >
                   Next →
                 </button>
-              </div>
+              </div>}
             </div>
           </section>
 
           <section className="panel revenue-panel">
             <div className="panel-title">
               <div>
-                <h3>Confirmed rental fees</h3>
-                <p>Grouped by the date each rental was confirmed.</p>
+                <h3>Rental fees</h3>
+                <p>Recorded charges by confirmation date. Not cash collected.</p>
               </div>
               <div className="revenue-actions">
                 <select
                   id="period"
                   aria-label="Revenue period"
                   value={period}
-                  onChange={e => onPeriodChange(e.target.value)}
+                  onChange={e => { setSelectedDay(null); onPeriodChange(e.target.value); }}
                 >
                   <option value="This week">This week</option>
                   <option value="Last week">Last week</option>
@@ -521,7 +500,7 @@ export function DashboardView({
                   data-page="Reports"
                   onClick={() => onNavigate('Reports')}
                 >
-                  Detailed analytics →
+                  View analytics →
                 </button>
               </div>
             </div>
@@ -538,15 +517,22 @@ export function DashboardView({
               <div className="bars">
                 {amounts.map((amount, i) => (
                   <div className="bar-column" key={days[i]}>
-                    <div
+                    <button
+                      type="button"
                       className={`bar ${amount === max ? 'highlight' : ''}`}
-                      style={{ height: `${(amount / scale) * 100}%` }}
+                      style={{ height: '100%' }}
                       title={`${days[i]}: ${money(amount)}`}
-                    />
+                      aria-label={`${days[i]}: ${money(amount)} in rental fees`}
+                      aria-pressed={selectedDay === i}
+                      onClick={() => setSelectedDay(i)}
+                    ><span className="dashboard-bar-fill" style={{ height: `${Math.max(2, (amount / scale) * 100)}%` }} /></button>
                     <span>{days[i]}</span>
                   </div>
                 ))}
               </div>
+            </div>
+            <div className="dashboard-chart-detail" aria-live="polite">
+              {selectedDay === null ? <span>Select a day to see its rental fees.</span> : <><span>{days[selectedDay]}</span><strong>{money(amounts[selectedDay])}</strong><span>in recorded charges</span></>}
             </div>
             {amounts.every(v => v === 0) ? (
               <p className="chart-empty">No confirmed rental fees in this period.</p>
@@ -560,42 +546,41 @@ export function DashboardView({
               <h3>
                 <Icon name="chip" /> ESP32 terminal
               </h3>
-              <span className={t?.online ? 'online-dot' : 'offline-dot'}>
-                {t?.online ? 'Online' : queue.length > 0 ? 'Pending' : 'Counter Kiosk'}
-              </span>
             </div>
-            <div className="device">
-              <span>{t?.terminal_code || 'TERM-01'}</span>
-              <strong>
-                {queue.length > 0
-                  ? 'AWAITING BUTTON PRESS'
-                  : t?.online
-                    ? 'ONLINE & READY'
-                    : 'COUNTER STATION READY'}
-              </strong>
-              <small>{t?.name || 'Counter Kiosk Verification Station'}</small>
-              <div className="device-led" />
+            <div className="dashboard-terminal-status" data-online={Boolean(t?.online)}>
+              <span className="dashboard-status-dot" aria-hidden="true" />
+              <div><strong>{t ? (t.online ? 'Connected' : 'Offline') : 'Not configured'}</strong>
+                <span>{t ? `${t.name || 'Counter terminal'} · ${t.terminal_code}` : 'Set up a terminal to confirm counter handovers.'}</span></div>
             </div>
             <div className="terminal-meta">
-              <span>Pending terminal requests</span>
+              <span>Awaiting confirmation</span>
               <strong>{queue.length}</strong>
             </div>
             <p className="terminal-note">
-              <Icon name="chip" /> Counter OLED, LED/buzzer &amp; physical GPIO 35 button verify
-              walk-in handovers, resort dispatches, and return inspections.
+              Confirm counter handovers, delivery dispatches, and completed inspections.
             </p>
+            <div className="dashboard-terminal-actions">
+              <button type="button" className="secondary" id="cmd-ping-terminal" disabled={!t || !api || testingTerminal} onClick={async () => {
+                setTestingTerminal(true);
+                try {
+                  await api('/terminals/test-ping', { method: 'POST', body: JSON.stringify({ terminalCode: t.terminal_code }) });
+                  toast?.('Test sent. Check the terminal for a response.');
+                } catch (err) { toast?.(err.message || 'The terminal test could not be sent.'); }
+                finally { setTestingTerminal(false); }
+              }}>{testingTerminal ? 'Sending test…' : 'Test terminal'}</button>
+            </div>
             <button
               className="secondary wide"
               data-page="ESP32 terminal"
               onClick={() => onNavigate('ESP32 terminal')}
             >
-              View terminal records <Icon name="arrow" />
+              Open terminal <Icon name="arrow" />
             </button>
           </section>
 
           <section className="panel category-panel">
-            <h3>A little of everything</h3>
-            <p>Your equipment at a glance.</p>
+            <h3>Equipment by category</h3>
+            <p>Select a category to view its inventory.</p>
             {data.categories.length > 0 ? (
               data.categories.map((c, i) => (
                 <button
@@ -618,15 +603,8 @@ export function DashboardView({
             )}
           </section>
 
-          <div className="counter-tip">
-            <span>✦</span>
-            <div>
-              <strong>A small counter tip</strong>
-              <p>Check item condition before confirming a return.</p>
-            </div>
-          </div>
         </aside>
       </div>
-    </>
+    </div>
   );
 }

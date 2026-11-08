@@ -77,7 +77,7 @@ const server = http.createServer(async (req, res) => {
     const target = path.resolve(root, '.' + (appRoutes.has(pathname) ? '/index.html' : pathname));
     if (!target.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
     const browserModule = /^\/src\/[A-Za-z0-9_-]+\.js$/.test(pathname);
-    if (!(appRoutes.has(pathname) || pathname === '/index.html' || browserModule || pathname === '/src/styles.css' || pathname.startsWith('/public/')) || pathname.split('/').some(part => part.startsWith('.'))) { res.writeHead(404).end(); return; }
+    if (!(appRoutes.has(pathname) || pathname === '/index.html' || browserModule || ['/src/styles.css', '/src/workspace-design.css'].includes(pathname) || pathname.startsWith('/public/')) || pathname.split('/').some(part => part.startsWith('.'))) { res.writeHead(404).end(); return; }
     const body = await readFile(target);
     const etag = '"' + createHash('sha256').update(body).digest('base64url') + '"';
     const headers = { 'Content-Type': types[path.extname(target)] || 'application/octet-stream', 'Cache-Control': path.extname(target) === '.html' ? 'no-store' : 'private, no-cache', ETag: etag };

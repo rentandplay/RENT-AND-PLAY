@@ -171,21 +171,29 @@ void soundError() {
 // 5. OLED DISPLAY SCREENS
 // =============================================================================
 void soundHardwareTest() {
-  Serial.println("[TEST] Running full hardware test: LEDs, Fairy Lights, Buzzer, and Music!");
+  Serial.println("[TEST] Playing hardware test melody with LEDs & Fairy Lights!");
 
-  // Song melody for hardware test (Twinkle Twinkle Little Star melody)
+  // Melody: First phrases of Twinkle Twinkle Little Star (14 notes, crisp ~3.5 seconds)
   int melody[] = {
-    262, 262, 392, 392, 440, 440, 392,  // C4, C4, G4, G4, A4, A4, G4
-    349, 349, 330, 330, 294, 294, 262   // F4, F4, E4, E4, D4, D4, C4
+    262, 262, 392, 392, 440, 440, 392,
+    349, 349, 330, 330, 294, 294, 262
   };
+
   int durations[] = {
-    180, 180, 180, 180, 180, 180, 360,
-    180, 180, 180, 180, 180, 180, 400
+    200, 200, 200, 200, 200, 200, 400,
+    200, 200, 200, 200, 200, 200, 450
   };
 
   int numNotes = sizeof(melody) / sizeof(melody[0]);
   for (int i = 0; i < numNotes; i++) {
-    // Alternate Red LED, Green LED and Fairy Lights with each note
+    // If button is clicked anytime during the song, exit early to confirm instantly!
+    if (buttonTriggered || digitalRead(BUTTON_PIN) == LOW) {
+      buttonTriggered = true;
+      Serial.println("[TEST] Button pressed during melody! Confirming...");
+      break;
+    }
+
+    // Dance LEDs and Fairy Lights with each note
     if (i % 2 == 0) {
       digitalWrite(LED1_PIN, HIGH);
       digitalWrite(LED2_PIN, LOW);
@@ -196,22 +204,40 @@ void soundHardwareTest() {
       digitalWrite(FAIRY_LIGHT_PIN, LOW);
     }
 
-    if (i == 0 || i == 6 || i == 13) {
+    // Active buzzer accent on phrase end
+    if ((i + 1) % 7 == 0) {
       digitalWrite(ACTIVE_BUZZER, HIGH);
+      digitalWrite(FAIRY_LIGHT_PIN, HIGH);
     }
 
     tone(PASSIVE_BUZZER, melody[i], durations[i]);
-    delay(durations[i]);
+
+    // Non-blocking wait: check button every 10ms for immediate reaction
+    unsigned long noteStart = millis();
+    while (millis() - noteStart < (unsigned long)durations[i]) {
+      if (buttonTriggered || digitalRead(BUTTON_PIN) == LOW) {
+        buttonTriggered = true;
+        break;
+      }
+      delay(10);
+    }
 
     digitalWrite(ACTIVE_BUZZER, LOW);
     noTone(PASSIVE_BUZZER);
-    delay(40);
+    if (buttonTriggered) break;
+
+    delay(35);
   }
 
+  noTone(PASSIVE_BUZZER);
+  digitalWrite(ACTIVE_BUZZER, LOW);
+
   // Keep alert LED1 & Fairy Lights on waiting for confirmation button
-  digitalWrite(LED1_PIN, HIGH);
-  digitalWrite(LED2_PIN, LOW);
-  digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+  if (!buttonTriggered) {
+    digitalWrite(LED1_PIN, HIGH);
+    digitalWrite(LED2_PIN, LOW);
+    digitalWrite(FAIRY_LIGHT_PIN, HIGH);
+  }
 }
 
 void showConnectingScreen() {
@@ -252,7 +278,7 @@ void showPendingScreen(const String& code, const String& type, const String& mod
     display.println("== HARDWARE TEST ==");
     display.println("--------------------");
     display.println("LEDs: OK | FAIRY: OK");
-    display.println("BUZZER & MUSIC: OK");
+    display.println("* Twinkle Twinkle OK");
     display.print("PIN: ");
     display.println(pin);
     display.println("[PRESS GPIO35 TO OK]");
@@ -355,7 +381,7 @@ void pollPendingRequests() {
     http.begin(plainClient, url);
   }
 
-  http.setTimeout(15000);
+  http.setTimeout(8000);
   http.addHeader("Authorization", String("Bearer ") + TERMINAL_KEY);
   http.addHeader("Accept", "application/json");
 
@@ -454,6 +480,7 @@ void postConfirmation() {
     digitalWrite(FAIRY_LIGHT_PIN, LOW);
     currentState = STATE_IDLE;
     showIdleScreen();
+    pollPendingRequests();
   } else {
     String err = http.getString();
     Serial.printf("[HTTP] Confirmation failed (%d): %s\n", httpCode, err.c_str());
@@ -535,7 +562,8 @@ void loop() {
 
   // 2. Poll backend: every 3s in IDLE; every 10s in PENDING to avoid network delays during button click
   unsigned long now = millis();
-  unsigned long interval = (currentState == STATE_PENDING_CONFIRMATION) ? 10000 : POLL_INTERVAL_MS;
+  // Poll every 3s in both IDLE and PENDING to keep terminal heartbeat fresh on web
+  unsigned long interval = POLL_INTERVAL_MS;
   if (currentState == STATE_IDLE || currentState == STATE_PENDING_CONFIRMATION) {
     if (now - lastPollTime >= interval) {
       lastPollTime = now;

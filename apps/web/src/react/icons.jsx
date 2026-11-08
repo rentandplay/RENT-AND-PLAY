@@ -1,4 +1,5 @@
 import React from './react-shim.js';
+import { publicErrorMessage } from '../request-errors.js';
 
 export const icons = {
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
@@ -200,19 +201,4 @@ export function SportArtSvg() {
   );
 }
 
-export function cleanErrorMessage(msg) {
-  if (!msg) return '';
-  const str = String(msg);
-  const lower = str.toLowerCase();
-  if (
-    lower.includes('npm run dev') ||
-    lower.includes('backend is not running') ||
-    lower.includes('apps/backend') ||
-    lower.includes('failed to fetch') ||
-    lower.includes('econnrefused') ||
-    lower.includes('cannot reach the server')
-  ) {
-    return 'Unable to connect to the server. Please check your connection or try again later.';
-  }
-  return str;
-}
+export const cleanErrorMessage = problem => problem ? publicErrorMessage(problem) : '';

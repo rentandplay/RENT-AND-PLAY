@@ -130,11 +130,12 @@ export function createRentalEventHub({ heartbeatMs = 25000, maxConnectionMs = 50
         collections: ['maintenance_records']
       });
     },
-    publishCustomer({ customerId = '' } = {}) {
+    publishCustomer({ customerId = '', customerName = '', action = 'registered' } = {}) {
       return publishEvent('customer.changed', {
         customerId,
         entityId: customerId,
-        collections: ['customers']
+        collections: ['customers'],
+        payload: { customerId, customerName, action }
       });
     },
     publishFinance({ expenseId = '', rentalId = '' } = {}) {

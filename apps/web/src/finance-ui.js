@@ -111,9 +111,10 @@ export function createFinanceUI(h) {
       finally { form.inert = false; }
     };
   }
-  function cashDrawerForm() {
+  function cashDrawerForm(expectedOverride) {
+    const hasOverride = typeof expectedOverride === 'number' && Number.isFinite(expectedOverride);
     const t = summary?.totals || {};
-    const expectedCash = Number(t.cash_net_movement || 0);
+    const expectedCash = hasOverride ? expectedOverride : Number(t.cash_net_movement || 0);
     showModal('Cash drawer count (Z-Reading)', `<form class="admin-form cash-drawer-form">
       <div class="cash-drawer-summary">
         <div>

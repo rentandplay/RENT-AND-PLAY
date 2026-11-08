@@ -2,7 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef } from './react-shi
 import { Icon, BrandLogo, escape, icon, initials, formatDate } from './icons.jsx';
 import { pageInfo } from '../workspace-navigation.js';
 import { renderRentalNotifications } from '../notifications.js';
-import { DashboardView } from './DashboardView.jsx';
+import { DashboardView, TerminalPendingBanner } from './DashboardView.jsx';
 import { ProfileView } from './ProfileView.jsx';
 import { MessagesView } from './MessagesView.jsx';
 import { WorkspaceStatus } from './WorkspaceStatus.jsx';
@@ -977,6 +977,9 @@ export function WorkspaceShell({
 
           <main className="content" id="workspace-content" tabIndex={-1}>
             {page === 'Dashboard' && <WorkspaceStatus loading={workspaceLoading} error={connectionError} offline={offline} hasData={Boolean(data)} onRetry={onManualRefresh} />}
+            {page !== 'Dashboard' && page !== 'ESP32 terminal' && data ? (
+              <TerminalPendingBanner data={data} workspaceUI={workspaceUI} onNavigate={onNavigate} />
+            ) : null}
 
             <WorkspaceErrorBoundary key={page} onRetry={onManualRefresh} onHome={() => onNavigate('Dashboard')}>
             {page === 'Dashboard' ? (data &&

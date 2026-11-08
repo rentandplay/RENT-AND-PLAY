@@ -17,7 +17,7 @@ import { createMaintenanceUI } from './maintenance.js';
 import { createFinanceUI } from './finance-ui.js';
 import { createReportPayments } from './report-payments.js';
 import { createRentalPlanning } from './rental-planning.js';
-import { manilaDateTimeInput, manilaDateTimeIso } from './date-time.js';
+import { manilaDateTimeInput, manilaDateTimeIso, formatPhilippineDateTime, formatExcelCsvCell } from './date-time.js';
 import { bindAccountValidation, nameError, emailError, passwordError, passwordMatchError, passwordHelp } from './account-validation.js';
 
 export function createWorkspaceUI(h) {
@@ -166,7 +166,7 @@ export function createWorkspaceUI(h) {
   const txMetric = (label, value, note, glyph, tone = "blue") => `<article><div class="transaction-metric-label"><span>${e(label)}</span><i class="transaction-metric-icon ${e(tone)}">${icon(glyph)}</i></div><strong>${e(value)}</strong><small>${e(note)}</small></article>`;
   const txFilter = (page, label, count) => `<button type="button" class="transaction-filter ${txState[page].filter === label ? "selected" : ""}" data-transaction-filter="${e(label)}" aria-pressed="${txState[page].filter === label}">${e(label)}<span>${count}</span></button>`;
   const txDueCell = row => { if (["APPROVED","PENDING_ADMIN_APPROVAL"].includes(row.status)) return `<strong>${row.scheduled_start_at?e(formatDate(row.scheduled_start_at)):'Starts at handoff'}</strong><small>Hold until ${e(formatDate(row.handoff_expires_at || row.hold_expires_at))}</small>`; const due = txDate(row.due_at), now = new Date(), label = txStatus(row), active = row.status === "ACTIVE", received = txDate(row.received_at || row.returned_at || row.confirmed_return_at), overdue = active && due && due < now, dueToday = active && due && due >= now && txDay(due) === txDay(now), lateAtReceipt = row.status === "RETURN_PENDING_INSPECTION" && due && received && received > due; const hint = overdue ? `${row.latest_return_request_status === "PENDING_ADMIN_APPROVAL" ? "Return requested · " : ""}overdue by ${Math.max(1, Math.ceil((now - due) / 3600000))}h` : dueToday ? "Due today" : lateAtReceipt ? "Received late · timer stopped" : row.status === "RETURN_PENDING_INSPECTION" ? "Timer stopped at receipt" : label === "Pending verification" ? "Waiting at counter" : "Due date"; const tone = overdue || lateAtReceipt ? "transaction-alert-text" : dueToday ? "transaction-due-text" : ""; return `<strong>${e(formatDate(row.due_at))}</strong><small class="${tone}">${e(hint)}</small>`; };
-  const txCsvCell = value => { const quote = String.fromCharCode(34), text = String(value ?? ""), safe = /^[=+@\-\t\r]/.test(text) ? String.fromCharCode(39) + text : text; return quote + safe.replaceAll(quote, quote + quote) + quote; };
+  const txCsvCell = formatExcelCsvCell;
   const txHistoryMatches = (row, state) => {
     const date = txDate(row.confirmed_rental_at || row.created_at), today = txDay(new Date());
     if (!txSearch(row)) return false;
@@ -701,8 +701,42 @@ export function createWorkspaceUI(h) {
     document.querySelector("#transaction-export")?.addEventListener("click", () => {
       const state = txState["Transaction History"], records = model.transactions.filter(row => txHistoryMatches(row, state));
       if (!records.length) { toast("There are no matching transactions to export."); return; }
-      const headings = ["Rental ID", "Item", "Item code", "Customer", "Status", "Rental confirmed", "Due", "Returned", "Rental fee", "Saved rate / package", "Billed minutes", "Overtime units", "Overtime rate", "Overtime fee", "Penalty", "Penalty reason", "Final rental charges", "Outcome reason"];
-      const csv = "\uFEFF" + [headings, ...records.map(row => [txCode(row), row.item_name, row.item_code, row.customer_name, txStatus(row), row.confirmed_rental_at, row.due_at, actualReturnTime(row), row.rental_fee, savedCharges(row).rate_label, savedCharges(row).billed_minutes, savedCharges(row).overtime_units, savedCharges(row).overtime_rate, savedCharges(row).overtime_fee, savedCharges(row).penalty_amount ?? "Penalty not recorded", savedCharges(row).penalty_reason, savedCharges(row).final_rental_charges ?? "Final charges not recorded", row.final_reason || row.latest_return_request_reason])].map(line => line.map(txCsvCell).join(",")).join("\r\n");
+      const headings = ["Rental code", "Item", "Item code", "Customer", "Customer phone", "Customer email", "Fulfillment mode", "Delivery location", "Status", "Rental confirmed", "Due date", "Returned date", "Payment method", "Payment status", "Rental fee (PHP)", "Saved rate / package", "Billed minutes", "Overtime units", "Overtime rate (PHP)", "Overtime fee (PHP)", "Penalty (PHP)", "Penalty reason", "Amount paid (PHP)", "Balance due (PHP)", "Refund due (PHP)", "Final rental charges (PHP)", "Terminal", "Outcome / notes"];
+      const fulfillmentText = mode => mode === 'SHOP_HANDOVER' ? 'Shop Handover' : mode === 'RESORT_DELIVERY' ? 'Resort Delivery' : mode === 'WALK_IN' ? 'Counter Walk-In' : (mode || '').replaceAll('_', ' ');
+      const numVal = val => typeof val === 'number' && Number.isFinite(val) ? val : (val != null && val !== '' && Number.isFinite(Number(val)) ? Number(val) : '');
+      const csv = "\uFEFF" + [headings, ...records.map(row => {
+        const sc = savedCharges(row);
+        return [
+          txCode(row),
+          row.item_name || "Unknown equipment",
+          row.item_code || "",
+          row.customer_name || "Unknown customer",
+          row.customer_phone || row.phone || "",
+          row.customer_email || row.email || "",
+          fulfillmentText(row.fulfillment_mode),
+          row.delivery_location || (row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Counter Handover' : ''),
+          txStatus(row),
+          formatPhilippineDateTime(row.confirmed_rental_at),
+          formatPhilippineDateTime(row.due_at),
+          formatPhilippineDateTime(actualReturnTime(row)),
+          row.payment_method ? String(row.payment_method).toUpperCase() : (row.request_source === 'WALK_IN' ? 'CASH' : ''),
+          row.payment_status ? String(row.payment_status).replaceAll('_', ' ') : '',
+          numVal(row.rental_fee),
+          sc.rate_label || "",
+          numVal(sc.billed_minutes),
+          numVal(sc.overtime_units),
+          numVal(sc.overtime_rate),
+          numVal(sc.overtime_fee),
+          numVal(sc.penalty_amount),
+          sc.penalty_reason || "",
+          numVal(row.rental_paid_amount),
+          numVal(row.balance_due),
+          typeof row.refund_due === 'number' && row.refund_due > 0 ? row.refund_due : '',
+          numVal(sc.final_rental_charges),
+          row.terminal_code || row.terminal_name || "",
+          row.final_reason || row.latest_return_request_reason || ""
+        ];
+      })].map(line => line.map(txCsvCell).join(",")).join("\r\n");
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })), link = document.createElement("a");
       link.href = url; link.download = "rent-and-play-transactions.csv"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast("Filtered transaction history exported.");
     });
@@ -1002,29 +1036,54 @@ export function createWorkspaceUI(h) {
     });
   }
   async function openTransaction(id, meta = {}) {
-    let row = model?.transactions?.find(row => String(row.id) === String(id) || String(row.rental_code) === String(id));
+    let row = model?.transactions?.find(row => String(row.id) === String(id) || String(row.rental_code) === String(id)) || meta?.rental;
+    if (row && !row.customer_name && row.customer) row.customer_name = row.customer;
     if (row) {
+      if (!model) {
+        model = { transactions: [row], verification: [], items: [], customers: [], settings: {} };
+      } else if (Array.isArray(model.transactions)) {
+        if (!model.transactions.some(r => String(r.id) === String(row.id))) {
+          model.transactions.push(row);
+        }
+      } else {
+        model.transactions = [row];
+      }
       transactionDetails(row);
       return;
     }
     const code = meta?.rentalCode || (/^[A-Za-z0-9_-]{1,128}$/.test(String(id)) && String(id).startsWith('R-') ? String(id) : '');
     showModal('Rental details', `<div class="transaction-record-modal">${code ? `<div class="transaction-detail-overview"><div class="transaction-detail-head"><div><span class="eyebrow">${e(code)}</span><h3>Loading rental details...</h3></div></div></div>` : ''}<div class="transaction-detail-scroll" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;min-height:200px;gap:14px;text-align:center"><div class="session-spinner" role="status" style="width:30px;height:30px;border-width:3px"></div><p style="color:var(--ui-muted);font-size:0.95rem;margin:0">Loading rental details${code ? ` for ${e(code)}` : ''}...</p></div></div>`);
     try {
-      const result = await api('/rentals/lookup', { method: 'POST', body: JSON.stringify({ kind: 'RENTAL', code: String(id) }) });
+      let result;
+      try {
+        result = await api('/rentals/lookup', { method: 'POST', body: JSON.stringify({ kind: 'RENTAL', code: String(id) }) });
+      } catch (lookupErr) {
+        if (meta?.rentalCode && meta.rentalCode !== String(id)) {
+          result = await api('/rentals/lookup', { method: 'POST', body: JSON.stringify({ kind: 'RENTAL', code: meta.rentalCode }) });
+        } else {
+          throw lookupErr;
+        }
+      }
       row = result?.rental;
       if (!row) throw new Error('Rental details not found.');
       if (model?.transactions) {
         const idx = model.transactions.findIndex(r => String(r.id) === String(row.id));
         if (idx !== -1) model.transactions[idx] = row;
         else model.transactions.push(row);
+      } else if (model) {
+        model.transactions = [row];
       }
       if (modal?.open) transactionDetails(row);
     } catch (err) {
+      if (meta?.rental) {
+        transactionDetails(meta.rental);
+        return;
+      }
       if (modal?.open) {
         showModal('Rental details', `<div class="transaction-record-modal"><div class="workspace-empty" style="padding:32px 16px;text-align:center"><p class="form-error" role="alert" style="margin-bottom:16px">${e(err.message || 'Could not load rental details.')}</p><button type="button" class="primary" data-retry-rental-open>Retry</button></div></div>`);
         modal.querySelector('[data-retry-rental-open]')?.addEventListener('click', () => openTransaction(id, meta));
       }
     }
   }
-  return { load, refresh, invalidate, prefetch, preloadPages, cancelPreload, syncIfNeeded, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: () => financeUI.cashDrawerForm(), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); viewModelCache.clear(); pendingLoads.clear(); modelKey = ''; model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; securityErrors = {}; securityAttempted = false; securityEpoch++; settingsTab = 'business'; businessSubTab = 'profile'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
+  return { load, refresh, invalidate, prefetch, preloadPages, cancelPreload, syncIfNeeded, render, bind, openTransaction, desk: workflow.desk, showHandoff: workflow.showHandoff, openHandoff: workflow.showHandoff, openWalkInRental: () => workflow.desk.bookingForm(), openQuickReturn: () => workflow.desk.chooseReturn(), openRentalLookup: () => workflow.desk.lookupForm('RENTAL'), openCashDrawer: expectedCash => financeUI.cashDrawerForm(expectedCash), openMaintenanceForUnit: (id, item) => maintenanceUI.reportForm(id, item), reportSection: () => reportView.section, setReportSection: section => { reportView.section = normalizeReportSection(section); }, refreshPendingHandoff: workflow.refreshPendingHandoff, autoRefreshEnabled: () => preferences.autoRefresh, business: () => model?.settings || {}, reset: () => { invalidate(); viewModelCache.clear(); pendingLoads.clear(); modelKey = ''; model = null; modelVersion = -1; businessDraft = null; businessDirty = false; businessSaving = false; preferencesDraft = null; activeSessions = null; securityAlerts = null; securityLoading = false; securityErrors = {}; securityAttempted = false; securityEpoch++; settingsTab = 'business'; businessSubTab = 'profile'; pages = {}; rankingPeriod = 'all'; search = ''; searchPage = ''; pageSearches = {}; customerUI.reset(); maintenanceUI.reset(); } };
 }

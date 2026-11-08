@@ -26,4 +26,38 @@ test('an empty database produces zero cards and empty lists rather than sample r
   assert.deepEqual(result.stats,{active:0,available:0,dueToday:0,overdue:0,fees:0});
   assert.deepEqual(result.rentals,[]);assert.deepEqual(result.items,[]);
   assert.deepEqual(result.revenue['This week'],[0,0,0,0,0,0,0]);
+  assert.deepEqual(result.collections,{
+    businessDay:'2026-09-15',
+    total:0,
+    cash:0,
+    qr:0,
+    refunds:0,
+    expenses:0,
+    netCollected:0,
+    netAfterExpenses:0,
+    cashNetMovement:0,
+    entryCount:0
+  });
+});
+test('loadDashboard exposes Manila business-day Cash vs QR collections and drawer movement',async()=>{
+  const {memoryFirestore}=await import('./support/memory-firestore.mjs');
+  const db=memoryFirestore({
+    financial_daily:{
+      '2026-09-14':{business_day:'2026-09-14',collections:900,cash_collections:900,qr_collections:0,entry_count:3},
+      '2026-09-15':{business_day:'2026-09-15',collections:1250,cash_collections:500,qr_collections:750,refunds:50,cash_refunds:50,expenses:120,cash_expenses:120,entry_count:4}
+    }
+  });
+  const result=await loadDashboard(db,new Date('2026-09-14T16:30:00Z')); // 2026-09-15 00:30 Manila
+  assert.deepEqual(result.collections,{
+    businessDay:'2026-09-15',
+    total:1250,
+    cash:500,
+    qr:750,
+    refunds:50,
+    expenses:120,
+    netCollected:1200,
+    netAfterExpenses:1080,
+    cashNetMovement:330,
+    entryCount:4
+  });
 });

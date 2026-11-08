@@ -21,9 +21,10 @@ Write-Host "================================================================" -F
 Write-Host "   RENT & PLAY — FINAL DEFENSE FAIL-SAFE LAUNCHER" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
-# 1. Detect Local IPv4 Address
+# 1. Detect Local IPv4 Address (prefer Wi-Fi / LAN over VMware / virtual adapters)
 $localIp = (Get-NetIPAddress -AddressFamily IPv4 |
-  Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet|WSL' -and $_.IPAddress -notlike '169.254.*' } |
+  Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet|WSL|VMware|VirtualBox' -and $_.IPAddress -notlike '169.254.*' } |
+  Sort-Object { if ($_.InterfaceAlias -match 'Wi-Fi') { 0 } else { 1 } } |
   Select-Object -First 1 -ExpandProperty IPAddress)
 if (-not $localIp) { $localIp = "127.0.0.1" }
 
@@ -43,7 +44,17 @@ try {
   Write-Host "  • Cloud health check timed out or offline — Local server below will act as fail-safe!" -ForegroundColor DarkYellow
 }
 
-# 3. Start Local Backend + Web Admin Server
+# 3. Ensure Web Bundle & Dependencies Exist Before Starting Server
+$webDistIndex = Join-Path $RepoRoot "apps\web\dist\index.html"
+$webModules = Join-Path $RepoRoot "apps\web\node_modules"
+$backendModules = Join-Path $RepoRoot "apps\backend\node_modules"
+if (-not (Test-Path $webDistIndex) -or -not (Test-Path $webModules) -or -not (Test-Path $backendModules)) {
+  Write-Host ""
+  Write-Host "[Prep] Installing dependencies and building Web Admin bundle..." -ForegroundColor Yellow
+  npm run build
+}
+
+# 4. Start Local Backend + Web Admin Server
 Write-Host ""
 Write-Host "[3/3] Starting Local Backend & Web Admin Server on Port 3000..." -ForegroundColor Yellow
 Write-Host "  (Press Ctrl+C to stop the server)" -ForegroundColor Gray

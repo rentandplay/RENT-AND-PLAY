@@ -7,7 +7,10 @@
     "node": ">=22"
   },
   "scripts": {
+    "install:all": "npm --prefix apps/web install && npm --prefix apps/backend install",
     "build": "npm --prefix apps/web install && npm --prefix apps/web run build && npm --prefix apps/backend install",
+    "check": "npm --prefix apps/web run check",
+    "test": "npm --prefix apps/web test && npm --prefix apps/backend test",
     "start": "node apps/backend/src/server.mjs"
   }
 }

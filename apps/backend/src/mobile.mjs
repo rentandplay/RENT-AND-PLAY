@@ -17,11 +17,23 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
   const userRef = db.collection('users').doc(String(claims.uid));
   const customerRef = db.collection('customers').doc(String(claims.uid));
   const customerSnap = await customerRef.get();
-  const customerCode = !customerSnap.exists ? await allocateCustomerCode(db, now) : null;
+  let matchedCustomerRef = customerRef;
+  let targetCustomerSnap = customerSnap;
+  if (!customerSnap.exists && claims.email) {
+    const matching = await db.collection('customers').where('email', '==', claims.email.toLowerCase()).get();
+    const matchDoc = matching.docs.find(d => !d.data()?.auth_uid || d.data()?.auth_uid === String(claims.uid));
+    if (matchDoc) {
+      matchedCustomerRef = matchDoc.ref;
+      targetCustomerSnap = matchDoc;
+    }
+  }
+  const customerCode = !targetCustomerSnap.exists ? await allocateCustomerCode(db, now) : null;
   const { profile, created, customerCreated } = await db.runTransaction(async tx => {
     const doc = await tx.get(userRef);
     const existing = doc.exists ? doc.data() : null;
-    if (!existing && claims.email_verified !== true) fail(403, 'Verify your email before creating an account.');
+    const isGoogleAccount = claims.firebase?.sign_in_provider === 'google.com' || Boolean(claims.firebase?.identities?.['google.com']);
+    const isVerified = claims.email_verified === true || isGoogleAccount;
+    if (!existing && !isVerified) fail(403, 'Verify your email before creating an account.');
     if (existing?.is_active === false) fail(403, 'Your account is inactive. Contact an administrator.');
     const existingRole = existing ? normalizeRole(existing.role) : 'CUSTOMER';
     if (existing && !existingRole) fail(403, 'This account has no supported app role. Contact the workspace owner.');
@@ -31,16 +43,30 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
     };
     if (!existing && input.name !== undefined) validationFailure(nameError(input.name));
     if (!existing && input.phone !== undefined) validationFailure(phoneError(input.phone, false));
-    const created = existing ? { ...existing, role: existingRole } : { full_name: clean(input.name || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name'), email: claims.email || '', phone: clean(input.phone || '', 40, 'phone'), role: 'CUSTOMER', is_active: true, hasAcceptedTerms: false, created_at: now };
+    const initialName = clean(input.name || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name');
+    const initialPhone = clean(input.phone || claims.phone_number || '', 40, 'phone');
+    const initialPhoto = input.profileImageUrl ? clean(input.profileImageUrl, 2048, 'profile image') : (claims.picture ? clean(claims.picture, 2048, 'profile image') : null);
+    const created = existing ? { ...existing, role: existingRole } : { full_name: initialName, email: claims.email || '', phone: initialPhone, profileImageUrl: initialPhoto, role: 'CUSTOMER', is_active: true, hasAcceptedTerms: false, created_at: now };
     const changes = {};
-    if (method === 'PATCH') {
+    if (method === 'PATCH' || method === 'POST') {
       if (input.notification_preferences !== undefined) {
         const prefs = input.notification_preferences;
         if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs) || Object.keys(prefs).some(key => !['push_enabled', 'return_reminders'].includes(key)) || Object.values(prefs).some(value => typeof value !== 'boolean')) fail(400, 'Choose valid notification preferences.');
         changes.notification_preferences = { push_enabled: true, return_reminders: true, ...existing?.notification_preferences, ...prefs };
       }
-      if (input.name !== undefined) { validationFailure(nameError(input.name)); changes.full_name = clean(input.name, 150, 'name'); changes.name = changes.full_name; }
-      if (input.phone !== undefined) { validationFailure(phoneError(input.phone, false)); changes.phone = clean(input.phone, 40, 'phone'); }
+      if (input.name !== undefined && input.name.trim()) {
+        validationFailure(nameError(input.name));
+        const newName = clean(input.name, 150, 'name');
+        if (!existing?.full_name || existing.full_name === 'Customer' || existing.full_name === claims.email?.split('@')[0] || method === 'PATCH') {
+          changes.full_name = newName;
+          changes.name = newName;
+        }
+      }
+      if (input.phone !== undefined && input.phone.trim()) {
+        validationFailure(phoneError(input.phone, false));
+        const newPhone = clean(input.phone, 40, 'phone');
+        if (!existing?.phone || method === 'PATCH') changes.phone = newPhone;
+      }
       if (input.hasAcknowledgedIdRequirement !== undefined) {
         if (typeof input.hasAcknowledgedIdRequirement !== 'boolean') fail(400, 'ID requirement acknowledgement must be true or false.');
         changes.hasAcknowledgedIdRequirement = input.hasAcknowledgedIdRequirement;
@@ -49,7 +75,11 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
         // never a claim that staff have already inspected the physical ID.
         changes.hasAcknowledgedIdRequirement = true;
       } else if (input.validIdUrl !== undefined) fail(400, 'Use the ID requirement acknowledgement field.');
-      if (input.profileImageUrl !== undefined) changes.profileImageUrl = clean(input.profileImageUrl, 2048, 'profile image');
+      if (input.profileImageUrl !== undefined) {
+        changes.profileImageUrl = clean(input.profileImageUrl, 2048, 'profile image');
+      } else if (!existing?.profileImageUrl && claims.picture) {
+        changes.profileImageUrl = clean(claims.picture, 2048, 'profile image');
+      }
     }
     if (method === 'PATCH' || (!existing && method === 'POST')) {
       if (input.hasAcceptedTerms !== undefined) {
@@ -62,21 +92,21 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
         changes.terms_version = input.termsVersion.trim();
       }
     }
-    if (method === 'PATCH' || (!existing && method === 'POST' && Object.keys(changes).length)) {
+    if (method === 'PATCH' || Object.keys(changes).length) {
       changes.updated_at = now;
     }
     let custCreated = false;
     const targetRole = existing ? existingRole : 'CUSTOMER';
     if (targetRole === 'CUSTOMER') {
-      const customerDoc = await tx.get(customerRef);
+      const customerDoc = await tx.get(matchedCustomerRef);
       if (!customerDoc.exists && customerCode) {
-        const full_name = (changes.full_name || created.full_name || claims.name || claims.email?.split('@')[0] || 'Customer').trim();
-        tx.create(customerRef, {
+        const full_name = (changes.full_name || created.full_name || clean(input.name || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name')).trim();
+        tx.create(matchedCustomerRef, {
           full_name,
           search_name: full_name.toLowerCase().replace(/\s+/g, ' '),
           customer_code: customerCode,
           email: claims.email || created.email || null,
-          phone: changes.phone || created.phone || null,
+          phone: changes.phone || created.phone || clean(input.phone || '', 40, 'phone') || null,
           address: null,
           auth_uid: String(claims.uid),
           is_active: true,
@@ -84,22 +114,55 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
           updated_at: now
         });
         custCreated = true;
-      } else if (customerDoc.exists && method === 'PATCH') {
+      } else if (customerDoc.exists) {
         const customerChanges = {};
-        if (changes.full_name !== undefined) { customerChanges.full_name = changes.full_name; customerChanges.search_name = changes.full_name.toLowerCase().replace(/\s+/g,' '); }
-        if (changes.phone !== undefined) customerChanges.phone = changes.phone || null;
+        if (!customerDoc.data()?.auth_uid) customerChanges.auth_uid = String(claims.uid);
+        if (changes.full_name !== undefined) {
+          customerChanges.full_name = changes.full_name;
+          customerChanges.search_name = changes.full_name.toLowerCase().replace(/\s+/g, ' ');
+        } else if (input.name && (customerDoc.data()?.full_name === 'Customer' || customerDoc.data()?.full_name === claims.email?.split('@')[0])) {
+          const newName = clean(input.name, 150, 'name');
+          customerChanges.full_name = newName;
+          customerChanges.search_name = newName.toLowerCase().replace(/\s+/g, ' ');
+        }
+        if (changes.phone !== undefined) {
+          customerChanges.phone = changes.phone || null;
+        } else if (input.phone && !customerDoc.data()?.phone) {
+          customerChanges.phone = clean(input.phone, 40, 'phone');
+        }
         if (Object.keys(customerChanges).length) {
           customerChanges.updated_at = now;
-          tx.update(customerRef, customerChanges);
+          tx.update(matchedCustomerRef, customerChanges);
         }
       }
     }
     if (!existing) tx.create(userRef, { ...created, ...changes });
-    else if (method === 'PATCH') tx.update(userRef, changes);
+    else if (Object.keys(changes).length) tx.update(userRef, changes);
     return { profile: { ...created, ...changes }, created: !existing, customerCreated: custCreated };
   });
-  if (created || customerCreated || method === 'PATCH') onWrite(method === 'PATCH' || customerCreated ? ['users', 'customers'] : ['users']);
-  return { user: serializeMobile({ id: claims.uid, uid: claims.uid, name: profile.full_name || profile.name || '', full_name: profile.full_name || profile.name || '', email: profile.email || claims.email || '', phone: profile.phone || '', role: normalizeRole(profile.role) || 'CUSTOMER', notification_preferences: { push_enabled: true, return_reminders: true, ...profile.notification_preferences }, mustChangePassword: profile.must_change_password === true, is_active: profile.is_active !== false, hasAcknowledgedIdRequirement: profile.hasAcknowledgedIdRequirement ?? Boolean(profile.validIdUrl || profile.valid_id_url), profileImageUrl: profile.profileImageUrl || null, hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false, createdAt: profile.created_at || profile.createdAt || null }) };
+  if (created || customerCreated || method === 'PATCH' || (method === 'POST' && (created || customerCreated || Object.keys(changes).length))) {
+    onWrite(['users', 'customers']);
+  }
+  return {
+    user: serializeMobile({
+      id: claims.uid,
+      uid: claims.uid,
+      name: profile.full_name || profile.name || '',
+      full_name: profile.full_name || profile.name || '',
+      email: profile.email || claims.email || '',
+      phone: profile.phone || '',
+      role: normalizeRole(profile.role) || 'CUSTOMER',
+      notification_preferences: { push_enabled: true, return_reminders: true, ...profile.notification_preferences },
+      mustChangePassword: profile.must_change_password === true,
+      is_active: profile.is_active !== false,
+      hasAcknowledgedIdRequirement: profile.hasAcknowledgedIdRequirement ?? Boolean(profile.validIdUrl || profile.valid_id_url),
+      profileImageUrl: profile.profileImageUrl || null,
+      hasAcceptedTerms: profile.hasAcceptedTerms ?? profile.has_accepted_terms ?? false,
+      createdAt: profile.created_at || profile.createdAt || null
+    }),
+    created,
+    customerCreated
+  };
 }
 
 // Only configured equipment belongs in the customer catalog; admin inventory retains all records.

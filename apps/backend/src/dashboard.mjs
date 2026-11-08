@@ -40,9 +40,11 @@ export async function loadAnalyticsSummary(db, now = new Date()) {
   return { confirmed_fees: confirmedFees, confirmed_rentals: confirmedRentals, active_count: activeCount, total_catalog: itemSnapshot.size, refreshedAt: now.toISOString() };
 }
 
+const roundMoney=value=>Math.round(Number(value||0)*100)/100;
 export async function loadDashboard(db,now=new Date()) {
+  const today=dateKey(now);
   const names=['items','item_categories','item_rates','customers','rentals','verification_requests','terminals'];
-  const snapshots=await Promise.all(names.map(name=>name==='customers'?Promise.resolve({docs:[]}):name==='rentals'?db.collection(name).where('status','in',OPEN_RENTALS).get():db.collection(name).get()));
+  const [todayFinancialDoc,...snapshots]=await Promise.all([db.collection('financial_daily').doc(today).get(),...names.map(name=>name==='customers'?Promise.resolve({docs:[]}):name==='rentals'?db.collection(name).where('status','in',OPEN_RENTALS).get():db.collection(name).get())]);
   const source=Object.fromEntries(names.map((name,index)=>[name,rows(snapshots[index])]));
   source.customers=(await Promise.all([...new Set(source.rentals.map(rental=>rental.customer_id).filter(Boolean))].map(id=>db.collection('customers').doc(String(id)).get()))).filter(doc=>doc.exists).map(docData);
   const daily=await rentalDailySummary(db,dateKey(new Date(now.getTime()-14*86400000)),dateKey(now));
@@ -70,15 +72,35 @@ export async function loadDashboard(db,now=new Date()) {
     const item=itemsById.get(String(rental.item_id))||{};
     const customer=customersById.get(String(rental.customer_id))||{};
     const terminal=terminalsById.get(String(request.terminal_id))||{};
-    return {...request,terminal_code:terminal.terminal_code||'',item_code:item.item_code||'',item_name:item.name||'Unknown equipment',customer:customer.full_name||'Unknown customer'};
+    return {...request,rental_code:rental.rental_code||request.rental_code||'',terminal_code:terminal.terminal_code||'',item_code:item.item_code||'',item_name:item.name||'Unknown equipment',customer:customer.full_name||'Unknown customer'};
   }).sort((a,b)=>asDate(a.requested_at)-asDate(b.requested_at));
   const terminals=source.terminals.filter(terminal=>terminal.is_active!==false).map(terminal=>({...publicTerminal(terminal),online:terminal.status==='ONLINE'&&!!terminal.last_seen_at&&now-asDate(terminal.last_seen_at)<60000}));
   const active=rentals.filter(rental=>rental.status==='ACTIVE');
   const categories=source.item_categories.map(category=>({name:category.name,count:items.filter(item=>String(item.category_id)===category.id).length})).sort((a,b)=>a.name.localeCompare(b.name));
   const serialize=serializeTransaction;
+  const todayFinancial=todayFinancialDoc?.exists?todayFinancialDoc.data()||{}:{};
+  const cashCollections=roundMoney(todayFinancial.cash_collections);
+  const qrCollections=roundMoney(todayFinancial.qr_collections);
+  const totalCollections=roundMoney(todayFinancial.collections??(cashCollections+qrCollections));
+  const refunds=roundMoney(todayFinancial.refunds);
+  const expenses=roundMoney(todayFinancial.expenses);
+  const cashRefunds=roundMoney(todayFinancial.cash_refunds);
+  const cashExpenses=roundMoney(todayFinancial.cash_expenses);
+  const collections={
+    businessDay:today,
+    total:totalCollections,
+    cash:cashCollections,
+    qr:qrCollections,
+    refunds,
+    expenses,
+    netCollected:roundMoney(totalCollections-refunds),
+    netAfterExpenses:roundMoney(totalCollections-refunds-expenses),
+    cashNetMovement:roundMoney(cashCollections-cashRefunds-cashExpenses),
+    entryCount:Number(todayFinancial.entry_count||0)
+  };
   return {
     items:items.map(serialize),customers:source.customers.filter(c=>c.is_active!==false).sort((a,b)=>a.full_name.localeCompare(b.full_name)).map(serialize),categories,
-    rentals:rentals.map(serialize),pending:pending.map(serialize),terminals:terminals.map(serialize),revenue,
+    rentals:rentals.map(serialize),pending:pending.map(serialize),terminals:terminals.map(serialize),revenue,collections,
     stats:{active:active.length,available:items.filter(item=>item.status==='AVAILABLE'&&!reserved.has(item.id)).length,dueToday:active.filter(r=>rentalStatus(r,now)==='Due today').length,overdue:rentals.filter(r=>r.displayStatus==='Overdue').length,fees:active.reduce((total,r)=>total+Number(r.rental_fee||0),0)},
     refreshedAt:now.toISOString()
   };

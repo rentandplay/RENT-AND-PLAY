@@ -2,6 +2,8 @@ import { getMx10Printer, renderLabelPng, normalizeMx10PrintSettings, normalizeMx
 import { createEquipmentQrLabel as qrLabelSvg, QR_LABEL_GEOMETRY as qrLabelGeometry } from './equipment-label.js';
 import { groupInventory, stockMatchesStatus, stockMatchesSearch, inventoryStockCounts } from './inventory-stock.js';
 
+import { formatExcelCsvCell } from './date-time.js';
+
 const printer = getMx10Printer();
 
 const archiveUnavailableReason = item => {
@@ -196,9 +198,25 @@ export function createInventory(h) {
     }
   }
   function exportInventory() {
-    const cell = value => '"' + (/^[=+@\-\t\r]/.test(String(value || '')) ? "'" : '') + String(value ?? '').replaceAll('"', '""') + '"';
-    const rows = [['Unit codes', 'Equipment', 'Category', 'Available stock', 'Total stock', 'Archived units', 'Status', 'Condition', 'Rate basis', 'Rental rate', 'Late penalty'], ...filtered().map(item => [item.visible_units.map(unit => unit.item_code).join(' / '), item.name, item.category, item.available_quantity, item.total_quantity, item.archived_quantity, label(item.effective_status), label(item.condition_status), displayRateUnit(item), displayRateAmount(item), displayLatePenalty(item)])];
-    download('\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n'), 'text/csv;charset=utf-8', 'rent-play-inventory.csv');
+    const num = v => typeof v === 'number' && Number.isFinite(v) ? v : (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : '');
+    const rows = [
+      ['Unit codes', 'Equipment', 'Category', 'Available stock', 'Total stock', 'Archived units', 'Status', 'Condition', 'Rate basis', 'Rental rate (PHP)', 'Late penalty per hour (PHP)', 'Replacement cost (PHP)'],
+      ...filtered().map(item => [
+        item.visible_units.map(unit => unit.item_code).join(' / '),
+        item.name,
+        item.category,
+        item.available_quantity,
+        item.total_quantity,
+        item.archived_quantity,
+        label(item.effective_status),
+        label(item.condition_status),
+        displayRateUnit(item),
+        num(displayRateAmount(item)),
+        num(displayLatePenalty(item)),
+        num(item.replacement_cost ?? 0)
+      ])
+    ];
+    download('\uFEFF' + rows.map(row => row.map(formatExcelCsvCell).join(',')).join('\r\n'), 'text/csv;charset=utf-8', 'rent-play-inventory.csv');
     toast('Filtered inventory exported.');
   }
   function draw() {

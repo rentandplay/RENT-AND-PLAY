@@ -477,7 +477,8 @@ export function createRentalDesk(h) {
     }, { confirm: false });
   }
   function receiveForm(id, reject = false) {
-    const row = getModel().transactions.find(row => String(row.id) === String(id));
+    const transactions = Array.isArray(getModel()?.transactions) ? getModel().transactions : [];
+    const row = transactions.find(row => String(row.id) === String(id) || String(row.rental_code) === String(id));
     if (!row) { toast('Refresh the rental record first.'); return; }
     if (row.status === 'RETURN_PENDING_INSPECTION') { completeReturnForm(row); return; }
     if (reject) {

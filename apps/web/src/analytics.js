@@ -1,3 +1,5 @@
+import { formatPhilippineDateTime, formatExcelCsvCell } from './date-time.js';
+
 const DAY=86400000,HOUR=3600000;
 const manilaFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'});
 const labelFormatter=new Intl.DateTimeFormat('en-PH',{timeZone:'UTC',month:'short',day:'numeric'});
@@ -322,8 +324,8 @@ export function analyticsCsv(result,data,selection={}) {
     ['TERMINAL VERIFICATION'],['Terminal','Code','Confirmations','Average seconds','Median seconds','P95 seconds'],...result.terminalPerformance.map(row=>[row.name,row.code,row.count,number(row.averageSeconds),number(row.medianSeconds),number(row.p95Seconds)]),[],
     ['DATA COVERAGE'],...result.quality.map(row=>[row.count,row.text]),['Linked confirmation timestamps',result.linkedConfirmationTimes],[],
     ['CONFIRMED RENTALS'],['Rental code','Equipment','Customer','Confirmed rental','Status','Rental fee','Due','Returned'],
-    ...result.confirmed.map(row=>[row.rental_code||row.id,row.item_name||(data.items||[]).find(item=>String(item.id)===String(row.item_id))?.name||'Unknown equipment',row.customer_name||'',row.confirmed_rental_at,row.status,row.rental_fee,row.due_at,row.confirmed_return_at])
+    ...result.confirmed.map(row=>[row.rental_code||row.id,row.item_name||(data.items||[]).find(item=>String(item.id)===String(row.item_id))?.name||'Unknown equipment',row.customer_name||'',formatPhilippineDateTime(row.confirmed_rental_at),row.status,row.rental_fee,formatPhilippineDateTime(row.due_at),formatPhilippineDateTime(row.confirmed_return_at)])
   ];
-  const cell=value=>{const text=String(value??''),safe=/^[\s]*[=+@-]|^[\t\r\n]/.test(text)?"'"+text:text;return '"'+safe.replaceAll('"','""')+'"';};
+  const cell = formatExcelCsvCell;
   return '\uFEFF'+rows.map(row=>row.map(cell).join(',')).join('\r\n');
 }

@@ -1,4 +1,4 @@
-import React, { useState } from './react-shim.js';
+import React, { useState, useEffect, useLayoutEffect, useRef } from './react-shim.js';
 import {
   Icon,
   CategorySymbol,
@@ -10,6 +10,56 @@ import {
   formatDate,
   badge
 } from './icons.jsx';
+
+// Motion is skipped for users who request reduced motion and in non-browser renders.
+const prefersReducedMotion = () => {
+  try {
+    return typeof window === 'undefined' || typeof window.matchMedia !== 'function' ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return true;
+  }
+};
+const useClientLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect;
+
+/**
+ * Renders the final value on first paint (static markup and screen readers stay exact),
+ * then eases from the previously displayed value whenever the number changes.
+ */
+export function CountUp({ value, format = v => String(Math.round(v)), duration = 900 }) {
+  const target = Number(value) || 0;
+  const [display, setDisplay] = useState(target);
+  const shownRef = useRef(0);
+  useClientLayoutEffect(() => {
+    const from = shownRef.current;
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+    if (from === target || !raf || prefersReducedMotion()) {
+      shownRef.current = target;
+      setDisplay(target);
+      return undefined;
+    }
+    const startedAt = performance.now();
+    let frame = 0;
+    const tick = () => {
+      const progress = Math.min(1, (performance.now() - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 4);
+      const next = progress >= 1 ? target : Math.round(from + (target - from) * eased);
+      shownRef.current = next;
+      setDisplay(next);
+      if (progress < 1) frame = raf(tick);
+    };
+    setDisplay(from);
+    frame = raf(tick);
+    return () => {
+      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+    };
+  }, [target, duration]);
+  return <span className="count-up">{format(display)}</span>;
+}
+
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+// Monday-based weekday index in Philippine time (UTC+8).
+const manilaWeekdayIndex = () => (new Date(Date.now() + 8 * 3600000).getUTCDay() + 6) % 7;
 
 function StatCard({ label, value, note, glyph, color, page, target = '', filter = '', onNavigate }) {
   const handleClick = e => {
@@ -38,7 +88,10 @@ function StatCard({ label, value, note, glyph, color, page, target = '', filter 
           <Icon name={glyph} />
         </span>
       </div>
-      <strong>{value}</strong>
+      <strong>
+        <CountUp value={value} />
+        {color === 'red' && Number(value) > 0 ? <span className="stat-pulse" aria-hidden="true" /> : null}
+      </strong>
       <small>{note}</small>
     </button>
   );
@@ -74,6 +127,60 @@ function getDueInfo(r) {
   return { badge: 'Philippine time', isOverdue: false, isDueSoon: false };
 }
 
+export function TerminalPendingBanner({ data, workspaceUI, onNavigate }) {
+  if (!data) return null;
+  const pendingList = Array.isArray(data.pending) ? data.pending : [];
+  const primaryTerminal = Array.isArray(data.terminals) ? data.terminals[0] : null;
+  const terminalQueue = primaryTerminal
+    ? pendingList.filter(p => p.terminal_code === primaryTerminal.terminal_code)
+    : [];
+  const activeQueue = terminalQueue.length > 0 ? terminalQueue : pendingList;
+  const firstPending = activeQueue[0];
+  if (!activeQueue.length || !firstPending) return null;
+
+  return (
+    <aside className="terminal-live-action-banner" role="alert">
+      <div className="terminal-banner-pulse" aria-hidden="true">
+        <span className="pulse-ring" />
+        <Icon name="chip" />
+      </div>
+      <div className="terminal-banner-body">
+        <div className="terminal-banner-badge-row">
+          <span className="terminal-banner-badge">Terminal confirmation needed</span>
+          <span className="terminal-queue-count">{activeQueue.length} pending</span>
+        </div>
+        <strong>
+          {firstPending.item_name || 'Equipment'} &middot; {firstPending.customer || 'Customer'}
+        </strong>
+        <p>
+          Code: <code>{firstPending.rental_code || firstPending.verification_code || firstPending.id}</code> &middot;{' '}
+          Terminal: <strong>{firstPending.terminal_code || primaryTerminal?.terminal_code || 'TERM-01'}</strong> &middot;{' '}
+          Review the request, then press the terminal button to confirm.
+        </p>
+      </div>
+      <div className="terminal-banner-actions">
+        <button
+          type="button"
+          className="primary btn-open-terminal-gate"
+          onClick={() => {
+            const openDialog = workspaceUI?.showHandoff || workspaceUI?.openHandoff;
+            if (openDialog) {
+              const matchedRental = Array.isArray(data.rentals)
+                ? data.rentals.find(r => String(r.id) === String(firstPending.rental_id))
+                : undefined;
+              openDialog(firstPending, matchedRental);
+            } else {
+              onNavigate?.('ESP32 terminal');
+            }
+          }}
+        >
+          Review request →
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 export function DashboardView({
   data,
   filter,
@@ -91,6 +198,8 @@ export function DashboardView({
   toast
 }) {
   const [selectedDay, setSelectedDay] = useState(null);
+  const [hoverDay, setHoverDay] = useState(null);
+  const chartRef = useRef(null);
   const [testingTerminal, setTestingTerminal] = useState(false);
   const s = data.stats;
   const pageSize = 5;
@@ -104,19 +213,114 @@ export function DashboardView({
   const start = clampedPage * pageSize;
   const rows = allRows.slice(start, start + pageSize);
 
+  // Short analytics metrics
+  const totalActive = Number(s?.active || 0);
+  const totalAvailable = Number(s?.available || 0);
+  const totalUnits = totalActive + totalAvailable || (Array.isArray(data.items) ? data.items.length : 0) || 1;
+  const utilizationRate = Math.min(100, Math.round((totalActive / Math.max(1, totalUnits)) * 100));
+
+  const allRentalsList = Array.isArray(data.rentals) ? data.rentals : [];
+  const resortCount = allRentalsList.filter(
+    r => r.fulfillment_mode === 'DELIVERY' || Boolean(r.delivery_location)
+  ).length;
+  const counterCount = Math.max(0, totalActive - resortCount);
+  const resortShare = totalActive > 0 ? Math.round((resortCount / totalActive) * 100) : 50;
+  const counterShare = totalActive > 0 ? 100 - resortShare : 50;
+
+  const thisWeekRevenue = Array.isArray(data.revenue?.['This week'])
+    ? data.revenue['This week'].reduce((sum, n) => sum + Number(n || 0), 0)
+    : 0;
+  const lastWeekRevenue = Array.isArray(data.revenue?.['Last week'])
+    ? data.revenue['Last week'].reduce((sum, n) => sum + Number(n || 0), 0)
+    : 0;
+  const pulseDelta = lastWeekRevenue > 0
+    ? Math.round(((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue) * 100)
+    : (thisWeekRevenue > 0 ? 100 : 0);
+  const pulseDeltaText = lastWeekRevenue > 0
+    ? `${pulseDelta >= 0 ? '▲' : '▼'} ${Math.abs(pulseDelta)}% vs last wk`
+    : thisWeekRevenue > 0
+      ? '▲ Active momentum'
+      : 'Paced on track';
+
+  const overdueCount = Number(s?.overdue || 0);
+
   const openRental = id => {
     const r = data.rentals.find(item => String(item.id) === String(id));
     if (!r) return;
+    const enrichedRental = {
+      ...r,
+      customer_name: r.customer_name || r.customer
+    };
+    if (workspaceUI?.openTransaction) {
+      workspaceUI.openTransaction(id, { rentalCode: r.rental_code, rental: enrichedRental });
+      return;
+    }
+    const dueInfo = getDueInfo(r);
+    const overdueLabel = dueInfo.isOverdue
+      ? `Overdue by ${Math.max(1, Math.ceil((Date.now() - new Date(r.due_at).getTime()) / 3600000))}h`
+      : '';
     showModal(
       'Rental details',
-      `<div class="detail-header"><div><h3>${escape(r.item_name)}</h3><p>${escape(r.rental_code)}</p></div>${badge(
-        r.displayStatus
-      )}</div><dl><dt>Customer</dt><dd>${escape(r.customer)}</dd><dt>Due</dt><dd>${escape(
-        formatDate(r.due_at)
-      )}</dd><dt>Rental fee</dt><dd>${money(r.rental_fee)}</dd><dt>Rental confirmed</dt><dd>${escape(
-        formatDate(r.confirmed_rental_at)
-      )}</dd></dl><div class="info-box">Use Returns to record physical receipt and inspect the unit. Physical receipt stops the timer; completing inspection updates availability or maintenance.</div>`
+      `<div class="transaction-record-modal">
+        <div class="transaction-detail-overview">
+          <div class="transaction-detail-head">
+            <div>
+              <span class="eyebrow">${escape(r.rental_code || 'RENTAL')}</span>
+              <h3>${escape(r.item_name || 'Equipment')}</h3>
+              <p>Assigned unit &middot; ${escape(r.item_code || 'Standard unit')}</p>
+            </div>
+            ${badge(r.displayStatus)}
+          </div>
+          <div class="transaction-detail-grid">
+            <div>
+              <small>Customer</small>
+              <strong>${escape(r.customer || 'Unknown customer')}</strong>
+            </div>
+            <div>
+              <small>Due time</small>
+              <strong>${escape(formatDate(r.due_at))}${overdueLabel ? `<small class="due-overdue-alert" style="display:block;margin-top:2px">${escape(overdueLabel)}</small>` : ''}</strong>
+            </div>
+          </div>
+        </div>
+        <div class="transaction-detail-scroll">
+          <section class="record-section record-fees">
+            <h3>Rental overview</h3>
+            <dl class="record-fields">
+              <div><dt>Rental fee</dt><dd><strong>${money(r.rental_fee)}</strong></dd></div>
+              <div><dt>Rental confirmed</dt><dd>${escape(formatDate(r.confirmed_rental_at))}</dd></div>
+              <div><dt>Fulfillment</dt><dd>${escape(r.delivery_location || (r.fulfillment_mode === 'DELIVERY' ? 'Resort delivery' : 'Store pickup counter'))}</dd></div>
+              <div><dt>Status</dt><dd>${escape(r.displayStatus || r.status || 'Active')}</dd></div>
+            </dl>
+          </section>
+          <div class="info-box" style="margin-top:16px">Use Returns to record physical receipt and inspect the unit. Physical receipt stops the timer; completing inspection updates availability or maintenance.</div>
+        </div>
+        <footer class="transaction-detail-footer">
+          <div class="transaction-footer-copy">
+            <strong>${['ACTIVE', 'RETURN_PENDING_INSPECTION'].includes(r.status) || r.displayStatus === 'Overdue' ? 'Receive returned equipment' : 'Rental record'}</strong>
+            <small>Physical receipt stops the rental clock.</small>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="secondary" data-dashboard-nav-rentals>View in transactions</button>
+            <button type="button" class="primary" data-dashboard-return-action>Receive equipment</button>
+          </div>
+        </footer>
+      </div>`
     );
+    const modalEl = document.querySelector('dialog[open]');
+    if (modalEl) {
+      modalEl.querySelector('[data-dashboard-nav-rentals]')?.addEventListener('click', () => {
+        modalEl.close?.();
+        onNavigate('Rentals');
+      });
+      modalEl.querySelector('[data-dashboard-return-action]')?.addEventListener('click', () => {
+        modalEl.close?.();
+        if (workspaceUI?.openQuickReturn) {
+          workspaceUI.openQuickReturn();
+        } else {
+          onNavigate('Returns');
+        }
+      });
+    }
   };
 
   const openWorkflowModal = () => {
@@ -145,17 +349,66 @@ export function DashboardView({
 
   // Revenue chart calculations
   const amounts = data.revenue[period] || [0, 0, 0, 0, 0, 0, 0];
-  const max = Math.max(100, ...amounts);
+  const compareKey = period === 'This week' ? 'Last week' : null;
+  const compare = compareKey ? data.revenue[compareKey] || [] : [];
+  const sum = list => list.reduce((a, b) => a + (Number(b) || 0), 0);
+  const total = sum(amounts);
+  const compareTotal = sum(compare);
+  const delta = compareKey && compareTotal > 0 ? Math.round(((total - compareTotal) / compareTotal) * 100) : null;
+  const max = Math.max(100, ...amounts, ...compare.map(v => Number(v) || 0));
   const scale = Math.ceil(max / 100) * 100;
+  const peak = Math.max(...amounts);
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const todayIndex = period === 'This week' ? manilaWeekdayIndex() : -1;
+  const average = total / (todayIndex >= 0 ? todayIndex + 1 : 7);
+  const pct = value => Math.max(0, Math.min(100, ((Number(value) || 0) / scale) * 100));
+  const activeDay = hoverDay ?? selectedDay;
+
+  const focusBar = index => {
+    setSelectedDay(index);
+    chartRef.current?.querySelector(`[data-day="${index}"]`)?.focus();
+  };
+  const handleBarKeyDown = (event, index) => {
+    const moves = { ArrowRight: (index + 1) % 7, ArrowLeft: (index + 6) % 7, Home: 0, End: 6 };
+    if (event.key === 'Escape') {
+      setSelectedDay(null);
+      setHoverDay(null);
+      return;
+    }
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    focusBar(moves[event.key]);
+  };
+
+  // Soft spotlight that follows the pointer across cards.
+  const handleSpotlight = event => {
+    const card = event.target.closest?.('.stat, .command-bar-btn');
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    card.style.setProperty('--mx', `${event.clientX - rect.left}px`);
+    card.style.setProperty('--my', `${event.clientY - rect.top}px`);
+  };
 
   // Terminal info
   const t = data.terminals[0];
   const queue = t ? data.pending.filter(p => p.terminal_code === t.terminal_code) : [];
-  const firstPending = queue[0] || data.pending?.[0];
+
+  // Today's actual collections (Cash vs. GCash/InstaPay QR)
+  const collections = data.collections || {};
+  const todayTotal = Number(collections.total || 0);
+  const todayCash = Number(collections.cash || 0);
+  const todayQr = Number(collections.qr || 0);
+  const todayRefunds = Number(collections.refunds || 0);
+  const todayExpenses = Number(collections.expenses || 0);
+  const todayCashNet = Number(collections.cashNetMovement ?? todayCash);
+  const todayNetAfterExpenses = Number(
+    collections.netAfterExpenses ?? todayTotal - todayRefunds - todayExpenses
+  );
+  const cashShare = todayTotal > 0 ? Math.round((todayCash / todayTotal) * 100) : 0;
+  const qrShare = todayTotal > 0 ? Math.max(0, 100 - cashShare) : 0;
 
   return (
-    <div className="dashboard-workspace">
+    <div className="dashboard-workspace" onPointerMove={handleSpotlight}>
       {/* 1. Counter Command Bar */}
       <section className="counter-command-bar" role="toolbar" aria-label="Counter command actions">
         <button
@@ -219,43 +472,7 @@ export function DashboardView({
       </section>
 
       {/* 2. Real-Time ESP32 Pending Verification Banner */}
-      {queue.length > 0 && firstPending ? (
-        <aside className="terminal-live-action-banner" role="alert">
-          <div className="terminal-banner-pulse" aria-hidden="true">
-            <span className="pulse-ring" />
-            <Icon name="chip" />
-          </div>
-          <div className="terminal-banner-body">
-            <div className="terminal-banner-badge-row">
-              <span className="terminal-banner-badge">Terminal confirmation needed</span>
-              <span className="terminal-queue-count">{queue.length} pending</span>
-            </div>
-            <strong>
-              {firstPending.item_name || 'Equipment'} &middot; {firstPending.customer || 'Customer'}
-            </strong>
-            <p>
-              Code: <code>{firstPending.rental_code || firstPending.verification_code || firstPending.id}</code> &middot;
-              Terminal: <strong>{firstPending.terminal_code || 'TERM-01'}</strong> &middot;
-              Review the request, then press the terminal button to confirm.
-            </p>
-          </div>
-          <div className="terminal-banner-actions">
-            <button
-              type="button"
-              className="primary btn-open-terminal-gate"
-              onClick={() => {
-                if (workspaceUI?.openHandoff) {
-                  workspaceUI.openHandoff(firstPending, data.rentals.find(r => String(r.id) === String(firstPending.rental_id)));
-                } else {
-                  onNavigate('ESP32 terminal');
-                }
-              }}
-            >
-              Review request →
-            </button>
-          </div>
-        </aside>
-      ) : null}
+      <TerminalPendingBanner data={data} workspaceUI={workspaceUI} onNavigate={onNavigate} />
 
       <div className="stats">
         <StatCard
@@ -301,7 +518,6 @@ export function DashboardView({
       </div>
 
       <div className="dashboard-grid">
-        <div className="main-column">
           <section className="panel rental-panel" id="rental-panel">
             <div className="panel-title">
               <div>
@@ -479,6 +695,89 @@ export function DashboardView({
             </div>
           </section>
 
+          <section className="panel collections-panel" aria-label="Today's collections">
+            <div className="panel-title">
+              <div>
+                <h3>
+                  <Icon name="money" /> Today&rsquo;s collections
+                </h3>
+                <p>Confirmed receipts today &middot; Philippine time</p>
+              </div>
+            </div>
+            <div className="collections-hero">
+              <strong><CountUp value={todayTotal} format={money} /></strong>
+              <span>
+                {collections.entryCount
+                  ? `${collections.entryCount} ledger ${collections.entryCount === 1 ? 'entry' : 'entries'} today`
+                  : 'No dated receipts yet today'}
+              </span>
+            </div>
+            <div
+              className="collections-split-bar"
+              role="img"
+              aria-label={`Cash ${cashShare}% (${money(todayCash)}), GCash and InstaPay QR ${qrShare}% (${money(todayQr)})`}
+            >
+              <span
+                className="collections-split-cash"
+                style={{ width: `${todayTotal > 0 ? Math.max(cashShare, todayCash > 0 ? 6 : 0) : 50}%` }}
+              />
+              <span
+                className="collections-split-qr"
+                style={{ width: `${todayTotal > 0 ? Math.max(qrShare, todayQr > 0 ? 6 : 0) : 50}%` }}
+              />
+            </div>
+            <dl className="collections-breakdown">
+              <div className="collections-method-row">
+                <dt>
+                  <span className="collections-dot cash" aria-hidden="true" />
+                  Cash in person
+                </dt>
+                <dd>{money(todayCash)}</dd>
+              </div>
+              <div className="collections-method-row">
+                <dt>
+                  <span className="collections-dot qr" aria-hidden="true" />
+                  GCash / InstaPay QR
+                </dt>
+                <dd>{money(todayQr)}</dd>
+              </div>
+              <div className="collections-method-row net">
+                <dt>Drawer cash movement</dt>
+                <dd>{money(todayCashNet)}</dd>
+              </div>
+              {todayRefunds > 0 || todayExpenses > 0 ? (
+                <div className="collections-method-row subtle">
+                  <dt>After refunds &amp; expenses</dt>
+                  <dd>{money(todayNetAfterExpenses)}</dd>
+                </div>
+              ) : null}
+            </dl>
+            <div className="dashboard-terminal-actions">
+              <button
+                type="button"
+                className="secondary"
+                id="cmd-cash-drawer"
+                onClick={() => {
+                  if (workspaceUI?.openCashDrawer) {
+                    workspaceUI.openCashDrawer(todayCashNet);
+                  } else {
+                    onNavigate('Payments');
+                  }
+                }}
+              >
+                Cash drawer (Z-Reading)
+              </button>
+            </div>
+            <button
+              type="button"
+              className="secondary wide"
+              data-page="Payments"
+              onClick={() => onNavigate('Payments')}
+            >
+              Open payments <Icon name="arrow" />
+            </button>
+          </section>
+
           <section className="panel revenue-panel">
             <div className="panel-title">
               <div>
@@ -505,42 +804,255 @@ export function DashboardView({
               </div>
             </div>
             <div className="revenue-total">
-              {money(amounts.reduce((a, b) => a + b, 0))}
+              <CountUp value={total} format={money} />
               <span>Recorded rental charges</span>
+              {delta !== null ? (
+                <em className={`revenue-delta ${delta >= 0 ? 'up' : 'down'}`}>
+                  {delta >= 0 ? '▲' : '▼'} {Math.abs(delta)}% vs last week
+                </em>
+              ) : null}
             </div>
-            <div className="chart">
+            <div className="chart-legend" aria-hidden="true">
+              <span><i className="swatch current" />{period}</span>
+              {compareKey ? <span><i className="swatch previous" />{compareKey}</span> : null}
+              {average > 0 ? <span><i className="swatch average" />Daily average</span> : null}
+            </div>
+            <div className="chart" ref={chartRef} onMouseLeave={() => setHoverDay(null)}>
               <div className="axis">
                 {[1, 0.75, 0.5, 0.25, 0].map(x => (
                   <span key={x}>{money(scale * x)}</span>
                 ))}
               </div>
-              <div className="bars">
-                {amounts.map((amount, i) => (
-                  <div className="bar-column" key={days[i]}>
-                    <button
-                      type="button"
-                      className={`bar ${amount === max ? 'highlight' : ''}`}
-                      style={{ height: '100%' }}
-                      title={`${days[i]}: ${money(amount)}`}
-                      aria-label={`${days[i]}: ${money(amount)} in rental fees`}
-                      aria-pressed={selectedDay === i}
-                      onClick={() => setSelectedDay(i)}
-                    ><span className="dashboard-bar-fill" style={{ height: `${Math.max(2, (amount / scale) * 100)}%` }} /></button>
-                    <span>{days[i]}</span>
+              <div className="bars" role="group" aria-label="Rental fees by day. Use the arrow keys to move between days.">
+                <div className="chart-gridlines" aria-hidden="true">
+                  {[0, 0.25, 0.5, 0.75, 1].map(x => <span key={x} style={{ bottom: `${x * 100}%` }} />)}
+                </div>
+                {average > 0 ? (
+                  <div className="chart-avg-line" style={{ bottom: `${pct(average)}%` }} aria-hidden="true">
+                    <span>Avg {money(Math.round(average))}</span>
                   </div>
-                ))}
+                ) : null}
+                {amounts.map((amount, i) => {
+                  const columnClass = [
+                    'bar-column',
+                    i === 0 ? 'is-first' : '',
+                    i === 6 ? 'is-last' : '',
+                    i === todayIndex ? 'is-today' : '',
+                    todayIndex >= 0 && i > todayIndex ? 'is-future' : '',
+                    activeDay === i ? 'is-active' : ''
+                  ].filter(Boolean).join(' ');
+                  return (
+                    <div className={columnClass} key={days[i]} style={{ '--i': i }}>
+                      <button
+                        type="button"
+                        className={`bar ${amount === peak && peak > 0 ? 'highlight' : ''}`}
+                        style={{ height: '100%' }}
+                        data-day={i}
+                        aria-label={`${days[i]}: ${money(amount)} in rental fees`}
+                        aria-pressed={selectedDay === i}
+                        onClick={() => setSelectedDay(selectedDay === i ? null : i)}
+                        onMouseEnter={() => setHoverDay(i)}
+                        onFocus={() => setHoverDay(i)}
+                        onBlur={() => setHoverDay(null)}
+                        onKeyDown={event => handleBarKeyDown(event, i)}
+                      >
+                        {compareKey ? <span className="dashboard-bar-ghost" style={{ height: `${pct(compare[i])}%` }} /> : null}
+                        <span className="dashboard-bar-fill" style={{ height: `${Math.max(2, pct(amount))}%` }} />
+                        {activeDay === i ? (
+                          <span className="chart-tooltip" aria-hidden="true" style={{ bottom: `calc(${Math.max(2, pct(amount))}% + 10px)` }}>
+                            <strong>{money(amount)}</strong>
+                            <small>
+                              {DAY_NAMES[i]}{i === todayIndex ? ' ? today' : ''}
+                              {compareKey ? ` ? last wk ${money(Number(compare[i]) || 0)}` : ''}
+                            </small>
+                          </span>
+                        ) : null}
+                      </button>
+                      <span>{days[i]}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
             <div className="dashboard-chart-detail" aria-live="polite">
-              {selectedDay === null ? <span>Select a day to see its rental fees.</span> : <><span>{days[selectedDay]}</span><strong>{money(amounts[selectedDay])}</strong><span>in recorded charges</span></>}
+              <div className="chart-detail-inner" key={activeDay ?? 'none'}>
+                {activeDay === null ? (
+                  <span>Hover a bar, or select one and use the arrow keys, to explore each day.</span>
+                ) : (
+                  <>
+                    <span>{DAY_NAMES[activeDay]}</span>
+                    <strong>{money(amounts[activeDay])}</strong>
+                    <span>in recorded charges</span>
+                    {total > 0 ? <span className="chart-detail-share">{Math.round(((Number(amounts[activeDay]) || 0) / total) * 100)}% of the week</span> : null}
+                  </>
+                )}
+              </div>
             </div>
             {amounts.every(v => v === 0) ? (
               <p className="chart-empty">No confirmed rental fees in this period.</p>
             ) : null}
           </section>
-        </div>
 
-        <aside className="right-column">
+          <section className="panel category-panel">
+            <div className="panel-title">
+              <div>
+                <h3>
+                  <Icon name="box" /> Equipment by category
+                </h3>
+                <p>Select a category to view its inventory.</p>
+              </div>
+              <button
+                type="button"
+                className="text-button"
+                data-page="Inventory"
+                onClick={() => onNavigate('Inventory', false, 'All rentals', '')}
+              >
+                View all inventory <Icon name="arrow" />
+              </button>
+            </div>
+            <div className="category-grid">
+              {data.categories.length > 0 ? (
+                data.categories.map((c, i) => (
+                  <button
+                    key={c.name || i}
+                    type="button"
+                    className="category-card-btn"
+                    data-category={i}
+                    onClick={() => onNavigate('Inventory', false, 'All rentals', c.name)}
+                  >
+                    <span className={`category-symbol ${categoryThemeClass(c.name)}`}>
+                      <CategorySymbol category={c.name} />
+                    </span>
+                    <span className="category-card-text">
+                      <strong>{c.name}</strong>
+                      <small>{c.count} items in inventory</small>
+                    </span>
+                    <Icon name="arrow" />
+                  </button>
+                ))
+              ) : (
+                <p>No categories recorded.</p>
+              )}
+            </div>
+            <button
+            type="button"
+            className="secondary wide category-panel-footer-btn"
+            data-page="Inventory"
+            onClick={() => onNavigate('Inventory', false, 'All rentals', '')}
+          >
+            View all inventory <Icon name="arrow" />
+          </button>
+        </section>
+      <section className="panel analytics-pulse-panel" aria-label="Operations and fleet analytics">
+            <div className="panel-title">
+              <div>
+                <h3>
+                  <Icon name="chart" /> Analytics pulse
+                </h3>
+                <p>Fleet utilization &amp; performance metrics</p>
+              </div>
+              <button
+                type="button"
+                className="text-button"
+                data-page="Reports"
+                onClick={() => onNavigate('Reports')}
+              >
+                Full report <Icon name="arrow" />
+              </button>
+            </div>
+
+            <div className="analytics-pulse-metrics">
+              <div className="pulse-metric-block">
+                <div className="pulse-metric-head">
+                  <span>Fleet utilization</span>
+                  <strong className="pulse-metric-val">
+                    <CountUp value={utilizationRate} />%
+                  </strong>
+                </div>
+                <div
+                  className="pulse-progress-bar"
+                  role="progressbar"
+                  aria-label="Fleet utilization rate"
+                  aria-valuenow={utilizationRate}
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                >
+                  <span
+                    className="pulse-progress-fill"
+                    style={{ width: `${Math.min(100, Math.max(utilizationRate, totalActive > 0 ? 8 : 0))}%` }}
+                  />
+                </div>
+                <small className="pulse-metric-sub">
+                  <strong>{totalActive}</strong> of <strong>{totalUnits}</strong> units currently rented
+                </small>
+              </div>
+
+              <div className="pulse-metric-block">
+                <div className="pulse-metric-head">
+                  <span>Fulfillment channels</span>
+                  <strong className="pulse-metric-val">
+                    {resortCount > 0 && counterCount > 0
+                      ? `${resortShare}% Resort`
+                      : resortCount > 0
+                        ? '100% Resort'
+                        : `${counterShare}% Counter`}
+                  </strong>
+                </div>
+                <div className="pulse-channel-bar" aria-hidden="true">
+                  <span
+                    className="pulse-channel-resort"
+                    style={{ width: `${resortShare}%` }}
+                    title={`Resort delivery: ${resortCount}`}
+                  />
+                  <span
+                    className="pulse-channel-counter"
+                    style={{ width: `${counterShare}%` }}
+                    title={`Counter handover: ${counterCount}`}
+                  />
+                </div>
+                <small className="pulse-metric-sub">
+                  <span className="pulse-dot resort" aria-hidden="true" /> {resortCount} Resort delivery &middot;{' '}
+                  <span className="pulse-dot counter" aria-hidden="true" /> {counterCount} Shop counter
+                </small>
+              </div>
+
+              <div className="pulse-metric-block">
+                <div className="pulse-metric-head">
+                  <span>Weekly velocity</span>
+                  <strong className="pulse-metric-val">
+                    <CountUp value={thisWeekRevenue} format={money} />
+                  </strong>
+                </div>
+                <small className="pulse-metric-sub">
+                  Avg <strong>{money(Math.round(thisWeekRevenue / 7))}</strong>/day &middot; {pulseDeltaText}
+                </small>
+              </div>
+
+              <div className="pulse-metric-block">
+                <div className="pulse-metric-head">
+                  <span>Return punctuality</span>
+                  <span className={`pulse-health-pill ${overdueCount > 0 ? 'alert' : 'ok'}`}>
+                    {overdueCount > 0 ? `${overdueCount} Overdue` : '100% On-time'}
+                  </span>
+                </div>
+                <small className="pulse-metric-sub">
+                  {overdueCount > 0
+                    ? 'Follow up required on overdue rentals'
+                    : 'All rentals are running on schedule'}
+                </small>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="secondary wide pulse-explore-btn"
+              data-page="Reports"
+              onClick={() => onNavigate('Reports')}
+            >
+              Open full analytics <Icon name="arrow" />
+            </button>
+          </section>
+
           <section className="panel terminal-panel">
             <div className="panel-title">
               <h3>
@@ -578,33 +1090,7 @@ export function DashboardView({
             </button>
           </section>
 
-          <section className="panel category-panel">
-            <h3>Equipment by category</h3>
-            <p>Select a category to view its inventory.</p>
-            {data.categories.length > 0 ? (
-              data.categories.map((c, i) => (
-                <button
-                  key={c.name || i}
-                  data-category={i}
-                  onClick={() => onNavigate('Inventory', false, 'All rentals', c.name)}
-                >
-                  <span className={`category-symbol ${categoryThemeClass(c.name)}`}>
-                    <CategorySymbol category={c.name} />
-                  </span>
-                  <span>
-                    {c.name}
-                    <small>{c.count} items in inventory</small>
-                  </span>
-                  <Icon name="arrow" />
-                </button>
-              ))
-            ) : (
-              <p>No categories recorded.</p>
-            )}
-          </section>
-
-        </aside>
-      </div>
+          </div>
     </div>
   );
 }

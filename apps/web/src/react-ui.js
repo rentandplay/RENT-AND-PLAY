@@ -578,6 +578,46 @@ import { pageInfo } from "./workspace-navigation.js";
 import { renderRentalNotifications } from "./notifications.js";
 
 // src/react/DashboardView.jsx
+var prefersReducedMotion = () => {
+  try {
+    return typeof window === "undefined" || typeof window.matchMedia !== "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return true;
+  }
+};
+var useClientLayoutEffect = typeof document === "undefined" ? useEffect : useLayoutEffect;
+function CountUp({ value, format = (v) => String(Math.round(v)), duration = 900 }) {
+  const target = Number(value) || 0;
+  const [display, setDisplay] = useState(target);
+  const shownRef = useRef(0);
+  useClientLayoutEffect(() => {
+    const from = shownRef.current;
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : null;
+    if (from === target || !raf || prefersReducedMotion()) {
+      shownRef.current = target;
+      setDisplay(target);
+      return void 0;
+    }
+    const startedAt = performance.now();
+    let frame = 0;
+    const tick = () => {
+      const progress = Math.min(1, (performance.now() - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 4);
+      const next = progress >= 1 ? target : Math.round(from + (target - from) * eased);
+      shownRef.current = next;
+      setDisplay(next);
+      if (progress < 1) frame = raf(tick);
+    };
+    setDisplay(from);
+    frame = raf(tick);
+    return () => {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
+    };
+  }, [target, duration]);
+  return /* @__PURE__ */ React.createElement("span", { className: "count-up" }, format(display));
+}
+var DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+var manilaWeekdayIndex = () => (new Date(Date.now() + 8 * 36e5).getUTCDay() + 6) % 7;
 function StatCard({ label, value, note, glyph, color, page, target = "", filter = "", onNavigate }) {
   const handleClick = (e) => {
     e.preventDefault();
@@ -600,7 +640,7 @@ function StatCard({ label, value, note, glyph, color, page, target = "", filter 
       onClick: handleClick
     },
     /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, label), /* @__PURE__ */ React.createElement("span", { className: `stat-icon ${color}` }, /* @__PURE__ */ React.createElement(Icon, { name: glyph }))),
-    /* @__PURE__ */ React.createElement("strong", null, value),
+    /* @__PURE__ */ React.createElement("strong", null, /* @__PURE__ */ React.createElement(CountUp, { value }), color === "red" && Number(value) > 0 ? /* @__PURE__ */ React.createElement("span", { className: "stat-pulse", "aria-hidden": "true" }) : null),
     /* @__PURE__ */ React.createElement("small", null, note)
   );
 }
@@ -633,6 +673,32 @@ function getDueInfo(r) {
   }
   return { badge: "Philippine time", isOverdue: false, isDueSoon: false };
 }
+function TerminalPendingBanner({ data, workspaceUI, onNavigate }) {
+  if (!data) return null;
+  const pendingList = Array.isArray(data.pending) ? data.pending : [];
+  const primaryTerminal = Array.isArray(data.terminals) ? data.terminals[0] : null;
+  const terminalQueue = primaryTerminal ? pendingList.filter((p) => p.terminal_code === primaryTerminal.terminal_code) : [];
+  const activeQueue = terminalQueue.length > 0 ? terminalQueue : pendingList;
+  const firstPending = activeQueue[0];
+  if (!activeQueue.length || !firstPending) return null;
+  return /* @__PURE__ */ React.createElement("aside", { className: "terminal-live-action-banner", role: "alert" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-pulse", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", { className: "pulse-ring" }), /* @__PURE__ */ React.createElement(Icon, { name: "chip" })), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-body" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-badge-row" }, /* @__PURE__ */ React.createElement("span", { className: "terminal-banner-badge" }, "Terminal confirmation needed"), /* @__PURE__ */ React.createElement("span", { className: "terminal-queue-count" }, activeQueue.length, " pending")), /* @__PURE__ */ React.createElement("strong", null, firstPending.item_name || "Equipment", " \xB7 ", firstPending.customer || "Customer"), /* @__PURE__ */ React.createElement("p", null, "Code: ", /* @__PURE__ */ React.createElement("code", null, firstPending.rental_code || firstPending.verification_code || firstPending.id), " \xB7", " ", "Terminal: ", /* @__PURE__ */ React.createElement("strong", null, firstPending.terminal_code || primaryTerminal?.terminal_code || "TERM-01"), " \xB7", " ", "Review the request, then press the terminal button to confirm.")), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-actions" }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "primary btn-open-terminal-gate",
+      onClick: () => {
+        const openDialog = workspaceUI?.showHandoff || workspaceUI?.openHandoff;
+        if (openDialog) {
+          const matchedRental = Array.isArray(data.rentals) ? data.rentals.find((r) => String(r.id) === String(firstPending.rental_id)) : void 0;
+          openDialog(firstPending, matchedRental);
+        } else {
+          onNavigate?.("ESP32 terminal");
+        }
+      }
+    },
+    "Review request \u2192"
+  )));
+}
 function DashboardView({
   data,
   filter,
@@ -650,6 +716,8 @@ function DashboardView({
   toast
 }) {
   const [selectedDay, setSelectedDay] = useState(null);
+  const [hoverDay, setHoverDay] = useState(null);
+  const chartRef = useRef(null);
   const [testingTerminal, setTestingTerminal] = useState(false);
   const s = data.stats;
   const pageSize = 5;
@@ -660,19 +728,97 @@ function DashboardView({
   const clampedPage = Math.min(rentalPage, pageCount - 1);
   const start = clampedPage * pageSize;
   const rows = allRows.slice(start, start + pageSize);
+  const totalActive = Number(s?.active || 0);
+  const totalAvailable = Number(s?.available || 0);
+  const totalUnits = totalActive + totalAvailable || (Array.isArray(data.items) ? data.items.length : 0) || 1;
+  const utilizationRate = Math.min(100, Math.round(totalActive / Math.max(1, totalUnits) * 100));
+  const allRentalsList = Array.isArray(data.rentals) ? data.rentals : [];
+  const resortCount = allRentalsList.filter(
+    (r) => r.fulfillment_mode === "DELIVERY" || Boolean(r.delivery_location)
+  ).length;
+  const counterCount = Math.max(0, totalActive - resortCount);
+  const resortShare = totalActive > 0 ? Math.round(resortCount / totalActive * 100) : 50;
+  const counterShare = totalActive > 0 ? 100 - resortShare : 50;
+  const thisWeekRevenue = Array.isArray(data.revenue?.["This week"]) ? data.revenue["This week"].reduce((sum2, n) => sum2 + Number(n || 0), 0) : 0;
+  const lastWeekRevenue = Array.isArray(data.revenue?.["Last week"]) ? data.revenue["Last week"].reduce((sum2, n) => sum2 + Number(n || 0), 0) : 0;
+  const pulseDelta = lastWeekRevenue > 0 ? Math.round((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue * 100) : thisWeekRevenue > 0 ? 100 : 0;
+  const pulseDeltaText = lastWeekRevenue > 0 ? `${pulseDelta >= 0 ? "\u25B2" : "\u25BC"} ${Math.abs(pulseDelta)}% vs last wk` : thisWeekRevenue > 0 ? "\u25B2 Active momentum" : "Paced on track";
+  const overdueCount = Number(s?.overdue || 0);
   const openRental = (id) => {
     const r = data.rentals.find((item) => String(item.id) === String(id));
     if (!r) return;
+    const enrichedRental = {
+      ...r,
+      customer_name: r.customer_name || r.customer
+    };
+    if (workspaceUI?.openTransaction) {
+      workspaceUI.openTransaction(id, { rentalCode: r.rental_code, rental: enrichedRental });
+      return;
+    }
+    const dueInfo = getDueInfo(r);
+    const overdueLabel = dueInfo.isOverdue ? `Overdue by ${Math.max(1, Math.ceil((Date.now() - new Date(r.due_at).getTime()) / 36e5))}h` : "";
     showModal(
       "Rental details",
-      `<div class="detail-header"><div><h3>${escape(r.item_name)}</h3><p>${escape(r.rental_code)}</p></div>${badge(
-        r.displayStatus
-      )}</div><dl><dt>Customer</dt><dd>${escape(r.customer)}</dd><dt>Due</dt><dd>${escape(
-        formatDate(r.due_at)
-      )}</dd><dt>Rental fee</dt><dd>${money(r.rental_fee)}</dd><dt>Rental confirmed</dt><dd>${escape(
-        formatDate(r.confirmed_rental_at)
-      )}</dd></dl><div class="info-box">Use Returns to record physical receipt and inspect the unit. Physical receipt stops the timer; completing inspection updates availability or maintenance.</div>`
+      `<div class="transaction-record-modal">
+        <div class="transaction-detail-overview">
+          <div class="transaction-detail-head">
+            <div>
+              <span class="eyebrow">${escape(r.rental_code || "RENTAL")}</span>
+              <h3>${escape(r.item_name || "Equipment")}</h3>
+              <p>Assigned unit &middot; ${escape(r.item_code || "Standard unit")}</p>
+            </div>
+            ${badge(r.displayStatus)}
+          </div>
+          <div class="transaction-detail-grid">
+            <div>
+              <small>Customer</small>
+              <strong>${escape(r.customer || "Unknown customer")}</strong>
+            </div>
+            <div>
+              <small>Due time</small>
+              <strong>${escape(formatDate(r.due_at))}${overdueLabel ? `<small class="due-overdue-alert" style="display:block;margin-top:2px">${escape(overdueLabel)}</small>` : ""}</strong>
+            </div>
+          </div>
+        </div>
+        <div class="transaction-detail-scroll">
+          <section class="record-section record-fees">
+            <h3>Rental overview</h3>
+            <dl class="record-fields">
+              <div><dt>Rental fee</dt><dd><strong>${money(r.rental_fee)}</strong></dd></div>
+              <div><dt>Rental confirmed</dt><dd>${escape(formatDate(r.confirmed_rental_at))}</dd></div>
+              <div><dt>Fulfillment</dt><dd>${escape(r.delivery_location || (r.fulfillment_mode === "DELIVERY" ? "Resort delivery" : "Store pickup counter"))}</dd></div>
+              <div><dt>Status</dt><dd>${escape(r.displayStatus || r.status || "Active")}</dd></div>
+            </dl>
+          </section>
+          <div class="info-box" style="margin-top:16px">Use Returns to record physical receipt and inspect the unit. Physical receipt stops the timer; completing inspection updates availability or maintenance.</div>
+        </div>
+        <footer class="transaction-detail-footer">
+          <div class="transaction-footer-copy">
+            <strong>${["ACTIVE", "RETURN_PENDING_INSPECTION"].includes(r.status) || r.displayStatus === "Overdue" ? "Receive returned equipment" : "Rental record"}</strong>
+            <small>Physical receipt stops the rental clock.</small>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="secondary" data-dashboard-nav-rentals>View in transactions</button>
+            <button type="button" class="primary" data-dashboard-return-action>Receive equipment</button>
+          </div>
+        </footer>
+      </div>`
     );
+    const modalEl = document.querySelector("dialog[open]");
+    if (modalEl) {
+      modalEl.querySelector("[data-dashboard-nav-rentals]")?.addEventListener("click", () => {
+        modalEl.close?.();
+        onNavigate("Rentals");
+      });
+      modalEl.querySelector("[data-dashboard-return-action]")?.addEventListener("click", () => {
+        modalEl.close?.();
+        if (workspaceUI?.openQuickReturn) {
+          workspaceUI.openQuickReturn();
+        } else {
+          onNavigate("Returns");
+        }
+      });
+    }
   };
   const openWorkflowModal = () => {
     showModal(
@@ -696,13 +842,57 @@ function DashboardView({
     }
   };
   const amounts = data.revenue[period] || [0, 0, 0, 0, 0, 0, 0];
-  const max = Math.max(100, ...amounts);
+  const compareKey = period === "This week" ? "Last week" : null;
+  const compare = compareKey ? data.revenue[compareKey] || [] : [];
+  const sum = (list) => list.reduce((a, b) => a + (Number(b) || 0), 0);
+  const total = sum(amounts);
+  const compareTotal = sum(compare);
+  const delta = compareKey && compareTotal > 0 ? Math.round((total - compareTotal) / compareTotal * 100) : null;
+  const max = Math.max(100, ...amounts, ...compare.map((v) => Number(v) || 0));
   const scale = Math.ceil(max / 100) * 100;
+  const peak = Math.max(...amounts);
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const todayIndex = period === "This week" ? manilaWeekdayIndex() : -1;
+  const average = total / (todayIndex >= 0 ? todayIndex + 1 : 7);
+  const pct = (value) => Math.max(0, Math.min(100, (Number(value) || 0) / scale * 100));
+  const activeDay = hoverDay ?? selectedDay;
+  const focusBar = (index) => {
+    setSelectedDay(index);
+    chartRef.current?.querySelector(`[data-day="${index}"]`)?.focus();
+  };
+  const handleBarKeyDown = (event, index) => {
+    const moves = { ArrowRight: (index + 1) % 7, ArrowLeft: (index + 6) % 7, Home: 0, End: 6 };
+    if (event.key === "Escape") {
+      setSelectedDay(null);
+      setHoverDay(null);
+      return;
+    }
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    focusBar(moves[event.key]);
+  };
+  const handleSpotlight = (event) => {
+    const card = event.target.closest?.(".stat, .command-bar-btn");
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    card.style.setProperty("--mx", `${event.clientX - rect.left}px`);
+    card.style.setProperty("--my", `${event.clientY - rect.top}px`);
+  };
   const t = data.terminals[0];
   const queue = t ? data.pending.filter((p) => p.terminal_code === t.terminal_code) : [];
-  const firstPending = queue[0] || data.pending?.[0];
-  return /* @__PURE__ */ React.createElement("div", { className: "dashboard-workspace" }, /* @__PURE__ */ React.createElement("section", { className: "counter-command-bar", role: "toolbar", "aria-label": "Counter command actions" }, /* @__PURE__ */ React.createElement(
+  const collections = data.collections || {};
+  const todayTotal = Number(collections.total || 0);
+  const todayCash = Number(collections.cash || 0);
+  const todayQr = Number(collections.qr || 0);
+  const todayRefunds = Number(collections.refunds || 0);
+  const todayExpenses = Number(collections.expenses || 0);
+  const todayCashNet = Number(collections.cashNetMovement ?? todayCash);
+  const todayNetAfterExpenses = Number(
+    collections.netAfterExpenses ?? todayTotal - todayRefunds - todayExpenses
+  );
+  const cashShare = todayTotal > 0 ? Math.round(todayCash / todayTotal * 100) : 0;
+  const qrShare = todayTotal > 0 ? Math.max(0, 100 - cashShare) : 0;
+  return /* @__PURE__ */ React.createElement("div", { className: "dashboard-workspace", onPointerMove: handleSpotlight }, /* @__PURE__ */ React.createElement("section", { className: "counter-command-bar", role: "toolbar", "aria-label": "Counter command actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -750,21 +940,7 @@ function DashboardView({
     },
     /* @__PURE__ */ React.createElement("span", { className: "btn-icon-bubble" }, /* @__PURE__ */ React.createElement(Icon, { name: "undo" })),
     /* @__PURE__ */ React.createElement("div", { className: "btn-text-wrap" }, /* @__PURE__ */ React.createElement("strong", null, "Receive return"), /* @__PURE__ */ React.createElement("small", null, "Record receipt and inspect equipment"))
-  )), queue.length > 0 && firstPending ? /* @__PURE__ */ React.createElement("aside", { className: "terminal-live-action-banner", role: "alert" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-pulse", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", { className: "pulse-ring" }), /* @__PURE__ */ React.createElement(Icon, { name: "chip" })), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-body" }, /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-badge-row" }, /* @__PURE__ */ React.createElement("span", { className: "terminal-banner-badge" }, "Terminal confirmation needed"), /* @__PURE__ */ React.createElement("span", { className: "terminal-queue-count" }, queue.length, " pending")), /* @__PURE__ */ React.createElement("strong", null, firstPending.item_name || "Equipment", " \xB7 ", firstPending.customer || "Customer"), /* @__PURE__ */ React.createElement("p", null, "Code: ", /* @__PURE__ */ React.createElement("code", null, firstPending.rental_code || firstPending.verification_code || firstPending.id), " \xB7 Terminal: ", /* @__PURE__ */ React.createElement("strong", null, firstPending.terminal_code || "TERM-01"), " \xB7 Review the request, then press the terminal button to confirm.")), /* @__PURE__ */ React.createElement("div", { className: "terminal-banner-actions" }, /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      type: "button",
-      className: "primary btn-open-terminal-gate",
-      onClick: () => {
-        if (workspaceUI?.openHandoff) {
-          workspaceUI.openHandoff(firstPending, data.rentals.find((r) => String(r.id) === String(firstPending.rental_id)));
-        } else {
-          onNavigate("ESP32 terminal");
-        }
-      }
-    },
-    "Review request \u2192"
-  ))) : null, /* @__PURE__ */ React.createElement("div", { className: "stats" }, /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement(TerminalPendingBanner, { data, workspaceUI, onNavigate }), /* @__PURE__ */ React.createElement("div", { className: "stats" }, /* @__PURE__ */ React.createElement(
     StatCard,
     {
       label: "Active rentals",
@@ -812,7 +988,7 @@ function DashboardView({
       filter: "Overdue",
       onNavigate
     }
-  )), /* @__PURE__ */ React.createElement("div", { className: "dashboard-grid" }, /* @__PURE__ */ React.createElement("div", { className: "main-column" }, /* @__PURE__ */ React.createElement("section", { className: "panel rental-panel", id: "rental-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rental activity"), /* @__PURE__ */ React.createElement("p", null, "Open rentals and requests that need your attention.")), /* @__PURE__ */ React.createElement("div", { className: "rental-panel-actions" }, /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { className: "dashboard-grid" }, /* @__PURE__ */ React.createElement("section", { className: "panel rental-panel", id: "rental-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rental activity"), /* @__PURE__ */ React.createElement("p", null, "Open rentals and requests that need your attention.")), /* @__PURE__ */ React.createElement("div", { className: "rental-panel-actions" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -904,7 +1080,53 @@ function DashboardView({
       onClick: () => onRentalPageChange(clampedPage + 1)
     },
     "Next \u2192"
-  )))), /* @__PURE__ */ React.createElement("section", { className: "panel revenue-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rental fees"), /* @__PURE__ */ React.createElement("p", null, "Recorded charges by confirmation date. Not cash collected.")), /* @__PURE__ */ React.createElement("div", { className: "revenue-actions" }, /* @__PURE__ */ React.createElement(
+  )))), /* @__PURE__ */ React.createElement("section", { className: "panel collections-panel", "aria-label": "Today's collections" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "money" }), " Today\u2019s collections"), /* @__PURE__ */ React.createElement("p", null, "Confirmed receipts today \xB7 Philippine time"))), /* @__PURE__ */ React.createElement("div", { className: "collections-hero" }, /* @__PURE__ */ React.createElement("strong", null, /* @__PURE__ */ React.createElement(CountUp, { value: todayTotal, format: money })), /* @__PURE__ */ React.createElement("span", null, collections.entryCount ? `${collections.entryCount} ledger ${collections.entryCount === 1 ? "entry" : "entries"} today` : "No dated receipts yet today")), /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      className: "collections-split-bar",
+      role: "img",
+      "aria-label": `Cash ${cashShare}% (${money(todayCash)}), GCash and InstaPay QR ${qrShare}% (${money(todayQr)})`
+    },
+    /* @__PURE__ */ React.createElement(
+      "span",
+      {
+        className: "collections-split-cash",
+        style: { width: `${todayTotal > 0 ? Math.max(cashShare, todayCash > 0 ? 6 : 0) : 50}%` }
+      }
+    ),
+    /* @__PURE__ */ React.createElement(
+      "span",
+      {
+        className: "collections-split-qr",
+        style: { width: `${todayTotal > 0 ? Math.max(qrShare, todayQr > 0 ? 6 : 0) : 50}%` }
+      }
+    )
+  ), /* @__PURE__ */ React.createElement("dl", { className: "collections-breakdown" }, /* @__PURE__ */ React.createElement("div", { className: "collections-method-row" }, /* @__PURE__ */ React.createElement("dt", null, /* @__PURE__ */ React.createElement("span", { className: "collections-dot cash", "aria-hidden": "true" }), "Cash in person"), /* @__PURE__ */ React.createElement("dd", null, money(todayCash))), /* @__PURE__ */ React.createElement("div", { className: "collections-method-row" }, /* @__PURE__ */ React.createElement("dt", null, /* @__PURE__ */ React.createElement("span", { className: "collections-dot qr", "aria-hidden": "true" }), "GCash / InstaPay QR"), /* @__PURE__ */ React.createElement("dd", null, money(todayQr))), /* @__PURE__ */ React.createElement("div", { className: "collections-method-row net" }, /* @__PURE__ */ React.createElement("dt", null, "Drawer cash movement"), /* @__PURE__ */ React.createElement("dd", null, money(todayCashNet))), todayRefunds > 0 || todayExpenses > 0 ? /* @__PURE__ */ React.createElement("div", { className: "collections-method-row subtle" }, /* @__PURE__ */ React.createElement("dt", null, "After refunds & expenses"), /* @__PURE__ */ React.createElement("dd", null, money(todayNetAfterExpenses))) : null), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-actions" }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "secondary",
+      id: "cmd-cash-drawer",
+      onClick: () => {
+        if (workspaceUI?.openCashDrawer) {
+          workspaceUI.openCashDrawer(todayCashNet);
+        } else {
+          onNavigate("Payments");
+        }
+      }
+    },
+    "Cash drawer (Z-Reading)"
+  )), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "secondary wide",
+      "data-page": "Payments",
+      onClick: () => onNavigate("Payments")
+    },
+    "Open payments ",
+    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
+  )), /* @__PURE__ */ React.createElement("section", { className: "panel revenue-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rental fees"), /* @__PURE__ */ React.createElement("p", null, "Recorded charges by confirmation date. Not cash collected.")), /* @__PURE__ */ React.createElement("div", { className: "revenue-actions" }, /* @__PURE__ */ React.createElement(
     "select",
     {
       id: "period",
@@ -925,19 +1147,118 @@ function DashboardView({
       onClick: () => onNavigate("Reports")
     },
     "View analytics \u2192"
-  ))), /* @__PURE__ */ React.createElement("div", { className: "revenue-total" }, money(amounts.reduce((a, b) => a + b, 0)), /* @__PURE__ */ React.createElement("span", null, "Recorded rental charges")), /* @__PURE__ */ React.createElement("div", { className: "chart" }, /* @__PURE__ */ React.createElement("div", { className: "axis" }, [1, 0.75, 0.5, 0.25, 0].map((x) => /* @__PURE__ */ React.createElement("span", { key: x }, money(scale * x)))), /* @__PURE__ */ React.createElement("div", { className: "bars" }, amounts.map((amount, i) => /* @__PURE__ */ React.createElement("div", { className: "bar-column", key: days[i] }, /* @__PURE__ */ React.createElement(
+  ))), /* @__PURE__ */ React.createElement("div", { className: "revenue-total" }, /* @__PURE__ */ React.createElement(CountUp, { value: total, format: money }), /* @__PURE__ */ React.createElement("span", null, "Recorded rental charges"), delta !== null ? /* @__PURE__ */ React.createElement("em", { className: `revenue-delta ${delta >= 0 ? "up" : "down"}` }, delta >= 0 ? "\u25B2" : "\u25BC", " ", Math.abs(delta), "% vs last week") : null), /* @__PURE__ */ React.createElement("div", { className: "chart-legend", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch current" }), period), compareKey ? /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch previous" }), compareKey) : null, average > 0 ? /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch average" }), "Daily average") : null), /* @__PURE__ */ React.createElement("div", { className: "chart", ref: chartRef, onMouseLeave: () => setHoverDay(null) }, /* @__PURE__ */ React.createElement("div", { className: "axis" }, [1, 0.75, 0.5, 0.25, 0].map((x) => /* @__PURE__ */ React.createElement("span", { key: x }, money(scale * x)))), /* @__PURE__ */ React.createElement("div", { className: "bars", role: "group", "aria-label": "Rental fees by day. Use the arrow keys to move between days." }, /* @__PURE__ */ React.createElement("div", { className: "chart-gridlines", "aria-hidden": "true" }, [0, 0.25, 0.5, 0.75, 1].map((x) => /* @__PURE__ */ React.createElement("span", { key: x, style: { bottom: `${x * 100}%` } }))), average > 0 ? /* @__PURE__ */ React.createElement("div", { className: "chart-avg-line", style: { bottom: `${pct(average)}%` }, "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, "Avg ", money(Math.round(average)))) : null, amounts.map((amount, i) => {
+    const columnClass = [
+      "bar-column",
+      i === 0 ? "is-first" : "",
+      i === 6 ? "is-last" : "",
+      i === todayIndex ? "is-today" : "",
+      todayIndex >= 0 && i > todayIndex ? "is-future" : "",
+      activeDay === i ? "is-active" : ""
+    ].filter(Boolean).join(" ");
+    return /* @__PURE__ */ React.createElement("div", { className: columnClass, key: days[i], style: { "--i": i } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        className: `bar ${amount === peak && peak > 0 ? "highlight" : ""}`,
+        style: { height: "100%" },
+        "data-day": i,
+        "aria-label": `${days[i]}: ${money(amount)} in rental fees`,
+        "aria-pressed": selectedDay === i,
+        onClick: () => setSelectedDay(selectedDay === i ? null : i),
+        onMouseEnter: () => setHoverDay(i),
+        onFocus: () => setHoverDay(i),
+        onBlur: () => setHoverDay(null),
+        onKeyDown: (event) => handleBarKeyDown(event, i)
+      },
+      compareKey ? /* @__PURE__ */ React.createElement("span", { className: "dashboard-bar-ghost", style: { height: `${pct(compare[i])}%` } }) : null,
+      /* @__PURE__ */ React.createElement("span", { className: "dashboard-bar-fill", style: { height: `${Math.max(2, pct(amount))}%` } }),
+      activeDay === i ? /* @__PURE__ */ React.createElement("span", { className: "chart-tooltip", "aria-hidden": "true", style: { bottom: `calc(${Math.max(2, pct(amount))}% + 10px)` } }, /* @__PURE__ */ React.createElement("strong", null, money(amount)), /* @__PURE__ */ React.createElement("small", null, DAY_NAMES[i], i === todayIndex ? " ? today" : "", compareKey ? ` ? last wk ${money(Number(compare[i]) || 0)}` : "")) : null
+    ), /* @__PURE__ */ React.createElement("span", null, days[i]));
+  }))), /* @__PURE__ */ React.createElement("div", { className: "dashboard-chart-detail", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("div", { className: "chart-detail-inner", key: activeDay ?? "none" }, activeDay === null ? /* @__PURE__ */ React.createElement("span", null, "Hover a bar, or select one and use the arrow keys, to explore each day.") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", null, DAY_NAMES[activeDay]), /* @__PURE__ */ React.createElement("strong", null, money(amounts[activeDay])), /* @__PURE__ */ React.createElement("span", null, "in recorded charges"), total > 0 ? /* @__PURE__ */ React.createElement("span", { className: "chart-detail-share" }, Math.round((Number(amounts[activeDay]) || 0) / total * 100), "% of the week") : null))), amounts.every((v) => v === 0) ? /* @__PURE__ */ React.createElement("p", { className: "chart-empty" }, "No confirmed rental fees in this period.") : null), /* @__PURE__ */ React.createElement("section", { className: "panel category-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "box" }), " Equipment by category"), /* @__PURE__ */ React.createElement("p", null, "Select a category to view its inventory.")), /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
-      className: `bar ${amount === max ? "highlight" : ""}`,
-      style: { height: "100%" },
-      title: `${days[i]}: ${money(amount)}`,
-      "aria-label": `${days[i]}: ${money(amount)} in rental fees`,
-      "aria-pressed": selectedDay === i,
-      onClick: () => setSelectedDay(i)
+      className: "text-button",
+      "data-page": "Inventory",
+      onClick: () => onNavigate("Inventory", false, "All rentals", "")
     },
-    /* @__PURE__ */ React.createElement("span", { className: "dashboard-bar-fill", style: { height: `${Math.max(2, amount / scale * 100)}%` } })
-  ), /* @__PURE__ */ React.createElement("span", null, days[i]))))), /* @__PURE__ */ React.createElement("div", { className: "dashboard-chart-detail", "aria-live": "polite" }, selectedDay === null ? /* @__PURE__ */ React.createElement("span", null, "Select a day to see its rental fees.") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", null, days[selectedDay]), /* @__PURE__ */ React.createElement("strong", null, money(amounts[selectedDay])), /* @__PURE__ */ React.createElement("span", null, "in recorded charges"))), amounts.every((v) => v === 0) ? /* @__PURE__ */ React.createElement("p", { className: "chart-empty" }, "No confirmed rental fees in this period.") : null)), /* @__PURE__ */ React.createElement("aside", { className: "right-column" }, /* @__PURE__ */ React.createElement("section", { className: "panel terminal-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " ESP32 terminal")), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-status", "data-online": Boolean(t?.online) }, /* @__PURE__ */ React.createElement("span", { className: "dashboard-status-dot", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, t ? t.online ? "Connected" : "Offline" : "Not configured"), /* @__PURE__ */ React.createElement("span", null, t ? `${t.name || "Counter terminal"} \xB7 ${t.terminal_code}` : "Set up a terminal to confirm counter handovers."))), /* @__PURE__ */ React.createElement("div", { className: "terminal-meta" }, /* @__PURE__ */ React.createElement("span", null, "Awaiting confirmation"), /* @__PURE__ */ React.createElement("strong", null, queue.length)), /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, "Confirm counter handovers, delivery dispatches, and completed inspections."), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", id: "cmd-ping-terminal", disabled: !t || !api || testingTerminal, onClick: async () => {
+    "View all inventory ",
+    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
+  )), /* @__PURE__ */ React.createElement("div", { className: "category-grid" }, data.categories.length > 0 ? data.categories.map((c, i) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: c.name || i,
+      type: "button",
+      className: "category-card-btn",
+      "data-category": i,
+      onClick: () => onNavigate("Inventory", false, "All rentals", c.name)
+    },
+    /* @__PURE__ */ React.createElement("span", { className: `category-symbol ${categoryThemeClass(c.name)}` }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: c.name })),
+    /* @__PURE__ */ React.createElement("span", { className: "category-card-text" }, /* @__PURE__ */ React.createElement("strong", null, c.name), /* @__PURE__ */ React.createElement("small", null, c.count, " items in inventory")),
+    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
+  )) : /* @__PURE__ */ React.createElement("p", null, "No categories recorded.")), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "secondary wide category-panel-footer-btn",
+      "data-page": "Inventory",
+      onClick: () => onNavigate("Inventory", false, "All rentals", "")
+    },
+    "View all inventory ",
+    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
+  )), /* @__PURE__ */ React.createElement("section", { className: "panel analytics-pulse-panel", "aria-label": "Operations and fleet analytics" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chart" }), " Analytics pulse"), /* @__PURE__ */ React.createElement("p", null, "Fleet utilization & performance metrics")), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "text-button",
+      "data-page": "Reports",
+      onClick: () => onNavigate("Reports")
+    },
+    "Full report ",
+    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
+  )), /* @__PURE__ */ React.createElement("div", { className: "analytics-pulse-metrics" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-block" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-head" }, /* @__PURE__ */ React.createElement("span", null, "Fleet utilization"), /* @__PURE__ */ React.createElement("strong", { className: "pulse-metric-val" }, /* @__PURE__ */ React.createElement(CountUp, { value: utilizationRate }), "%")), /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      className: "pulse-progress-bar",
+      role: "progressbar",
+      "aria-label": "Fleet utilization rate",
+      "aria-valuenow": utilizationRate,
+      "aria-valuemin": "0",
+      "aria-valuemax": "100"
+    },
+    /* @__PURE__ */ React.createElement(
+      "span",
+      {
+        className: "pulse-progress-fill",
+        style: { width: `${Math.min(100, Math.max(utilizationRate, totalActive > 0 ? 8 : 0))}%` }
+      }
+    )
+  ), /* @__PURE__ */ React.createElement("small", { className: "pulse-metric-sub" }, /* @__PURE__ */ React.createElement("strong", null, totalActive), " of ", /* @__PURE__ */ React.createElement("strong", null, totalUnits), " units currently rented")), /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-block" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-head" }, /* @__PURE__ */ React.createElement("span", null, "Fulfillment channels"), /* @__PURE__ */ React.createElement("strong", { className: "pulse-metric-val" }, resortCount > 0 && counterCount > 0 ? `${resortShare}% Resort` : resortCount > 0 ? "100% Resort" : `${counterShare}% Counter`)), /* @__PURE__ */ React.createElement("div", { className: "pulse-channel-bar", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(
+    "span",
+    {
+      className: "pulse-channel-resort",
+      style: { width: `${resortShare}%` },
+      title: `Resort delivery: ${resortCount}`
+    }
+  ), /* @__PURE__ */ React.createElement(
+    "span",
+    {
+      className: "pulse-channel-counter",
+      style: { width: `${counterShare}%` },
+      title: `Counter handover: ${counterCount}`
+    }
+  )), /* @__PURE__ */ React.createElement("small", { className: "pulse-metric-sub" }, /* @__PURE__ */ React.createElement("span", { className: "pulse-dot resort", "aria-hidden": "true" }), " ", resortCount, " Resort delivery \xB7", " ", /* @__PURE__ */ React.createElement("span", { className: "pulse-dot counter", "aria-hidden": "true" }), " ", counterCount, " Shop counter")), /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-block" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-head" }, /* @__PURE__ */ React.createElement("span", null, "Weekly velocity"), /* @__PURE__ */ React.createElement("strong", { className: "pulse-metric-val" }, /* @__PURE__ */ React.createElement(CountUp, { value: thisWeekRevenue, format: money }))), /* @__PURE__ */ React.createElement("small", { className: "pulse-metric-sub" }, "Avg ", /* @__PURE__ */ React.createElement("strong", null, money(Math.round(thisWeekRevenue / 7))), "/day \xB7 ", pulseDeltaText)), /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-block" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-head" }, /* @__PURE__ */ React.createElement("span", null, "Return punctuality"), /* @__PURE__ */ React.createElement("span", { className: `pulse-health-pill ${overdueCount > 0 ? "alert" : "ok"}` }, overdueCount > 0 ? `${overdueCount} Overdue` : "100% On-time")), /* @__PURE__ */ React.createElement("small", { className: "pulse-metric-sub" }, overdueCount > 0 ? "Follow up required on overdue rentals" : "All rentals are running on schedule"))), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "secondary wide pulse-explore-btn",
+      "data-page": "Reports",
+      onClick: () => onNavigate("Reports")
+    },
+    "Open full analytics ",
+    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
+  )), /* @__PURE__ */ React.createElement("section", { className: "panel terminal-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " ESP32 terminal")), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-status", "data-online": Boolean(t?.online) }, /* @__PURE__ */ React.createElement("span", { className: "dashboard-status-dot", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, t ? t.online ? "Connected" : "Offline" : "Not configured"), /* @__PURE__ */ React.createElement("span", null, t ? `${t.name || "Counter terminal"} \xB7 ${t.terminal_code}` : "Set up a terminal to confirm counter handovers."))), /* @__PURE__ */ React.createElement("div", { className: "terminal-meta" }, /* @__PURE__ */ React.createElement("span", null, "Awaiting confirmation"), /* @__PURE__ */ React.createElement("strong", null, queue.length)), /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, "Confirm counter handovers, delivery dispatches, and completed inspections."), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", id: "cmd-ping-terminal", disabled: !t || !api || testingTerminal, onClick: async () => {
     setTestingTerminal(true);
     try {
       await api("/terminals/test-ping", { method: "POST", body: JSON.stringify({ terminalCode: t.terminal_code }) });
@@ -956,17 +1277,7 @@ function DashboardView({
     },
     "Open terminal ",
     /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
-  )), /* @__PURE__ */ React.createElement("section", { className: "panel category-panel" }, /* @__PURE__ */ React.createElement("h3", null, "Equipment by category"), /* @__PURE__ */ React.createElement("p", null, "Select a category to view its inventory."), data.categories.length > 0 ? data.categories.map((c, i) => /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      key: c.name || i,
-      "data-category": i,
-      onClick: () => onNavigate("Inventory", false, "All rentals", c.name)
-    },
-    /* @__PURE__ */ React.createElement("span", { className: `category-symbol ${categoryThemeClass(c.name)}` }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: c.name })),
-    /* @__PURE__ */ React.createElement("span", null, c.name, /* @__PURE__ */ React.createElement("small", null, c.count, " items in inventory")),
-    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
-  )) : /* @__PURE__ */ React.createElement("p", null, "No categories recorded.")))));
+  ))));
 }
 
 // src/react/ProfileView.jsx
@@ -2302,7 +2613,7 @@ function WorkspaceShell({
         " Sign out"
       )
     )
-  )))), /* @__PURE__ */ React.createElement("main", { className: "content", id: "workspace-content", tabIndex: -1 }, page === "Dashboard" && /* @__PURE__ */ React.createElement(WorkspaceStatus, { loading: workspaceLoading, error: connectionError, offline, hasData: Boolean(data), onRetry: onManualRefresh }), /* @__PURE__ */ React.createElement(WorkspaceErrorBoundary, { key: page, onRetry: onManualRefresh, onHome: () => onNavigate("Dashboard") }, page === "Dashboard" ? data && /* @__PURE__ */ React.createElement(
+  )))), /* @__PURE__ */ React.createElement("main", { className: "content", id: "workspace-content", tabIndex: -1 }, page === "Dashboard" && /* @__PURE__ */ React.createElement(WorkspaceStatus, { loading: workspaceLoading, error: connectionError, offline, hasData: Boolean(data), onRetry: onManualRefresh }), page !== "Dashboard" && page !== "ESP32 terminal" && data ? /* @__PURE__ */ React.createElement(TerminalPendingBanner, { data, workspaceUI, onNavigate }) : null, /* @__PURE__ */ React.createElement(WorkspaceErrorBoundary, { key: page, onRetry: onManualRefresh, onHome: () => onNavigate("Dashboard") }, page === "Dashboard" ? data && /* @__PURE__ */ React.createElement(
     DashboardView,
     {
       data,
@@ -2781,6 +3092,12 @@ function App() {
               if (!c.modal?.open && pageRef.current === refreshedPage && userRef.current) {
                 triggerRender();
               }
+            } else {
+              const refreshedPage = currentPage;
+              await refresh({ force: true });
+              if (!c.modal?.open && pageRef.current === refreshedPage && userRef.current) {
+                triggerRender();
+              }
             }
           }
         });
@@ -2822,7 +3139,16 @@ function App() {
       source.addEventListener("rental.changed", scheduleRentalEventSync);
       source.addEventListener("inventory.changed", scheduleRentalEventSync);
       source.addEventListener("maintenance.changed", scheduleRentalEventSync);
-      source.addEventListener("customer.changed", scheduleRentalEventSync);
+      source.addEventListener("customer.changed", (event) => {
+        try {
+          const payload = event?.data ? JSON.parse(event.data) : null;
+          if (payload?.customerName && payload?.action === "registered") {
+            toast(`New customer account registered: ${payload.customerName}`);
+          }
+        } catch (_) {
+        }
+        scheduleRentalEventSync();
+      });
       source.addEventListener("finance.changed", scheduleRentalEventSync);
       source.addEventListener("data.changed", scheduleRentalEventSync);
       source.addEventListener("category.changed", scheduleRentalEventSync);
@@ -3263,6 +3589,7 @@ export {
   PasswordChangeView,
   ProfileView,
   SessionLoadingView,
+  TerminalPendingBanner,
   WorkspaceModuleSection,
   WorkspaceShell,
   WorkspaceStatus,

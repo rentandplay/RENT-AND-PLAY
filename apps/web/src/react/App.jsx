@@ -480,6 +480,12 @@ export function App() {
               if (!c.modal?.open && pageRef.current === refreshedPage && userRef.current) {
                 triggerRender();
               }
+            } else {
+              const refreshedPage = currentPage;
+              await refresh({ force: true });
+              if (!c.modal?.open && pageRef.current === refreshedPage && userRef.current) {
+                triggerRender();
+              }
             }
           }
         });
@@ -533,7 +539,15 @@ export function App() {
       source.addEventListener('rental.changed', scheduleRentalEventSync);
       source.addEventListener('inventory.changed', scheduleRentalEventSync);
       source.addEventListener('maintenance.changed', scheduleRentalEventSync);
-      source.addEventListener('customer.changed', scheduleRentalEventSync);
+      source.addEventListener('customer.changed', event => {
+        try {
+          const payload = event?.data ? JSON.parse(event.data) : null;
+          if (payload?.customerName && payload?.action === 'registered') {
+            toast(`New customer account registered: ${payload.customerName}`);
+          }
+        } catch (_) {}
+        scheduleRentalEventSync();
+      });
       source.addEventListener('finance.changed', scheduleRentalEventSync);
       source.addEventListener('data.changed', scheduleRentalEventSync);
       source.addEventListener('category.changed', scheduleRentalEventSync);

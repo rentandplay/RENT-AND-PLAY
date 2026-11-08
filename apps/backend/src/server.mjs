@@ -229,10 +229,21 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     cancelMobileRentalRequest: async (actor, id) => cancelMobileRentalRequest(firestore, actor, id, now()),
     mobileCatalog: async () => { await verificationSweep.run(); return mobileCatalog(readDatabase); },
     mobileProfile: async (claims, input, method) => {
+      let wroteCollections = [];
       const result = await mobileProfile(firestore, claims, input, method, now(), collections => {
+        wroteCollections = collections;
         for (const collection of collections) readCache.invalidate(collection);
       });
       if (String(claims.uid) === ownerUid) result.user.role = 'OWNER';
+      if (wroteCollections.includes('customers') || wroteCollections.includes('users') || result.created || result.customerCreated) {
+        const customerName = result.user?.full_name || result.user?.name || claims.name || '';
+        rentalEvents.publishCustomer({
+          customerId: String(claims.uid),
+          customerName,
+          action: (result.created || result.customerCreated) ? 'registered' : 'updated'
+        });
+        rentalEvents.publishDataChange('data.changed', { collections: ['customers', 'users'] });
+      }
       return result;
     },
     sendRegistrationCode: async input => registrationOtp.sendCode(await validateEmail(input?.email)),
@@ -281,9 +292,9 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     createMaintenance: ['items', 'maintenance_records', 'maintenance_photos', 'item_status_history', 'audit_logs'],
     updateMaintenance: ['items', 'maintenance_records', 'maintenance_photos', 'item_status_history', 'audit_logs'],
     createCounterBooking: ['rentals', 'items', 'audit_logs', 'item_status_history', 'notification_inboxes'],
-    releaseBooking: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'notification_inboxes'],
+    releaseBooking: ['rentals', 'items', 'payment_ledger', 'financial_daily', 'rental_payment_totals', 'audit_logs', 'item_status_history', 'item_condition_records', 'notification_inboxes'],
     prepareRentalDelivery: ['rentals', 'audit_logs', 'notification_inboxes'],
-    reviewRentalPaymentProof: ['rentals', 'rental_payment_proofs', 'audit_logs', 'notification_inboxes'],
+    reviewRentalPaymentProof: ['rentals', 'rental_payment_proofs', 'payment_ledger', 'financial_daily', 'rental_payment_totals', 'audit_logs', 'notification_inboxes'],
     submitRentalPaymentProof: ['rentals', 'rental_payment_proofs', 'audit_logs', 'notification_inboxes'],
     savePaymentSettings: ['settings', 'audit_logs'],
     saveTermsSettings: ['settings', 'audit_logs'],
@@ -292,7 +303,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     recordRentalReceipt: ['rentals', 'items', 'audit_logs', 'item_status_history', 'notification_inboxes'],
     completeRentalReturn: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records', 'notification_inboxes'],
     changeAssignedUnit: ['rentals', 'items', 'audit_logs', 'item_status_history'],
-    settleRentalPayment: ['rentals', 'rental_settlements', 'audit_logs'],
+    settleRentalPayment: ['rentals', 'rental_settlements', 'payment_ledger', 'financial_daily', 'rental_payment_totals', 'audit_logs'],
     touchLogin: ['users'],
     updateProfile: ['users', 'audit_logs'],
     createItem: ['items', 'item_rates', 'item_codes', 'counters', 'audit_logs', 'item_status_history'],
@@ -305,12 +316,12 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     inventoryQr: ['items'],
     inventoryQrLabels: ['items'],
     savePricing: ['settings', 'audit_logs'],
-    terminalConfirm: ['verification_requests', 'terminals', 'rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records'],
+    terminalConfirm: ['verification_requests', 'terminals', 'rentals', 'items', 'payment_ledger', 'financial_daily', 'rental_payment_totals', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records'],
     dispatchRentalToTerminal: ['rentals', 'items', 'verification_requests', 'audit_logs', 'notification_inboxes'],
     createRentalRequest: ['rentals', 'items', 'verification_requests', 'audit_logs', 'notification_inboxes'],
     createReturnRequest: ['rentals', 'verification_requests', 'audit_logs', 'notification_inboxes'],
     createMobileRentalRequest: ['rentals', 'items', 'audit_logs', 'notification_inboxes', 'rental_payment_proofs'],
-    reviewMobileRental: ['rentals', 'items', 'audit_logs', 'notification_inboxes'],
+    reviewMobileRental: ['rentals', 'items', 'payment_ledger', 'financial_daily', 'rental_payment_totals', 'audit_logs', 'notification_inboxes'],
     cancelMobileRentalRequest: ['rentals', 'items', 'audit_logs', 'notification_inboxes'],
     requestMobileReturn: ['rentals', 'audit_logs', 'notification_inboxes'],
     reviewMobileReturn: ['rentals', 'items', 'audit_logs', 'item_status_history', 'item_condition_records', 'maintenance_records', 'notification_inboxes'],
@@ -435,7 +446,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         customerId: cId
       });
       rentalEvents.publishDataChange?.('verification.changed', { requestId: value?.id || value?.requestId || '', status: value?.status || 'UPDATED' });
-      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger', 'terminals']);
+      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger', 'financial_daily', 'rental_payment_totals', 'terminals']);
       pushWorker?.wake();
       holdWorker?.wake();
     }
@@ -448,7 +459,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       rentalEvents.publishInventory();
     }
     if (collections.has('rentals') || collections.has('rental_payment_proofs')) {
-      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger', 'terminals']);
+      services.invalidateReadCache?.(['rentals', 'items', 'verification_requests', 'payment_ledger', 'financial_daily', 'rental_payment_totals', 'terminals']);
       rentalEvents.publishRental({ allCustomers: true });
     }
     if (collections.has('maintenance_records') || collections.has('maintenance_photos')) {

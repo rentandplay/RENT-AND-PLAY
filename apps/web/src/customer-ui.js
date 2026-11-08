@@ -1,6 +1,7 @@
 import { bindRecordLinks, recordAttrs } from './record-links.js';
 import { recordCode } from './record-codes.js';
 import { bindAccountValidation, nameError, emailError, phoneError, passwordError, passwordMatchError } from './account-validation.js';
+import { formatPhilippineDateTime, formatExcelCsvCell } from './date-time.js';
 
 const customerDate = value => {
   if (!value) return null;
@@ -52,15 +53,13 @@ export function nextCustomerCode(customers = []) {
 }
 
 export function customersCsv(rows) {
-  const cell = value => {
-    const text = String(value ?? ''), safe = /^[\s]*[=+@-]/.test(text) || /^[\t\r\n]/.test(text) ? `'${text}` : text;
-    return `"${safe.replaceAll('"', '""')}"`;
-  };
-  const headings = ['Customer code', 'Full name', 'Email', 'Phone', 'Address', 'Status', 'Confirmed rentals', 'Equipment out', 'Overdue rentals', 'Latest activity'];
-  return '\uFEFF' + [headings, ...rows.map(({ customer: c, total, active, overdue, lastActivity }) =>
-    [c.customer_code, c.full_name, c.email, c.phone, c.address, c.is_active === false ? 'Archived' : 'Active', total, active, overdue, lastActivity])]
+  const cell = formatExcelCsvCell;
+  const headings = ['Customer code', 'Full name', 'Email', 'Phone', 'Address', 'Status', 'Confirmed rentals', 'Completed rentals', 'Equipment out', 'Overdue rentals', 'Latest activity'];
+  return '\uFEFF' + [headings, ...rows.map(({ customer: c, total, returned, active, overdue, lastActivity }) =>
+    [c.customer_code, c.full_name, c.email, c.phone, c.address, c.is_active === false ? 'Archived' : 'Active', total, returned, active, overdue, formatPhilippineDateTime(lastActivity)])]
     .map(row => row.map(cell).join(',')).join('\r\n');
 }
+
 
 export function createCustomerUI(h) {
   const { api, escape: e, showModal, modal, toast, formatDate, icon, model, refresh, transactionDetails, confirmAction, confirmSubmit } = h;

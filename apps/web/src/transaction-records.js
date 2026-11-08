@@ -67,10 +67,11 @@ export function renderConditionSnapshots(row, model, h) {
   const maintenance = (model.maintenance || []).filter(record => String(record.rental_id) === String(row.id) || record.id === row.maintenance_record_id);
   return `<section class="record-section"><h3>Condition snapshots</h3><div class="condition-snapshots">${card('Before release', snapshot('RELEASE'), 'RELEASE')}${card('On return', snapshot('RETURN'), 'RETURN')}</div>${maintenance.map(record => `<p class="maintenance-reference">Linked maintenance <strong>${e(recordCode(record, 'maintenance'))}</strong> · ${e(String(record.status || 'Status not recorded').replaceAll('_', ' '))}<br/>${e(record.reason || '')} · ${e(record.inspection_notes || '')}</p>`).join('')}<p class="record-note">Saved inspection records remain in this rental after repairs.</p></section>`;
 }
-export function enrichVerification(request, model) {
-  const rental = (model.transactions || []).find(row => String(row.id) === String(request.rental_id));
-  const assigned = (model.terminals || []).find(row => String(row.id) === String(request.terminal_id));
-  return { ...request, transaction_type: String(request.transaction_type || request.type || '').toUpperCase(), rental_code: rental?.rental_code || request.rental_code || 'Not assigned', item_name: rental?.item_name || 'Unknown equipment', customer_name: rental?.customer_name || 'Unknown customer', terminal_code: request.terminal_code || assigned?.terminal_code || 'Code not recorded' };
+export function enrichVerification(request, model = {}) {
+  const safeModel = model || {};
+  const rental = (safeModel.transactions || []).find(row => String(row.id) === String(request.rental_id));
+  const assigned = (safeModel.terminals || []).find(row => String(row.id) === String(request.terminal_id));
+  return { ...request, transaction_type: String(request.transaction_type || request.type || '').toUpperCase(), rental_code: rental?.rental_code || request.rental_code || 'Not assigned', item_name: rental?.item_name || request.item_name || 'Unknown equipment', customer_name: rental?.customer_name || request.customer_name || request.customer || 'Unknown customer', terminal_code: request.terminal_code || assigned?.terminal_code || 'Code not recorded' };
 }
 export function verificationMatches(request, filter = {}) {
   const query = String(filter.search || '').toLowerCase();

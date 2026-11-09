@@ -107,7 +107,7 @@ export function openBluetoothReceipt(row, h, back, openPdf) {
       <section class="receipt-preview-panel" aria-label="Receipt preview"><div class="receipt-section-heading"><h3>Receipt preview</h3><span>Approx. ${e(Math.ceil(receipt.lengthMm + 5))} mm long</span></div><div class="receipt-preview-viewport" tabindex="0" aria-label="Scroll receipt preview"><div class="receipt-paper"><img alt="Thermal rental receipt preview" src="data:image/svg+xml;charset=utf-8,${e(encodeURIComponent(receipt.svg))}"/></div></div><p class="receipt-preview-caption">Side margins keep the receipt clear and readable.</p></section>
       <aside class="receipt-print-controls"><section class="receipt-device-card"><div class="receipt-device-heading"><span class="receipt-device-icon">${glyph('print')}</span><div><h3>Bluetooth printer</h3><p>Connect your receipt printer.</p></div></div><div class="receipt-connection" data-receipt-connection><span class="receipt-status-dot" aria-hidden="true"></span><p data-receipt-printer-state role="status" aria-live="polite"></p></div><p class="receipt-connection-help" data-receipt-printer-help></p><button type="button" class="secondary receipt-connect" data-receipt-connect>Connect printer</button><progress data-receipt-progress max="100" value="0" hidden aria-label="Receipt print progress"></progress><div class="receipt-message" data-receipt-print-message role="status" aria-live="polite" hidden></div></section>
       <section class="receipt-roll-card"><h3>Paper setup</h3><dl><div><dt>Paper type</dt><dd>Continuous roll</dd></div></dl><p>Load the roll with the thermal side facing the print head. Leave enough paper at the tear edge before printing.</p></section></aside>
-    </div><footer class="receipt-print-footer"><button type="button" class="text-button" data-receipt-back>Back to rental</button><div>${openPdf ? '<button type="button" class="secondary" data-receipt-pdf-fallback>Save / print PDF</button>' : ''}<button type="button" class="secondary" data-receipt-browser-print>${glyph('print')}Browser / USB Print</button><button type="button" class="primary" data-receipt-bluetooth-print disabled>${glyph('print')}Print via Bluetooth</button></div></footer>
+    </div><footer class="receipt-print-footer"><button type="button" class="text-button" data-receipt-back>Back to rental</button><div><button type="button" class="${Boolean(window.isSecureContext && navigator.bluetooth) ? 'secondary' : 'primary'}" data-receipt-pdf-fallback>Save / print PDF</button><button type="button" class="${Boolean(window.isSecureContext && navigator.bluetooth) ? 'primary' : 'secondary'}" data-receipt-bluetooth-print disabled>${glyph('print')}Print via Bluetooth</button></div></footer>
   </section>`);
   const panel = modal.querySelector('[data-thermal-receipt]'), message = panel.querySelector('[data-receipt-print-message]'), connect = panel.querySelector('[data-receipt-connect]'), print = panel.querySelector('[data-receipt-bluetooth-print]'), progress = panel.querySelector('[data-receipt-progress]');
   const supported = Boolean(window.isSecureContext && navigator.bluetooth);
@@ -122,7 +122,7 @@ export function openBluetoothReceipt(row, h, back, openPdf) {
     const warning = state.paperOut || state.headHot;
     panel.querySelector('[data-receipt-connection]').dataset.state = !supported || warning ? 'warning' : busy ? 'busy' : state.connected ? 'connected' : 'disconnected';
     panel.querySelector('[data-receipt-printer-state]').textContent = !supported ? 'Bluetooth unavailable' : state.printing ? `Printing receipt… ${state.progress}%` : state.connecting || state.reconnecting ? 'Connecting printer…' : state.connected ? 'Printer connected' : 'Printer not connected';
-    panel.querySelector('[data-receipt-printer-help]').textContent = !supported ? 'Use Chrome or Edge on localhost/HTTPS to connect. You can also save or print a PDF.' : state.paperOut ? 'Load the paper roll, then try printing again.' : state.headHot ? 'Let the print head cool, then try printing again.' : state.printing ? 'Keep the printer nearby while the receipt is being sent.' : state.connected ? 'Ready to print your receipt.' : 'Turn on the printer, then connect it to this device.';
+    panel.querySelector('[data-receipt-printer-help]').textContent = !supported ? 'Bluetooth is unavailable on Safari / iOS. Use Save / print PDF below, or open Chrome/Edge.' : state.paperOut ? 'Load the paper roll, then try printing again.' : state.headHot ? 'Let the print head cool, then try printing again.' : state.printing ? 'Keep the printer nearby while the receipt is being sent.' : state.connected ? 'Ready to print your receipt.' : 'Turn on the printer, then connect it to this device.';
     connect.disabled = !supported || busy; connect.textContent = state.connected ? 'Change printer' : 'Connect printer';
     // The next job rechecks the physical status, so paper/heat errors can be
     // retried after loading the roll or cooling without pairing again.
@@ -135,22 +135,16 @@ export function openBluetoothReceipt(row, h, back, openPdf) {
   modal.addEventListener('close', cleanup);
   modal.addEventListener('cancel', preventBusyClose);
   panel.querySelector('[data-receipt-back]').onclick = () => { if (busy) return; cleanup(); back(); };
-  panel.querySelector('[data-receipt-pdf-fallback]')?.addEventListener('click', () => { if (busy) return; cleanup(); openPdf(); });
-  panel.querySelector('[data-receipt-browser-print]')?.addEventListener('click', () => {
+  panel.querySelector('[data-receipt-pdf-fallback]')?.addEventListener('click', () => {
     if (busy) return;
-    try {
-      const printWindow = window.open('', '_blank');
-      if (printWindow) {
-        printWindow.document.write(renderWalkInReceipt(row, h));
-        printWindow.document.close();
-        printWindow.focus();
-        setTimeout(() => printWindow.print(), 250);
-      } else {
-        window.print();
-      }
-    } catch {
-      window.print();
-    }
+    cleanup();
+    if (typeof openPdf === 'function') { openPdf(); return; }
+    showModal('Walk-in rental receipt', '<iframe data-receipt-preview title="Rental receipt preview" sandbox="allow-same-origin allow-modals" style="width:100%;height:65vh;border:0;border-radius:8px;background:white"></iframe><div class="form-actions"><button type="button" class="secondary" data-receipt-back>Back to rental</button><button type="button" class="primary" data-receipt-print disabled>Print / Save PDF</button></div>');
+    const preview = modal.querySelector('[data-receipt-preview]'), printBtn = modal.querySelector('[data-receipt-print]');
+    preview.onload = () => { if (preview.isConnected) printBtn.disabled = false; };
+    preview.srcdoc = renderWalkInReceipt(row, h);
+    printBtn.onclick = () => { preview.contentWindow.focus(); preview.contentWindow.print(); };
+    modal.querySelector('[data-receipt-back]').onclick = () => back?.();
   });
   connect.onclick = async () => { if (busy) return; showMessage(''); try { await printer.connect(); } catch (error) { if (active && panel.isConnected) showMessage(error.message); } };
   print.onclick = async () => {

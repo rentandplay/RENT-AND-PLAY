@@ -112,6 +112,7 @@ const sourceFiles = [
   'dashboard-analytics.js',
   'analytics-charts.js',
   'analytics-chart-motion.js',
+  'forecast-workspace.js',
   'styles.css',
   'workspace-design.css'
 ];

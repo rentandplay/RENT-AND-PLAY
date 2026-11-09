@@ -4,6 +4,7 @@ import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
 import { calculateDetailedAnalytics, forecastScenario } from './analytics-insights.js';
 import { bindAnalyticsCharts } from './analytics-charts.js';
+import { updateForecastWorkspace } from './forecast-workspace.js';
 import { renderAnalyticsReport } from './analytics-report.js';
 import { renderSettings, settingsTabs, bindBusinessSettingsNavigation, bindReceiptSettingsPreview, bindAnnouncementSettingsPreview, defaultTermsAndConditions, defaultRentalTerms, defaultPrivacyPolicy, defaultRefundPolicy, defaultAcceptedIds, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
 import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
@@ -1072,9 +1073,19 @@ export function createWorkspaceUI(h) {
     document.querySelector('#analytics-item')?.addEventListener('change', event => { analyticsSelection.itemId = event.target.value; updateAnalytics(); });
     document.querySelector('#analytics-sort')?.addEventListener('change', event => { reportView.sort = event.target.value; pages['analytics-equipment'] = 0; rerender(); });
     document.querySelector('#analytics-reset')?.addEventListener('click', () => { Object.assign(analyticsSelection, { period: preferences.reportPeriod, groupBy: preferences.reportGrouping, from: '', to: '', categoryId: '', itemId: '' }); updateAnalytics(); });
-    document.querySelectorAll('[data-analytics-metric]').forEach(button => { button.onclick = () => { const chart = button.dataset.analyticsChart; reportView[chart === 'forecast' ? 'forecastMetric' : 'performanceMetric'] = button.dataset.analyticsMetric; rerender(); document.querySelector(`[data-analytics-chart="${chart}"][data-analytics-metric="${button.dataset.analyticsMetric}"]`)?.focus(); }; });
-    document.querySelectorAll('[data-forecast-scenario]').forEach(button => { button.onclick = () => { reportView.forecastScenario = button.dataset.forecastScenario; rerender(); document.querySelector(`[data-forecast-scenario="${reportView.forecastScenario}"]`)?.focus(); }; });
-    document.querySelectorAll('[data-forecast-model]').forEach(button => { button.onclick = () => { reportView.forecastModel = button.dataset.forecastModel; rerender(); document.querySelector(`[data-forecast-model="${reportView.forecastModel}"]`)?.focus(); }; });
+    const changeForecast = (property,value,selector) => {
+      reportView[property]=value;
+      const root=document.querySelector('.analytics-workspace');
+      if(!root||!updateForecastWorkspace(root,reports())) rerender();
+      document.querySelector(selector)?.focus({preventScroll:true});
+    };
+    document.querySelectorAll('[data-analytics-metric]').forEach(button => { button.onclick = () => {
+      const chart=button.dataset.analyticsChart,selector=`[data-analytics-chart="${chart}"][data-analytics-metric="${button.dataset.analyticsMetric}"]`;
+      if(chart==='forecast') changeForecast('forecastMetric',button.dataset.analyticsMetric,selector);
+      else {reportView.performanceMetric=button.dataset.analyticsMetric;rerender();document.querySelector(selector)?.focus({preventScroll:true});}
+    }; });
+    document.querySelectorAll('[data-forecast-scenario]').forEach(button => { button.onclick = () => changeForecast('forecastScenario',button.dataset.forecastScenario,`[data-forecast-scenario="${button.dataset.forecastScenario}"]`); });
+    document.querySelectorAll('[data-forecast-model]').forEach(button => { button.onclick = () => changeForecast('forecastModel',button.dataset.forecastModel,`[data-forecast-model="${button.dataset.forecastModel}"]`); });
     document.querySelectorAll('[data-recommendation-type]').forEach(button => { button.onclick = () => { reportView.recommendationType = button.dataset.recommendationType; rerender(); document.querySelectorAll('[data-recommendation-type]').forEach(next => { if (next.dataset.recommendationType === reportView.recommendationType) next.focus(); }); }; });
     document.querySelectorAll('[data-analytics-history]').forEach(button => { button.onclick = () => { analyticsSelection.period = '90d'; analyticsSelection.groupBy = button.dataset.analyticsHistory; updateAnalytics(); }; });
     document.querySelectorAll('[data-analytics-go-page]').forEach(button => { button.onclick = () => h.navigate?.(button.dataset.analyticsGoPage); });

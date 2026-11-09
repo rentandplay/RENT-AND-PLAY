@@ -185,3 +185,12 @@ export async function setChatStatus(db, actor, id, input, now = new Date()) {
     return { thread: view(next, actor) };
   });
 }
+
+export async function uploadChatAttachment(db, actor, id, dataUrl) {
+  checkActor(actor);
+  requiredId(id);
+  const snapshot = await db.collection('chat_threads').doc(id).get();
+  const row = snapshot.exists ? snapshot.data() : null;
+  authorize(actor, row);
+  return db.uploadChatAttachment(actor.id, id, dataUrl);
+}

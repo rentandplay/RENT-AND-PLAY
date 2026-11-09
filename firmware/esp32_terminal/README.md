@@ -67,3 +67,12 @@ const char* TERMINAL_KEY = "r6R0LbDKNCfTAvtoQkK545VGWZjifr_uQXi3jWnFAYg";
 1. **`! COUNTER HANDOVER !`** - Walk-in customer counter release (pindot ng button = start rental timer).
 2. **`! RESORT DISPATCH !`** - Resort delivery departure (pindot ng button = marks unit Out for Delivery habang nakahinto ang timer hanggang marating ang resort).
 3. **`! RETURN INTAKE !`** - Pagtanggap at pag-inspect ng ibinalik na equipment (pindot ng button = marks rental COMPLETED at available na ulit ang equipment).
+
+---
+
+## 7. Built-in Wi-Fi Setup Portal (No Re-flashing Needed)
+Kapag nagpalit ng Wi-Fi password o router sa shop:
+1. I-hold ang physical button (**GPIO 35**) habang nagbo-boot (o hintayin mag-fail ang Wi-Fi connection).
+2. Lalabas sa OLED screen ang **`== WIFI SETUP MODE ==`** at gagawa ang ESP32 ng hotspot na **`RentPlay-TERM-01`** (o `RentPlay-TERM-02`).
+3. Kumonekta sa hotspot gamit ang phone o laptop at buksan ang **`http://192.168.4.1`** sa browser.
+4. Ilagay ang bagong Wi-Fi SSID at Password at pindutin ang **Save & Connect**. Sine-save ito sa ESP32 NVS (`Preferences`) kaya mananatili kahit mawalan ng kuryente.

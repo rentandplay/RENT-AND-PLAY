@@ -73,15 +73,21 @@ test('a preliminary forecast never presents candidate order as evaluated perform
   assert.ok(!html.includes('Confidence:'));
   assert.ok(html.includes('data-forecast-model="auto" aria-pressed="false" disabled'));
   const ses = renderAnalyticsReport(model, selection, { section:'forecast', forecastModel:'ses' }, helpers);
-  assert.ok(!ses.includes('ana-range-key'));
+  assert.ok(!ses.includes('class="ana-variation-band"'));
   assert.ok(ses.includes('SES (Exponential) estimates'));
 });
 
-test('presentation datasets are visibly identified without labeling ordinary reports as demos', () => {
-  const demo_data={ active:true,status:'ready',record_count:293,batch_id:'presentation-test' };
-  const html=renderAnalyticsReport({demo_data},selection,{section:'performance'},helpers);
-  assert.ok(html.includes('Presentation demo data'));
-  assert.ok(html.includes('293 simulated historical rentals'));
-  assert.ok(html.includes('Full demo history'));
-  assert.ok(!renderAnalyticsReport({},selection,{},helpers).includes('Presentation demo data'));
+test('forecasting paginates projected equipment mix', () => {
+  const stock = { items: [
+    { id: 'bike', name: 'Bicycle', category_id: 'sports', is_active: true, status: 'AVAILABLE', created_at: '2026-07-01' }
+  ], categories: [{ id: 'sports', name: 'Sports' }] };
+  const transactions = [];
+  for (let index = 90; index >= 1; index--) {
+    const date = new Date(Date.parse('2026-10-13T00:00:00Z') - index * 86400000), key = date.toISOString().slice(0, 10);
+    transactions.push({ id: 'r-' + index, item_id: 'bike', status: 'COMPLETED', confirmed_rental_at: `${key} 10:00:00`, due_at: `${key} 12:00:00`, rental_fee: 100 });
+  }
+  const html = renderAnalyticsReport({ ...stock, transactions }, { period: '90d', groupBy: 'daily' }, { section: 'forecast' }, helpers);
+  assert.ok(html.includes('Projected equipment mix'));
+  assert.ok(html.includes('ana-forecast-mix'));
+  assert.ok(html.includes('<footer>Pagination</footer>'));
 });

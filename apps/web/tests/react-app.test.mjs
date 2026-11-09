@@ -280,6 +280,19 @@ test('Global ESP32 TerminalPendingBanner surfaces across workspace pages without
   );
   assert.equal((espPageHtml.match(/Terminal confirmation needed/g) || []).length, 0);
 
+  const reportsPageHtml = renderToStaticMarkup(
+    React.createElement(WorkspaceShell, { ...baseShellProps, page: 'Reports', reportSection: 'performance' })
+  );
+  assert.equal((reportsPageHtml.match(/Terminal confirmation needed/g) || []).length, 0);
+
+  const settingsPageHtml = renderToStaticMarkup(
+    React.createElement(WorkspaceShell, { ...baseShellProps, page: 'Settings' })
+  );
+  assert.equal((settingsPageHtml.match(/Terminal confirmation needed/g) || []).length, 0);
+
+  assert.match(dashboardShellHtml, /terminal-widget-active-card/);
+  assert.match(dashboardShellHtml, /Pending action/);
+
   const enriched = enrichVerification(pendingData.pending[0], null);
   assert.equal(enriched.item_name, 'PS5 Bundle');
   assert.equal(enriched.customer_name, 'Jose Rizal');

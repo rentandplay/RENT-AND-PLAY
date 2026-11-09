@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { withDeadline } from './request-deadline.mjs';
 import { createHash } from 'node:crypto';
-import { openChat, listChats, chatMessages, sendChatMessage, readChat, setChatStatus, setTyping, getTyping } from './chat.mjs';
+import { openChat, listChats, chatMessages, sendChatMessage, readChat, setChatStatus, setTyping, getTyping, uploadChatAttachment } from './chat.mjs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import nodePath from 'node:path';
@@ -97,6 +97,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
       return () => customerListeners.delete(listener);
     },
     uploadProfilePhoto: (uid, dataUrl) => firestore.uploadProfilePhoto(uid, dataUrl),
+    uploadChatAttachment: (actor, threadId, dataUrl) => uploadChatAttachment(firestore, actor, threadId, dataUrl),
     openChat: (actor, input) => openChat(firestore, actor, input, now()),
     listChats: (actor, options) => listChats(firestore, actor, options),
     chatMessages: (actor, id, options) => chatMessages(firestore, actor, id, options),
@@ -620,7 +621,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         return send(res, 200, { ...await services.completeMobileRegistration(claims, input), firebaseProjectId: services.firebaseProjectId });
       }
       quotaBackoff.assertAvailable();
-      const chatRoute = path.match(/^\/api\/chat\/threads(?:\/([A-Za-z0-9_-]{1,128})(?:\/(messages|read|status|typing))?)?$/);
+      const chatRoute = path.match(/^\/api\/chat\/threads(?:\/([A-Za-z0-9_-]{1,128})(?:\/(messages|read|status|typing|attachment))?)?$/);
       if (chatRoute) {
         const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || '')?.[1];
         const claims = bearer ? await services.verifyMobileToken?.(bearer) : await sessions.verify(token);
@@ -641,6 +642,15 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         }
         if (id && action === 'read' && req.method === 'POST') return send(res, 200, await services.readChat(actor, id, await body(req)));
         if (id && action === 'status' && req.method === 'PATCH') return send(res, 200, await services.setChatStatus(actor, id, await body(req)));
+        if (id && action === 'attachment' && req.method === 'POST') {
+          const input = await body(req, 2900000);
+          const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$/.exec(input?.dataUrl || '');
+          const bytes = match ? Buffer.from(match[2], 'base64') : null;
+          const valid = bytes && bytes.length <= 2 * 1024 * 1024 && (match[1] === 'png' ? bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255);
+          if (!valid) return send(res, 400, { error: 'Choose a PNG or JPEG photo up to 2 MB.' });
+          const url = await services.uploadChatAttachment(actor, id, input.dataUrl);
+          return send(res, 200, { url });
+        }
         if (id && action === 'typing' && req.method === 'POST') {
           const input = await body(req).catch(() => ({}));
           return send(res, 200, await services.setTyping(actor, id, input?.typing !== false));

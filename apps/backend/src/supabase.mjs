@@ -470,6 +470,12 @@ export function createSupabaseFirestore({
 
   return {
     collection,
+    async uploadChatAttachment(uid, threadId, dataUrl) {
+      const docId = `${threadId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const uploaded = await uploadDataUrlToStorage('chat_attachments', docId, 'attachment', dataUrl);
+      if (!uploaded) throw Object.assign(new Error('Photo upload is temporarily unavailable.'), { status: 503 });
+      return `${uploaded.storage_url}?t=${Date.now()}`;
+    },
     async uploadProfilePhoto(uid, dataUrl) {
       const uploaded = await uploadDataUrlToStorage('profile_photos', uid, 'image_data_url', dataUrl);
       if (!uploaded) throw Object.assign(new Error('Profile photo upload is temporarily unavailable.'), { status: 503 });

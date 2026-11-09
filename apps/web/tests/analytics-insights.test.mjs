@@ -232,3 +232,30 @@ test('zero held-out totals leave WAPE fit score undefined and nonzero errors rem
   assert.ok(Math.abs(ses.rmseRentals - rmse) < 1e-10);
   assert.equal(ses.smapeRentals, 2);
 });
+
+test('seasonal forecasts reproduce an independent known weekday/weekend pattern',()=>{
+  const f=calculateDetailedAnalytics(history(),{period:'90d',groupBy:'daily'},now).forecast;
+  for(const point of f.points) {
+    const weekend=[0,6].includes(new Date(point.from).getUTCDay());
+    assert.equal(point.rentals,weekend?4:2);
+    assert.equal(point.fees,weekend?550:225);
+  }
+});
+
+test('OLS extrapolates known linear fees across the excluded current day and clamps negatives',()=>{
+  const build=declining=>({...stock,transactions:Array.from({length:64},(_,i)=>{
+    const day=new Date(Date.parse('2026-10-13T00:00:00Z')-(64-i)*86400000).toISOString().slice(0,10);
+    return rental('trend-'+i,'bike',day+' 10:00:00',declining?135-2*i:7+2*i);
+  })});
+  const get=data=>calculateDetailedAnalytics(data,{period:'90d',groupBy:'daily'},now).forecast;
+  const a=get(build(false)),linear=forecastScenario(a,'baseline','linear');
+  assert.equal(linear[0].from,'2026-10-14');
+  assert.ok(Math.abs(linear[0].fees-137)<1e-8);
+  assert.ok(Math.abs(linear.at(-1).fees-149)<1e-8);
+  const b=get(build(true)),negative=forecastScenario(b,'baseline','linear');
+  assert.ok(Math.abs(negative[0].fees-5)<1e-8);
+  assert.equal(negative.at(-1).fees,0);
+  const changed=build(false);changed.transactions.push(rental('partial','bike','2026-10-13 09:00:00',99999));
+  const partial=get(changed);
+  for(const id of ['seasonal','ses','wma','linear'])assert.deepEqual(forecastScenario(partial,'baseline',id),forecastScenario(a,'baseline',id));
+});

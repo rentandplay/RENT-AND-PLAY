@@ -149,13 +149,19 @@ export function TerminalPendingBanner({ data, workspaceUI, onNavigate }) {
         <div className="terminal-banner-badge-row">
           <span className="terminal-banner-badge">Terminal confirmation needed</span>
           <span className="terminal-queue-count">{activeQueue.length} pending</span>
+          <span className="terminal-banner-station-tag">
+            Terminal: <strong>{firstPending.terminal_code || primaryTerminal?.terminal_code || 'TERM-01'}</strong>
+          </span>
         </div>
-        <strong>
-          {firstPending.item_name || 'Equipment'} &middot; {firstPending.customer || 'Customer'}
-        </strong>
-        <p>
-          Code: <code>{firstPending.rental_code || firstPending.verification_code || firstPending.id}</code> &middot;{' '}
-          Terminal: <strong>{firstPending.terminal_code || primaryTerminal?.terminal_code || 'TERM-01'}</strong> &middot;{' '}
+        <div className="terminal-banner-main-row">
+          <strong className="terminal-banner-customer">
+            {firstPending.item_name || 'Equipment'} &middot; {firstPending.customer || 'Customer'}
+          </strong>
+          <span className="terminal-banner-code-badge">
+            Code: <code>{firstPending.rental_code || firstPending.verification_code || firstPending.id}</code>
+          </span>
+        </div>
+        <p className="terminal-banner-instructions">
           Review the request, then press the terminal button to confirm.
         </p>
       </div>
@@ -362,7 +368,8 @@ export function DashboardView({
 
   // Terminal info
   const t = data.terminals[0];
-  const queue = t ? data.pending.filter(p => p.terminal_code === t.terminal_code) : [];
+  const terminalQueue = t && Array.isArray(data.pending) ? data.pending.filter(p => p.terminal_code === t.terminal_code) : [];
+  const queue = terminalQueue.length > 0 ? terminalQueue : (Array.isArray(data.pending) ? data.pending : []);
 
   // Today's actual collections (Cash vs. GCash/InstaPay QR)
   const collections = data.collections || {};
@@ -679,11 +686,46 @@ export function DashboardView({
             </div>
             <div className="terminal-meta">
               <span>Awaiting confirmation</span>
-              <strong>{queue.length}</strong>
+              <strong className={queue.length > 0 ? 'has-pending-count' : ''}>{queue.length}</strong>
             </div>
-            <p className="terminal-note">
-              Confirm counter handovers, delivery dispatches, and completed inspections.
-            </p>
+            {queue.length > 0 && queue[0] ? (
+              <div className="terminal-widget-active-card">
+                <div className="terminal-widget-active-header">
+                  <span className="terminal-widget-tag">
+                    <span className="terminal-widget-live-dot" aria-hidden="true" />
+                    Pending action
+                  </span>
+                  <code className="terminal-widget-code">
+                    {queue[0].rental_code || queue[0].verification_code || queue[0].id}
+                  </code>
+                </div>
+                <div className="terminal-widget-active-info">
+                  <strong>{queue[0].item_name || 'Equipment'} &middot; {queue[0].customer || 'Customer'}</strong>
+                  <span>{queue[0].transaction_type === 'RETURN' ? 'Return inspection' : 'Counter handover'} &middot; {queue[0].terminal_code || t?.terminal_code || 'TERM-01'}</span>
+                </div>
+                <button
+                  type="button"
+                  className="primary terminal-widget-review-btn"
+                  onClick={() => {
+                    const openDialog = workspaceUI?.showHandoff || workspaceUI?.openHandoff;
+                    if (openDialog) {
+                      const matchedRental = Array.isArray(data.rentals)
+                        ? data.rentals.find(r => String(r.id) === String(queue[0].rental_id))
+                        : undefined;
+                      openDialog(queue[0], matchedRental);
+                    } else {
+                      onNavigate?.('ESP32 terminal');
+                    }
+                  }}
+                >
+                  Review request →
+                </button>
+              </div>
+            ) : (
+              <p className="terminal-note">
+                Confirm counter handovers, delivery dispatches, and completed inspections.
+              </p>
+            )}
             <div className="dashboard-terminal-actions">
               <button type="button" className="secondary" id="cmd-ping-terminal" disabled={!t || !api || testingTerminal} onClick={async () => {
                 setTestingTerminal(true);

@@ -45,3 +45,23 @@ test('narrow hour charts shorten and rotate labels while keeping the full inspec
   assert.match(document.querySelector('.ana-axis-label').getAttribute('transform'),/rotate\(-35/);
   assert.equal(JSON.parse(document.querySelector('figure').dataset.anaValues)[0].label,'10 AM–12 PM');
 });
+
+test('a replacement before first visibility still animates when it enters the viewport',async()=>{
+  const {activateChartMotion,settleChartMotion}=await import('../src/analytics-chart-motion.js');
+  const html=barChart([{label:'Mon',value:3}],{escape,title:'Pending chart',id:'pending-visibility-proof'});
+  const {document,window}=parseHTML('<html><body>'+html+'</body></html>');
+  const observers=[],frames=[];
+  const saved={raf:window.requestAnimationFrame,io:window.IntersectionObserver,match:window.matchMedia};
+  window.requestAnimationFrame=callback=>{frames.push(callback);return frames.length;};
+  window.matchMedia=()=>({matches:false});
+  window.IntersectionObserver=class {constructor(callback){this.callback=callback;observers.push(this);}observe(){}disconnect(){}};
+  try{
+    const first=document.querySelector('figure');activateChartMotion(first);
+    settleChartMotion(first);document.body.innerHTML=html;
+    const replacement=document.querySelector('figure');activateChartMotion(replacement);
+    assert.equal(observers.length,2);
+    observers[1].callback([{isIntersecting:true}]);frames.forEach(callback=>callback());
+    assert.equal(replacement.dataset.anaMotion,'enter');
+    assert.ok(replacement.classList.contains('ana-motion-enter'));
+  }finally{window.requestAnimationFrame=saved.raf;window.IntersectionObserver=saved.io;window.matchMedia=saved.match;}
+});

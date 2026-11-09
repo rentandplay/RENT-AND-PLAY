@@ -132,6 +132,7 @@ test('HTTP endpoints support bearer and cookie auth, deny anonymous, inactive an
   services.verifyMobileToken = async token => token === 'alice' ? { uid: 'alice' } : null;
   let uploadUid;
   services.uploadProfilePhoto = async uid => { uploadUid = uid; return 'https://example.supabase.co/photo.png'; };
+  db.uploadChatAttachment = async () => 'https://example.supabase.co/chat_attachment.png';
   const server = createApi({ services, sessions: { verify: async token => token === 'staff' ? { uid: 'staff' } : null }, expiryWorker: false, notificationWorker: false });
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
   const base = `http://127.0.0.1:${server.address().port}/api/chat/threads`;
@@ -153,6 +154,10 @@ test('HTTP endpoints support bearer and cookie auth, deny anonymous, inactive an
     assert.equal((await fetch(photoUrl, { method:'POST',headers,body:JSON.stringify({dataUrl:'data:image/png;base64,YmFk'}) })).status,400);
     const photo = await fetch(photoUrl, { method:'POST',headers,body:JSON.stringify({uid:'bob',dataUrl:'data:image/png;base64,iVBORw0KGgo='}) });
     assert.equal(photo.status,200); assert.equal(uploadUid,'alice');
+    const attachRes = await fetch(base + '/' + thread.id + '/attachment', { method:'POST', headers, body:JSON.stringify({dataUrl:'data:image/png;base64,iVBORw0KGgo='}) });
+    assert.equal(attachRes.status, 200); assert.deepEqual(await attachRes.json(), { url: 'https://example.supabase.co/chat_attachment.png' });
+    const badThreadAttach = await fetch(base + '/c_nonexistent/attachment', { method:'POST', headers, body:JSON.stringify({dataUrl:'data:image/png;base64,iVBORw0KGgo='}) });
+    assert.equal(badThreadAttach.status, 404);
     await db.collection('users').doc('alice').update({ is_active:false }); services.invalidateReadCache(['users']);
     assert.equal((await fetch(base,{headers})).status,403);
   } finally { await new Promise(resolve => server.close(resolve)); }

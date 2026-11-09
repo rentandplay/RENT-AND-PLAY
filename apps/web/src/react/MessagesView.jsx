@@ -291,7 +291,23 @@ export function MessagesView({ api, user }) {
                   <strong>{message.sender_role === 'STAFF' ? `${message.sender_name}${message.sender_id === user?.id ? ' (you)' : ''}` : thread?.customer_name}</strong>
                   <span className={`support-role-tag role-${message.sender_role.toLowerCase()}`}>{message.sender_role === 'STAFF' ? 'Staff' : 'Customer'}</span>
                 </div>
-                <p>{message.text}</p>
+                {(() => {
+                  const photoMatch = message.text?.match(/\[Photo:\s*(\S+)\]/);
+                  const photoUrl = photoMatch ? photoMatch[1] : null;
+                  const cleanText = message.text?.replace(/\[Photo:\s*\S+\]/, '').trim();
+                  return (
+                    <>
+                      {photoUrl && (
+                        <div className="support-bubble-photo" style={{ margin: '6px 0' }}>
+                          <a href={photoUrl} target="_blank" rel="noopener noreferrer" title="Click to view image in full resolution">
+                            <img src={photoUrl} alt="Attached photo" style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 8, display: 'block' }} />
+                          </a>
+                        </div>
+                      )}
+                      {cleanText ? <p>{cleanText}</p> : (!photoUrl && <p>{message.text}</p>)}
+                    </>
+                  );
+                })()}
                 <small>{when(message.created_at)}{message.sender_role === 'STAFF' ? ` · ${thread?.customer_read_seq >= message.seq ? 'Read' : 'Sent'}` : ''}</small>
               </article>)}
               {typing?.is_typing && <article className="support-bubble support-typing-bubble" role="status" aria-label={`${typing.name} is typing`}>

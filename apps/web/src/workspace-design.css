@@ -34,9 +34,9 @@ body {
 :root[data-theme=dark] body { background: var(--ui-bg); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 [hidden] { display: none !important; }
-.workspace { font-size: 14px; background: transparent; }
-.workspace-body { background: transparent; }
-:root[data-theme] :is(.workspace,.workspace-body,.workspace .content) { background: transparent; }
+.workspace { font-size: 14px; background: var(--ui-bg); }
+.workspace-body { background: var(--ui-bg); }
+:root[data-theme] :is(.workspace,.workspace-body,.workspace .content) { background: var(--ui-bg); }
 .workspace p, dialog p { color: var(--ui-muted); font-size: 14px; line-height: 1.6; }
 .workspace :is(h2,h3), dialog h3 { color: var(--ui-text); font-size: 17px; letter-spacing: -.25px; }
 .workspace h2 { font-size: 19px; }
@@ -77,12 +77,11 @@ button:disabled { cursor: not-allowed; }
 /* Smooth accordion and hover transitions */
 .workspace .sidebar nav .nav-section-title {
   transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-              color 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: transform;
+              color 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: auto;
 }
 .workspace .sidebar nav .nav-section-title:hover {
-  transform: translateX(3px);
+  transform: translateX(2.5px);
 }
 
 .workspace .sidebar .nav-group-chevron {
@@ -133,12 +132,11 @@ button:disabled { cursor: not-allowed; }
 
 .workspace .sidebar nav .nav-child {
   transition: background-color 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-              color 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: transform;
+              color 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: auto;
 }
 .workspace .sidebar nav .nav-child:hover {
-  transform: translateX(3px);
+  transform: translateX(2.5px);
 }
 .workspace .sidebar .nav-flyout-header { color: var(--ui-muted); }
 .workspace.sidebar-collapsed .sidebar .nav-section-items { background: var(--glass-strong); border-color: var(--glass-edge); backdrop-filter: blur(24px); }
@@ -205,7 +203,249 @@ button:disabled { cursor: not-allowed; }
 .workspace :is(.module-search,.inv-search,.table-search) { height: auto; min-height: 42px; }
 .workspace :is(.module-search,.inv-search,.table-search) input { border: 0; padding-left: 0; background: transparent; }
 .workspace :is(.module-search,.inv-search,.table-search) input:not([type=checkbox]):not([type=radio]) { border: 0; box-shadow: none; border-radius: 0; background: transparent; padding-block: 8px; }
-.workspace :is(.admin-table,.inv-table,table) { font-size: 14px; }
+.workspace :is(.admin-table,.inv-table,table) {
+  font-size: 14px;
+  table-layout: fixed;
+  width: 100%;
+}
+.workspace :is(.admin-table,.inv-table,table) :is(th, td) {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: break-word;
+}
+
+/* ==========================================================================
+   Locked Column Widths (Prevents column shifting/jumping across pagination)
+   Comprehensive table coverage across all modules, modals, and report pages
+   ========================================================================== */
+
+/* 1. Dashboard Rental Activity Table */
+.dashboard-workspace .rental-panel table {
+  table-layout: fixed;
+  width: 100%;
+}
+.dashboard-workspace .rental-panel table :is(th, td):nth-child(1) { width: 34%; }
+.dashboard-workspace .rental-panel table :is(th, td):nth-child(2) { width: 22%; }
+.dashboard-workspace .rental-panel table :is(th, td):nth-child(3) { width: 22%; }
+.dashboard-workspace .rental-panel table :is(th, td):nth-child(4) { width: 14%; }
+.dashboard-workspace .rental-panel table :is(th, td):nth-child(5) { width: 8%; min-width: 48px; text-align: right; }
+
+/* 2. Equipment Table (Inventory) */
+.workspace .inv-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 820px;
+}
+.workspace .inv-table :is(th, td):nth-child(1) { width: 30%; }
+.workspace .inv-table :is(th, td):nth-child(2) { width: 12%; }
+.workspace .inv-table :is(th, td):nth-child(3) { width: 13%; }
+.workspace .inv-table :is(th, td):nth-child(4) { width: 13%; }
+.workspace .inv-table :is(th, td):nth-child(5) { width: 22%; }
+.workspace .inv-table :is(th, td):nth-child(6),
+.workspace .inv-table .inv-actions-cell { width: 100px; max-width: 100px; text-align: center; }
+
+/* 3. Inventory Physical Unit Details (Modal) */
+:is(.workspace, dialog) .inv-unit-table {
+  table-layout: fixed;
+  width: 100%;
+}
+:is(.workspace, dialog) .inv-unit-table :is(th, td):nth-child(1) { width: 28%; }
+:is(.workspace, dialog) .inv-unit-table :is(th, td):nth-child(2) { width: 22%; }
+:is(.workspace, dialog) .inv-unit-table :is(th, td):nth-child(3) { width: 22%; }
+:is(.workspace, dialog) .inv-unit-table :is(th, td):nth-child(4) { width: 28%; min-width: 140px; }
+
+/* 4. Rentals Table */
+.workspace .rentals-table-panel .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 880px;
+}
+.workspace .rentals-table-panel .admin-table :is(th, td):nth-child(1) { width: 26%; }
+.workspace .rentals-table-panel .admin-table :is(th, td):nth-child(2) { width: 18%; }
+.workspace .rentals-table-panel .admin-table :is(th, td):nth-child(3) { width: 18%; }
+.workspace .rentals-table-panel .admin-table :is(th, td):nth-child(4) { width: 14%; }
+.workspace .rentals-table-panel .admin-table :is(th, td):nth-child(5) { width: 14%; }
+.workspace .rentals-table-panel .admin-table :is(th, td):nth-child(6),
+.workspace .rentals-table-panel .admin-table .transaction-actions-cell { width: 10%; min-width: 90px; }
+
+/* 5. Returns Table (Both Pending & Completed views) */
+.workspace .returns-table-panel .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 880px;
+}
+.workspace .returns-table-panel .admin-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(1) { width: 26%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(2) { width: 18%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(3) { width: 18%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(4) { width: 14%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(5) { width: 14%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(6) { width: 10%; min-width: 90px; }
+
+.workspace .returns-table-panel .admin-table:has(th:nth-child(7):last-child) :is(th, td):nth-child(1) { width: 22%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(7):last-child) :is(th, td):nth-child(2) { width: 16%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(7):last-child) :is(th, td):nth-child(3) { width: 15%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(7):last-child) :is(th, td):nth-child(4) { width: 16%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(7):last-child) :is(th, td):nth-child(5) { width: 13%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(7):last-child) :is(th, td):nth-child(6) { width: 10%; }
+.workspace .returns-table-panel .admin-table:has(th:nth-child(7):last-child) :is(th, td):nth-child(7) { width: 8%; min-width: 80px; }
+
+/* 6. Transaction History Table */
+.workspace .history-table-panel .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 920px;
+}
+.workspace .history-table-panel .admin-table :is(th, td):nth-child(1) { width: 12%; }
+.workspace .history-table-panel .admin-table :is(th, td):nth-child(2) { width: 20%; }
+.workspace .history-table-panel .admin-table :is(th, td):nth-child(3) { width: 15%; }
+.workspace .history-table-panel .admin-table :is(th, td):nth-child(4) { width: 13%; }
+.workspace .history-table-panel .admin-table :is(th, td):nth-child(5) { width: 15%; }
+.workspace .history-table-panel .admin-table :is(th, td):nth-child(6) { width: 11%; }
+.workspace .history-table-panel .admin-table :is(th, td):nth-child(7) { width: 8%; }
+.workspace .history-table-panel .admin-table :is(th, td):nth-child(8) { width: 6%; min-width: 70px; }
+
+/* 7. Customer Directory Table */
+.workspace .customer-directory .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 860px;
+}
+.workspace .customer-directory .admin-table :is(th, td):nth-child(1) { width: 24%; }
+.workspace .customer-directory .admin-table :is(th, td):nth-child(2) { width: 22%; }
+.workspace .customer-directory .admin-table :is(th, td):nth-child(3) { width: 18%; }
+.workspace .customer-directory .admin-table :is(th, td):nth-child(4) { width: 18%; }
+.workspace .customer-directory .admin-table :is(th, td):nth-child(5) { width: 10%; }
+.workspace .customer-directory .admin-table :is(th, td):nth-child(6) { width: 8%; min-width: 80px; }
+
+/* 8. Customer Profile Rental History (Modal) */
+:is(.workspace, dialog) .customer-profile-history .admin-table {
+  table-layout: fixed;
+  width: 100%;
+}
+:is(.workspace, dialog) .customer-profile-history .admin-table :is(th, td):nth-child(1) { width: 28%; }
+:is(.workspace, dialog) .customer-profile-history .admin-table :is(th, td):nth-child(2) { width: 20%; }
+:is(.workspace, dialog) .customer-profile-history .admin-table :is(th, td):nth-child(3) { width: 20%; }
+:is(.workspace, dialog) .customer-profile-history .admin-table :is(th, td):nth-child(4) { width: 18%; }
+:is(.workspace, dialog) .customer-profile-history .admin-table :is(th, td):nth-child(5) { width: 14%; min-width: 80px; }
+
+/* 9. Maintenance Tickets Table */
+.workspace .maintenance-tickets .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 880px;
+}
+.workspace .maintenance-tickets .admin-table :is(th, td):nth-child(1) { width: 22%; }
+.workspace .maintenance-tickets .admin-table :is(th, td):nth-child(2) { width: 24%; }
+.workspace .maintenance-tickets .admin-table :is(th, td):nth-child(3) { width: 18%; }
+.workspace .maintenance-tickets .admin-table :is(th, td):nth-child(4) { width: 16%; }
+.workspace .maintenance-tickets .admin-table :is(th, td):nth-child(5) { width: 12%; }
+.workspace .maintenance-tickets .admin-table :is(th, td):nth-child(6) { width: 8%; min-width: 90px; }
+
+/* 10. Rates & Fees Table */
+.workspace .rates-overview ~ .admin-module .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 780px;
+}
+.workspace .rates-overview ~ .admin-module .admin-table :is(th, td):nth-child(1) { width: 30%; }
+.workspace .rates-overview ~ .admin-module .admin-table :is(th, td):nth-child(2) { width: 16%; }
+.workspace .rates-overview ~ .admin-module .admin-table :is(th, td):nth-child(3) { width: 18%; }
+.workspace .rates-overview ~ .admin-module .admin-table :is(th, td):nth-child(4) { width: 18%; }
+.workspace .rates-overview ~ .admin-module .admin-table :is(th, td):nth-child(5) { width: 18%; }
+
+/* 11. Verification Queue & History Tables */
+.workspace .verification-queue-panel .admin-table,
+.workspace .verification-history-panel .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 880px;
+}
+.workspace :is(.verification-queue-panel, .verification-history-panel) .admin-table :is(th, td):nth-child(1) { width: 22%; }
+.workspace :is(.verification-queue-panel, .verification-history-panel) .admin-table :is(th, td):nth-child(2) { width: 12%; }
+.workspace :is(.verification-queue-panel, .verification-history-panel) .admin-table :is(th, td):nth-child(3) { width: 15%; }
+.workspace :is(.verification-queue-panel, .verification-history-panel) .admin-table :is(th, td):nth-child(4) { width: 13%; }
+.workspace :is(.verification-queue-panel, .verification-history-panel) .admin-table :is(th, td):nth-child(5) { width: 20%; }
+.workspace :is(.verification-queue-panel, .verification-history-panel) .admin-table :is(th, td):nth-child(6) { width: 18%; min-width: 120px; }
+
+/* 12. Finance Payments & Ledger Tables */
+.workspace .finance-records .finance-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 820px;
+}
+.workspace .finance-records .finance-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(1) { width: 26%; }
+.workspace .finance-records .finance-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(2) { width: 15%; }
+.workspace .finance-records .finance-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(3) { width: 15%; }
+.workspace .finance-records .finance-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(4) { width: 15%; }
+.workspace .finance-records .finance-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(5) { width: 15%; }
+.workspace .finance-records .finance-table:has(th:nth-child(6):last-child) :is(th, td):nth-child(6) { width: 14%; min-width: 90px; }
+
+.workspace .finance-records .finance-table:has(th:nth-child(5):last-child) :is(th, td):nth-child(1) { width: 22%; }
+.workspace .finance-records .finance-table:has(th:nth-child(5):last-child) :is(th, td):nth-child(2) { width: 26%; }
+.workspace .finance-records .finance-table:has(th:nth-child(5):last-child) :is(th, td):nth-child(3) { width: 20%; }
+.workspace .finance-records .finance-table:has(th:nth-child(5):last-child) :is(th, td):nth-child(4) { width: 16%; }
+.workspace .finance-records .finance-table:has(th:nth-child(5):last-child) :is(th, td):nth-child(5) { width: 16%; }
+
+/* 13. Reports: Analytics Audit Log / Activity Table */
+.workspace .ana-methods .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 780px;
+}
+.workspace .ana-methods .admin-table :is(th, td):nth-child(1) { width: 25%; }
+.workspace .ana-methods .admin-table :is(th, td):nth-child(2) { width: 25%; }
+.workspace .ana-methods .admin-table :is(th, td):nth-child(3) { width: 28%; }
+.workspace .ana-methods .admin-table :is(th, td):nth-child(4) { width: 22%; }
+
+/* 14. Reports: Analytics Trend Values Table */
+.workspace .ana-methods[data-analytics-detail="trend"] .admin-table :is(th, td):nth-child(1) { width: 40%; }
+.workspace .ana-methods[data-analytics-detail="trend"] .admin-table :is(th, td):nth-child(2) { width: 30%; }
+.workspace .ana-methods[data-analytics-detail="trend"] .admin-table :is(th, td):nth-child(3) { width: 30%; }
+
+/* 15. Reports: Analytics Equipment Utilization Table */
+.workspace .ana-equipment-table .admin-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 840px;
+}
+.workspace .ana-equipment-table .admin-table :is(th, td):nth-child(1) { width: 28%; }
+.workspace .ana-equipment-table .admin-table :is(th, td):nth-child(2) { width: 12%; }
+.workspace .ana-equipment-table .admin-table :is(th, td):nth-child(3) { width: 18%; }
+.workspace .ana-equipment-table .admin-table :is(th, td):nth-child(4) { width: 16%; }
+.workspace .ana-equipment-table .admin-table :is(th, td):nth-child(5) { width: 12%; }
+.workspace .ana-equipment-table .admin-table :is(th, td):nth-child(6) { width: 14%; }
+
+/* 16. Reports: Analytics Counter Confirmation Speed Table */
+.workspace .ana-two-grid .admin-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.workspace .ana-two-grid .admin-table :is(th, td):nth-child(1) { width: 28%; }
+.workspace .ana-two-grid .admin-table :is(th, td):nth-child(2) { width: 22%; }
+.workspace .ana-two-grid .admin-table :is(th, td):nth-child(3) { width: 25%; }
+.workspace .ana-two-grid .admin-table :is(th, td):nth-child(4) { width: 25%; }
+
+/* 17. Reports: Forecasting Benchmark & Equipment Tables */
+.workspace .analytics-forecast-table .admin-table,
+.workspace .ana-forecast-mix .admin-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.workspace .ana-forecast-mix .admin-table :is(th, td):nth-child(1) { width: 40%; }
+.workspace .ana-forecast-mix .admin-table :is(th, td):nth-child(2) { width: 30%; }
+.workspace .ana-forecast-mix .admin-table :is(th, td):nth-child(3) { width: 30%; }
+
+/* 18. Settings Staff Accounts Table */
+.workspace .settings-users .admin-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.workspace .settings-users .admin-table :is(th, td):nth-child(1) { width: 28%; }
+.workspace .settings-users .admin-table :is(th, td):nth-child(2) { width: 16%; }
+.workspace .settings-users .admin-table :is(th, td):nth-child(3) { width: 22%; }
+.workspace .settings-users .admin-table :is(th, td):nth-child(4) { width: 16%; }
+.workspace .settings-users .admin-table :is(th, td):nth-child(5) { width: 18%; }
+
 .workspace :is(.admin-table,.inv-table,table) th { background: color-mix(in srgb,var(--ui-soft) 55%,transparent); color: var(--ui-muted); font-size: 11px; letter-spacing: .045em; padding: 12px 18px; font-weight: 700; line-height: 1.4; }
 .workspace :is(.admin-table,.inv-table,table) td { padding: 14px 18px; font-size: 14px; line-height: 1.5; border-color: var(--ui-border); color: var(--ui-text); vertical-align: middle; }
 .workspace :is(.admin-table,.inv-table,table) td :is(strong,.inv-item-name,.customer-identity strong) { font-size: 14px; }
@@ -215,7 +455,7 @@ button:disabled { cursor: not-allowed; }
 .workspace .badge { font-size: 12px; font-weight: 650; padding: 5px 9px; line-height: 1.4; width: fit-content; white-space: nowrap; }
 .workspace .inv-item-actions { display: grid; grid-template-columns: repeat(2, 32px); gap: 4px; justify-content: center; align-items: center; width: max-content; margin-inline: auto; }
 .workspace .inv-quick-action { width: 32px; height: 32px; border-radius: 8px; }
-.workspace .inv-table .inv-actions-cell { width: 88px; text-align: center; }
+.workspace .inv-table .inv-actions-cell { width: 100px; text-align: center; }
 .workspace .inv-quick-action svg { width: 15px; height: 15px; }
 .workspace .inv-filters { padding: 0 20px 18px; gap: 12px; align-items: end; }
 .workspace .inv-filters label { font-size: 12px; }

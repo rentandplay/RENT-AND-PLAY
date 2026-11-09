@@ -735,7 +735,7 @@ export function createInventory(h) {
           <div class="inv-printer-progress" id="inv-qr-printer-progress" hidden><progress id="inv-qr-progress" max="100" value="0" aria-label="Printer operation progress"></progress><span id="inv-qr-progress-label" role="status" aria-live="polite">Preparing label…</span></div>
           <p class="inv-print-note" id="inv-qr-printer-message" role="status" aria-live="polite" hidden></p>
         </div>
-      </section><div class="inv-form-actions inv-print-actions"><p id="inv-qr-print-hint">Connect a printer, or download a PNG for Fun Print.</p><div class="inv-print-footer-buttons"><button class="secondary" id="inv-qr-back" type="button">Back</button><button class="secondary" id="inv-qr-download" type="button">${icon('download')} Download QR PNG</button><button class="primary" id="inv-qr-print" type="button" aria-describedby="inv-qr-print-hint" disabled>${icon('print')} Print label</button></div></div>`);
+      </section><div class="inv-form-actions inv-print-actions"><p id="inv-qr-print-hint">Connect a printer, or save a PDF / PNG label.</p><div class="inv-print-footer-buttons"><button class="secondary" id="inv-qr-back" type="button">Back</button><button class="secondary" id="inv-qr-pdf" type="button">${icon('print')} Save / print PDF</button><button class="secondary" id="inv-qr-download" type="button">${icon('download')} Download QR PNG</button><button class="primary" id="inv-qr-print" type="button" aria-describedby="inv-qr-print-hint" disabled>${icon('print')} Print label</button></div></div>`);
       const settings = modal.querySelector('.inv-print-settings'), message = modal.querySelector('#inv-qr-printer-message');
       const preview = modal.querySelector('#inv-print-preview-art'), previewImage = modal.querySelector('#inv-print-label-image'), formatSelect = modal.querySelector('#inv-qr-format'), downloadButton = modal.querySelector('#inv-qr-download');
       const paperSelect = modal.querySelector('#inv-qr-paper'), darknessSelect = modal.querySelector('#inv-qr-darkness'), startInput = modal.querySelector('#inv-qr-start-feed'), startSetting = modal.querySelector('#inv-qr-start-setting'), tearInput = modal.querySelector('#inv-qr-tear-feed'), tearSetting = modal.querySelector('#inv-qr-tear-setting');
@@ -778,7 +778,7 @@ export function createInventory(h) {
         panel.dataset.connection = connection;
         status.textContent = state.connected ? state.name : state.reconnecting ? 'Reconnecting to printer…' : state.connecting ? 'Connecting to printer…' : 'Connect your printer';
         statusLabel.textContent = state.connected ? state.paperOut ? 'Out of paper' : state.headHot ? 'Cooling down' : 'Connected' : state.reconnecting ? 'Offline · retrying' : state.connecting ? 'Connecting' : 'Not connected';
-        description.textContent = state.connected ? state.paperOut ? 'Load a label roll to continue printing.' : state.headHot ? 'Let the print head cool before trying again.' : busy ? 'Working on your label. Keep the printer on.' : 'Bluetooth connected. Ready to print your label.' : state.reconnecting ? 'Turn on your printer. This page will retry automatically.' : state.connecting ? 'Choose your printer in the Bluetooth picker.' : bluetoothSupported ? 'Choose a Bluetooth printer to print this label.' : 'Bluetooth printing needs Chrome or Edge over HTTPS.';
+        description.textContent = state.connected ? state.paperOut ? 'Load a label roll to continue printing.' : state.headHot ? 'Let the print head cool before trying again.' : busy ? 'Working on your label. Keep the printer on.' : 'Bluetooth connected. Ready to print your label.' : state.reconnecting ? 'Turn on your printer. This page will retry automatically.' : state.connecting ? 'Choose your printer in the Bluetooth picker.' : bluetoothSupported ? 'Choose a Bluetooth printer to print this label.' : 'Bluetooth is unavailable on Safari / iOS. Use Save / print PDF or Download PNG below.';
         connect.disabled = state.connecting || busy || (!bluetoothSupported && !state.connected && !state.reconnecting);
         connect.className = state.connected || state.reconnecting ? 'secondary' : 'primary';
         connect.innerHTML = `${icon('bluetooth')} ${state.connected ? 'Disconnect printer' : state.reconnecting ? 'Cancel reconnect' : state.connecting ? 'Connecting…' : 'Connect printer'}`;
@@ -792,7 +792,7 @@ export function createInventory(h) {
         print.disabled = !state.connected || busy || blocked;
         print.setAttribute('aria-busy', String(state.printing || state.aligning));
         print.innerHTML = `${icon('print')} ${state.aligning ? 'Positioning…' : state.printing ? (state.progress >= 100 ? continuous ? 'Finishing print…' : 'Positioning label…' : 'Sending… ' + state.progress + '%') : 'Print label'}`;
-        printHint.textContent = blocked ? state.paperOut ? 'Load paper to enable printing.' : 'Printing will be available when the printer cools down.' : busy ? 'Keep the printer on until this operation finishes.' : state.connected ? 'Ready to print. Your printer stays connected for the next label.' : state.reconnecting ? 'Waiting for your printer. You can still download the PNG.' : !bluetoothSupported ? 'Download the PNG for Fun Print, or open this page in Chrome or Edge.' : 'Connect a printer, or download a PNG for Fun Print.';
+        printHint.textContent = blocked ? state.paperOut ? 'Load paper to enable printing.' : 'Printing will be available when the printer cools down.' : busy ? 'Keep the printer on until this operation finishes.' : state.connected ? 'Ready to print. Your printer stays connected for the next label.' : state.reconnecting ? 'Waiting for your printer. You can still save a PDF or download the PNG.' : !bluetoothSupported ? 'Save / print PDF, download the PNG for Fun Print, or open Chrome/Edge.' : 'Connect a printer, or save a PDF / PNG label.';
         for (const control of controls) control.disabled = busy;
         progressBox.hidden = !busy;
         settings.querySelector('#inv-qr-progress').value = state.sensorSearching ? state.sensorProgress : state.progress;
@@ -825,6 +825,14 @@ export function createInventory(h) {
       unsubscribe = printer.subscribe(updatePrinterUi);
       modal.addEventListener('close', cleanup, { once: true });
       modal.querySelector('#inv-qr-back').onclick = () => { cleanup(); void details(i.id); };
+      modal.querySelector('#inv-qr-pdf')?.addEventListener('click', () => {
+        try {
+          const format = formatSelect.value, html = qrPrintDocument([i], new Map([[String(i.id), q]]), { ...qrCalibration, ...qrPrintSettings }, true, format);
+          const printWindow = window.open('', '_blank');
+          if (printWindow) { printWindow.document.write(html); printWindow.document.close(); }
+          else { download(html, 'text/html;charset=utf-8', `${i.item_code}-${format}-label.html`); toast('Printable label saved. Open it to print or save as PDF.'); }
+        } catch (err) { setMessage(err.message, 'error'); }
+      });
       downloadButton.onclick = async () => {
         const format = formatSelect.value, printImage = format === 'qr' ? { qrMatrix: q.matrix, qrGeometry: qrLabelGeometry } : {};
         downloadButton.disabled = true;

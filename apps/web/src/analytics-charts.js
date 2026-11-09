@@ -1,4 +1,4 @@
-import { activateChartMotion, settleChartMotion } from './analytics-chart-motion.js';
+import { activateChartMotion, settleChartMotion, rememberChartMotion } from './analytics-chart-motion.js';
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const compact = value => new Intl.NumberFormat('en-PH', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 const plain = value => new Intl.NumberFormat('en-PH', { maximumFractionDigits: 2 }).format(value);
@@ -52,11 +52,11 @@ function axisScale(peak, integers = false) {
 const replayButton = '<button type="button" class="ana-chart-replay" data-ana-replay aria-label="Replay chart animation"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6a6 6 0 1 1-1 6M4 2v5h5"/></svg>Replay</button>';
 const chartTools = zoom => `<div class="ana-chart-tools"><span class="ana-chart-hint"><i aria-hidden="true"></i>Hover or tap to explore</span><div class="ana-chart-tool-actions">${replayButton}${zoom ? '<label><span class="sr-only">View</span><select data-ana-zoom aria-label="Chart zoom"><option value="0">Full period</option><option value="14">Last 14 periods</option><option value="7">Last 7 periods</option></select></label>' : ''}</div></div>`;
 
-export function lineChart(labels, series, { escape: e, id='analytics-line', title, currency = false, forecastStart = null, integerTicks = false, width=730, height=272 } = {}) {
+export function lineChart(labels, series, { escape: e, id='analytics-line', title, currency = false, forecastStart = null, integerTicks = false, width=730, height=272, domainMax=null, handoff=null, reserveRangeNote=false } = {}) {
   if (!labels.length) return '<div class="ana-empty"><strong>No activity to chart yet</strong><p>Recorded activity will appear here when the selected period has data.</p></div>';
   const g=layout(width,height), {left,right,top,bottom}=g, span=right-left;
   const values=series.flatMap(row=>[...row.values,...(row.high||[])]).filter(finite);
-  const scale=axisScale(Math.max(1,...values),integerTicks);
+  const scale=axisScale(Math.max(1,...values,domainMax||0),integerTicks);
   const x = i => roundCoordinate(labels.length===1 ? (left+right)/2 : left+i*span/(labels.length-1));
   const y = value => roundCoordinate(bottom-Math.max(0,value)/scale.maximum*(bottom-top));
   const grid=scale.ticks.map(value=>`<g><line x1="${left}" x2="${right}" y1="${y(value)}" y2="${y(value)}" class="ana-gridline"/><text x="${left-12}" y="${y(value)+4}" text-anchor="end" class="ana-axis-label">${currency?'₱':''}${compact(value)}</text></g>`).join('');
@@ -80,10 +80,13 @@ export function lineChart(labels, series, { escape: e, id='analytics-line', titl
   const hasForecast=forecastStart!==null&&forecastStart>0&&forecastStart<labels.length;
   const dividerX=hasForecast?x(forecastStart)-span/Math.max(1,labels.length-1)/2:null;
   const divider=hasForecast?`<rect class="ana-forecast-wash" x="${dividerX}" y="${top-10}" width="${right-dividerX}" height="${bottom-top+10}" rx="8" fill="url(#${id}-future)"/><line x1="${dividerX}" x2="${dividerX}" y1="${top}" y2="${bottom}" class="ana-forecast-divider"/><text x="${left}" y="17" class="ana-region-label">RECORDED HISTORY</text><text x="${Math.min(right-85,dividerX+12)}" y="17" class="ana-region-label is-forecast">FORECAST</text>`:'';
+  const handoffValid=handoff&&handoff.from>=0&&handoff.to<labels.length&&finite(series[0]?.values[handoff.from])&&finite(series[1]?.values[handoff.to]);
+  const handoffPath=handoffValid?`<path data-ana-stroke="handoff" data-ana-bottom="${bottom}" class="ana-handoff-line" d="M${x(handoff.from)},${y(series[0].values[handoff.from])} L${x(handoff.to)},${y(series[1].values[handoff.to])}" fill="none" stroke="${series[1].color}" stroke-dasharray="3 5" vector-effect="non-scaling-stroke"><title>Visual connection to the first forecast; the incomplete period has no recorded value.</title></path>`:'';
+  const handoffLabel=handoffValid&&handoff.excludedIndex!=null?`<text x="${x(handoff.excludedIndex)}" y="${bottom-8}" text-anchor="middle" class="ana-excluded-label">${e(handoff.label||'Incomplete')}</text>`:'';
   const inspection=labels.map((label,i)=>({label,x:x(i),rows:series.flatMap((row,seriesIndex)=>finite(row.values[i])?[{seriesIndex,name:row.name,color:row.color,x:x(i),y:y(row.values[i]),label:row.labels?.[i]||label,value:`${currency?'₱':''}${plain(row.values[i])}`,spread:finite(row.low?.[i])&&finite(row.high?.[i])?`${currency?'₱':''}${plain(row.low[i])} – ${currency?'₱':''}${plain(row.high[i])}`:null}]:[])}));
   const hits=labels.map((_,i)=>{const start=i===0?left:(x(i-1)+x(i))/2,end=i===labels.length-1?right:(x(i)+x(i+1))/2;return `<rect focusable="false" aria-hidden="true" data-ana-point="${i}" x="${start}" y="${top}" width="${end-start}" height="${bottom-top}" fill="transparent"/>`;}).join('');
-  const payload={type:'line',labels,series,options:{id,title,currency,forecastStart,integerTicks,width,height}};
-  return `<figure class="ana-chart ana-interactive ana-modern-chart" data-ana-chart data-ana-values="${e(JSON.stringify(inspection))}" data-ana-source="${e(JSON.stringify(payload))}" data-ana-view="${e(JSON.stringify(payload))}" aria-labelledby="${id}-title">${chartTools(labels.length>14)}<div class="ana-plot" data-ana-plot tabindex="0" role="group" aria-label="${e(title)}. Use Left and Right arrows to explore, Enter to pin, Escape to dismiss."><svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${id}-title ${id}-description"><title id="${id}-title">${e(title)}</title><desc id="${id}-description">${e(series.map(row=>row.name).join(' and '))}. Focus the chart and use arrow keys to inspect exact values.</desc>${defs}${divider}${grid}${plots}${tickLabels}<line data-ana-crosshair x1="${left}" x2="${left}" y1="${top}" y2="${bottom}" class="ana-crosshair" hidden/>${series.map((row,i)=>`<circle data-ana-cursor-dot="${i}" r="5" fill="${row.color}" class="ana-cursor-dot" hidden/>`).join('')}${hits}</svg>${chartTooltip()}</div><figcaption class="ana-chart-legend">${series.map((row,i)=>`<button type="button" data-ana-toggle="${i}" aria-pressed="true" aria-label="Show ${e(row.name)}"><i style="--ana-series-color:${row.color};background:${row.color}" class="${row.dashed?'is-dashed':''}"></i>${e(row.name)}</button>`).join('')}${series.some(row=>row.low)?'<span class="ana-range-key">Shaded: historical variation (±1 standard deviation), not a confidence interval</span>':''}</figcaption></figure>`;
+  const payload={type:'line',labels,series,options:{id,title,currency,forecastStart,integerTicks,width,height,domainMax,handoff,reserveRangeNote}};
+  return `<figure class="ana-chart ana-interactive ana-modern-chart" data-ana-chart data-ana-values="${e(JSON.stringify(inspection))}" data-ana-source="${e(JSON.stringify(payload))}" data-ana-view="${e(JSON.stringify(payload))}" aria-labelledby="${id}-title">${chartTools(labels.length>14)}<div class="ana-plot" data-ana-plot tabindex="0" role="group" aria-label="${e(title)}. Use Left and Right arrows to explore, Enter to pin, Escape to dismiss."><svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${id}-title ${id}-description"><title id="${id}-title">${e(title)}</title><desc id="${id}-description">${e(series.map(row=>row.name).join(' and '))}. Focus the chart and use arrow keys to inspect exact values.</desc>${defs}${divider}${grid}${handoffPath}${plots}${handoffLabel}${tickLabels}<line data-ana-crosshair x1="${left}" x2="${left}" y1="${top}" y2="${bottom}" class="ana-crosshair" hidden/>${series.map((row,i)=>`<circle data-ana-cursor-dot="${i}" r="5" fill="${row.color}" class="ana-cursor-dot" hidden/>`).join('')}${hits}</svg>${chartTooltip()}</div><figcaption class="ana-chart-legend">${series.map((row,i)=>`<button type="button" data-ana-toggle="${i}" aria-pressed="true" aria-label="Show ${e(row.name)}"><i style="--ana-series-color:${row.color};background:${row.color}" class="${row.dashed?'is-dashed':''}"></i>${e(row.name)}</button>`).join('')}${series.some(row=>row.low)?'<span class="ana-range-key">Shaded: historical variation (±1 standard deviation), not a confidence interval</span>':reserveRangeNote?'<span class="ana-range-key">No calibrated uncertainty interval is estimated for this model.</span>':''}</figcaption></figure>`;
 }
 
 export function barChart(rows, { escape:e,title,currency=false,color='#358d80',caption,id='performance-demand',width=730,height=262 }={}) {
@@ -110,7 +113,43 @@ function chartTooltip() {
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 
+const chartCleanup = new WeakMap();
 let chartResizeObserver;
+
+function slicedChart(source,count,dimensions={}) {
+  const start=count?Math.max(0,source.labels.length-count):0;
+  const sliced=source.series.map(row=>({...row,values:row.values.slice(start),labels:row.labels?.slice(start),low:row.low?.slice(start),high:row.high?.slice(start)}));
+  const handoff=source.options.handoff;
+  return lineChart(source.labels.slice(start),sliced,{...source.options,...dimensions,
+    forecastStart:source.options.forecastStart==null?null:Math.max(0,source.options.forecastStart-start),
+    handoff:handoff&&handoff.from>=start?{...handoff,from:handoff.from-start,to:handoff.to-start,excludedIndex:handoff.excludedIndex==null?null:handoff.excludedIndex-start}:null,
+    escape:escapeHtml});
+}
+
+// Keep the figure, plot and SVG nodes mounted during model/scenario changes.
+export function updateAnalyticsChart(chart,next) {
+  const source=JSON.parse(next.dataset.anaSource),current=JSON.parse(chart.dataset.anaView||chart.dataset.anaSource);
+  if(source.type!=='line'||current.type!=='line') return false;
+  const zoom=chart.querySelector('[data-ana-zoom]'),count=Number(zoom?.value||0);
+  const holder=chart.ownerDocument.createElement('div');
+  holder.innerHTML=slicedChart(source,count,{width:current.options.width,height:current.options.height});
+  const rendered=holder.firstElementChild;
+  rememberChartMotion(chart); settleChartMotion(chart); chartCleanup.get(chart)?.();
+  const plot=chart.querySelector('[data-ana-plot]'),svg=plot.querySelector('svg'),nextSvg=rendered.querySelector('.ana-plot>svg');
+  chartResizeObserver?.unobserve(plot);
+  svg.innerHTML=nextSvg.innerHTML;
+  for(const attr of nextSvg.attributes) svg.setAttribute(attr.name,attr.value);
+  chart.querySelector('.ana-chart-legend').innerHTML=rendered.querySelector('.ana-chart-legend').innerHTML;
+  chart.dataset.anaValues=rendered.dataset.anaValues;
+  chart.dataset.anaSource=next.dataset.anaSource;
+  chart.dataset.anaView=rendered.dataset.anaView;
+  chart.querySelector('[data-ana-tooltip]').hidden=true;
+  chart.querySelector('[data-ana-unpin]').hidden=true;
+  delete chart.dataset.anaBound;
+  bindAnalyticsCharts(chart.parentElement);
+  return true;
+}
+
 function responsiveChart(chart) {
   const plot=chart.querySelector('[data-ana-plot]'),svg=plot.querySelector('svg');
   const bounds=plot.getBoundingClientRect?.(),svgBounds=svg.getBoundingClientRect?.();
@@ -126,7 +165,7 @@ function responsiveChart(chart) {
   next.querySelector('.ana-chart-tools').innerHTML=chart.querySelector('.ana-chart-tools').innerHTML;
   const zoom=chart.querySelector('[data-ana-zoom]'),nextZoom=next.querySelector('[data-ana-zoom]');
   if(zoom&&nextZoom) [...nextZoom.options].find(option=>option.value===zoom.value).selected=true;
-  chartResizeObserver?.unobserve(plot); settleChartMotion(chart); chart.replaceWith(next);
+  chartResizeObserver?.unobserve(plot); settleChartMotion(chart);chartCleanup.get(chart)?.();chart.replaceWith(next);
   bindAnalyticsCharts(next.parentElement);
   return true;
 }
@@ -136,6 +175,9 @@ export function bindAnalyticsCharts(root = document) {
     if (chart.dataset.anaBound) return;
     if (responsiveChart(chart)) return;
     chart.dataset.anaBound = 'true';
+    const disposers=[];
+    const on=(node,type,handler)=>{node.addEventListener(type,handler);disposers.push(()=>node.removeEventListener(type,handler));};
+    chartCleanup.set(chart,()=>disposers.forEach(dispose=>dispose()));
     const values = JSON.parse(chart.dataset.anaValues), output = chart.querySelector('[data-ana-readout]'), plot = chart.querySelector('[data-ana-plot]'), tooltip = chart.querySelector('[data-ana-tooltip]'), unpin = chart.querySelector('[data-ana-unpin]');
     let pinned = false, selected = Math.max(0, values.length - 1);
     const show = index => {
@@ -163,10 +205,10 @@ export function bindAnalyticsCharts(root = document) {
       chart.querySelectorAll('[data-ana-cursor-dot]').forEach(dot=>dot.setAttribute('hidden',''));
       chart.querySelectorAll('.is-inspected').forEach(point => point.classList.remove('is-inspected'));
     };
-    plot.addEventListener('pointerleave', () => { if (!pinned) hide(); });
-    plot.addEventListener('focus', () => show(selected));
-    plot.addEventListener('focusout', event => { if (!pinned && !plot.contains(event.relatedTarget)) hide(); });
-    plot.addEventListener('keydown', event => {
+    on(plot,'pointerleave', () => { if (!pinned) hide(); });
+    on(plot,'focus', () => show(selected));
+    on(plot,'focusout', event => { if (!pinned && !plot.contains(event.relatedTarget)) hide(); });
+    on(plot,'keydown', event => {
       if (event.target !== plot) return;
       if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
         event.preventDefault();
@@ -176,12 +218,12 @@ export function bindAnalyticsCharts(root = document) {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pinned = !pinned; unpin.hidden = !pinned; show(selected); }
     });
     chart.querySelectorAll('[data-ana-point]').forEach(point => {
-      point.addEventListener('pointerdown', event => { if (event.pointerType === 'mouse') event.preventDefault(); });
-      point.addEventListener('pointerenter', () => { if (!pinned) show(point.dataset.anaPoint); });
-      point.addEventListener('focus', () => show(point.dataset.anaPoint));
+      on(point,'pointerdown', event => { if (event.pointerType === 'mouse') event.preventDefault(); });
+      on(point,'pointerenter', () => { if (!pinned) show(point.dataset.anaPoint); });
+      on(point,'focus', () => show(point.dataset.anaPoint));
       const pin = () => { const index = Number(point.dataset.anaPoint); if (pinned && selected === index) { hide(); return; } pinned = true; unpin.hidden = false; show(index); };
-      point.addEventListener('click', pin);
-      point.addEventListener('keydown', event => {
+      on(point,'click', pin);
+      on(point,'keydown', event => {
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pin(); }
         if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
           event.preventDefault(); const points = [...chart.querySelectorAll('[data-ana-point]')];
@@ -191,22 +233,21 @@ export function bindAnalyticsCharts(root = document) {
       });
     });
     unpin.onclick = () => { plot.focus(); hide(); };
-    chart.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); hide(); } });
+    on(chart,'keydown', event => { if (event.key === 'Escape') { event.preventDefault(); hide(); } });
     chart.querySelectorAll('[data-ana-toggle]').forEach(button => button.onclick = () => {
       const visible = button.getAttribute('aria-pressed') !== 'true'; button.setAttribute('aria-pressed', String(visible));
       chart.querySelector(`[data-ana-series="${button.dataset.anaToggle}"]`).style.display = visible ? '' : 'none'; show(selected);
     });
     const zoom = chart.querySelector('[data-ana-zoom]');
     if (zoom) zoom.onchange = () => {
-      const source = JSON.parse(chart.dataset.anaSource), count = Number(zoom.value), start = count ? Math.max(0, source.labels.length - count) : 0;
-      const sliced = source.series.map(row => ({ ...row, values: row.values.slice(start), labels: row.labels?.slice(start), low: row.low?.slice(start), high: row.high?.slice(start) }));
+      const source = JSON.parse(chart.dataset.anaSource), count = Number(zoom.value);
       const parent = chart.parentElement, holder = chart.ownerDocument.createElement('div');
-      holder.innerHTML = lineChart(source.labels.slice(start), sliced, { ...source.options, forecastStart: source.options.forecastStart == null ? null : Math.max(0, source.options.forecastStart - start), escape: escapeHtml });
+      holder.innerHTML = slicedChart(source,count);
       const replacement = holder.firstElementChild;
       replacement.dataset.anaSource = chart.dataset.anaSource;
       // Keep the zoom control available even when the cropped range has <=14 points.
       replacement.querySelector('.ana-chart-tools').innerHTML = chart.querySelector('.ana-chart-tools').innerHTML;
-      chartResizeObserver?.unobserve(plot); settleChartMotion(chart);
+      chartResizeObserver?.unobserve(plot); settleChartMotion(chart);chartCleanup.get(chart)?.();
       chart.replaceWith(replacement); bindAnalyticsCharts(parent);
       const replacementZoom = parent.querySelector('[data-ana-zoom]');
       [...replacementZoom.options].find(option => option.value === String(count)).selected = true; replacementZoom.focus();

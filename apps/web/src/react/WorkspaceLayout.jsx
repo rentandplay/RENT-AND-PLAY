@@ -1033,7 +1033,7 @@ export function WorkspaceShell({
 
           <main className="content" id="workspace-content" tabIndex={-1}>
             {page === 'Dashboard' && <WorkspaceStatus loading={workspaceLoading} error={connectionError} offline={offline} hasData={Boolean(data)} onRetry={onManualRefresh} />}
-            {page !== 'Dashboard' && page !== 'ESP32 terminal' && data ? (
+            {(page === 'Rentals' || page === 'Returns' || page === 'Messages' || page === 'Transaction History' || page === 'Payments') && data ? (
               <TerminalPendingBanner data={data} workspaceUI={workspaceUI} onNavigate={onNavigate} />
             ) : null}
 

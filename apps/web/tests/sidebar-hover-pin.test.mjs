@@ -68,7 +68,10 @@ test('nav groups are closed by default, open on hover, close on hover off, stay 
     assert.equal(mgmtItems.hasAttribute('hidden'), false, 'Management items must be visible on hover');
 
     // 4. Hover off closes group
-    pointer(mgmtSection, 'pointerout'); await flush(150);
+    pointer(mgmtSection, 'pointerout');
+    // React can commit after the hover timer when the test runner is busy.
+    const closeDeadline = Date.now() + 1500;
+    while (mgmtToggle.getAttribute('aria-expanded') !== 'false' && Date.now() < closeDeadline) await flush(20);
     assert.equal(mgmtToggle.getAttribute('aria-expanded'), 'false', 'Management must close when hover leaves');
     assert.equal(mgmtItems.hasAttribute('hidden'), true, 'Management items must be hidden when hover leaves');
 

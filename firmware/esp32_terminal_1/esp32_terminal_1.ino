@@ -14,6 +14,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <WebServer.h>
+#include <DNSServer.h>
 
 // =============================================================================
 // 1. HARDWARE CONFIGURATION (PINOUTS)
@@ -371,6 +372,12 @@ void runWifiSetupPortal(const String& currentSsid) {
   String apName = String("RentPlay-") + TERMINAL_ID;
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(apName.c_str());
+  IPAddress apIP = WiFi.softAPIP();
+
+  // DNS Server para sa Captive Portal detection (port 53 redirect)
+  DNSServer dnsServer;
+  dnsServer.start(53, "*", apIP);
+
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -379,15 +386,23 @@ void runWifiSetupPortal(const String& currentSsid) {
   display.println("--------------------");
   display.println("Connect Wi-Fi to:");
   display.println(apName);
-  display.println("Open in browser:");
+  display.println("Tap 'Sign In' or visit:");
   display.println("http://192.168.4.1");
   display.display();
 
   WebServer portal(80);
-  portal.on("/", HTTP_GET, [&]() {
+  auto servePortal = [&]() {
     String html = "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Rent & Play Terminal Wi-Fi Setup</title><style>body{font-family:sans-serif;background:#f8fafc;padding:24px;color:#0f172a}form{max-width:360px;margin:0 auto;background:#fff;padding:20px;border-radius:14px;box-shadow:0 4px 16px rgba(0,0,0,.08)}label{display:block;font-weight:700;margin-top:12px;font-size:14px}input{width:100%;padding:10px;margin-top:6px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box}button{margin-top:18px;width:100%;padding:12px;background:#df762d;color:#fff;border:0;border-radius:10px;font-weight:700;font-size:15px}</style></head><body><form method='POST' action='/save'><h2>Rent &amp; Play " + String(TERMINAL_ID) + "</h2><p>Configure shop Wi-Fi credentials.</p><label>Wi-Fi Name (SSID)<input name='ssid' value='" + currentSsid + "' required></label><label>Password<input name='pass' type='password'></label><button type='submit'>Save &amp; Connect</button></form></body></html>";
     portal.send(200, "text/html", html);
-  });
+  };
+
+  portal.on("/", HTTP_GET, servePortal);
+  portal.on("/hotspot-detect.html", HTTP_GET, servePortal);
+  portal.on("/generate_204", HTTP_GET, servePortal);
+  portal.on("/gen_204", HTTP_GET, servePortal);
+  portal.on("/ncsi.txt", HTTP_GET, servePortal);
+  portal.on("/connecttest.txt", HTTP_GET, servePortal);
+
   portal.on("/save", HTTP_POST, [&]() {
     String newSsid = portal.arg("ssid");
     String newPass = portal.arg("pass");
@@ -405,12 +420,20 @@ void runWifiSetupPortal(const String& currentSsid) {
       portal.send(400, "text/plain", "SSID is required.");
     }
   });
+
+  portal.onNotFound([&]() {
+    portal.sendHeader("Location", String("http://") + apIP.toString() + "/", true);
+    portal.send(302, "text/plain", "");
+  });
+
   portal.begin();
   unsigned long portalStart = millis();
   while (millis() - portalStart < 180000) {
+    dnsServer.processNextRequest();
     portal.handleClient();
-    delay(10);
+    delay(5);
   }
+  dnsServer.stop();
   portal.stop();
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);

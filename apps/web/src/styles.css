@@ -15787,11 +15787,11 @@ details[open] .chevron-arrow {
    Smooth Transitions & Micro-Interactions (Modern Dynamic Workspace)
    ========================================================================== */
 
-/* 1. Universal Page & View Transitions (Fluid & Responsive, Steady Containers) */
-@keyframes viewCrossFade {
+/* 1. Universal Page Transitions (Rise animation ONLY when opening/navigating to a page) */
+@keyframes pageRise {
   from {
-    opacity: 0;
-    transform: translateY(4px);
+    opacity: 0.35;
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -15808,12 +15808,18 @@ details[open] .chevron-arrow {
   }
 }
 
-/* Page Module Entry: Smooth 200ms arrival on route change without container bouncing */
-.workspace-module-container > :is(.admin-module, .finance-workspace, .inventory-module, .customers-page, .maintenance-workspace, .rates-module, .verification-workspace, .analytics-workspace, .settings-workspace) {
-  animation: viewCrossFade 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+/* Page Open Entry: Mounts once on route navigation; never replays on internal clicks */
+.workspace-module-container,
+.dashboard-workspace,
+.messages-view,
+.profile-view,
+.inv-loading-shell {
+  animation: pageRise 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* Stable containers: panels, cards, and sub-sections stay steady when clicking buttons */
+/* Stable containers: Inner containers, panels, cards, and sub-sections stay 100% steady when clicking buttons, filters, or pagination */
+.workspace-module-container > *,
+.workspace-module-container :is(.admin-module, .panel, .module-stats, .transaction-table-panel, .rentals-table-panel, .returns-table-panel, .history-table-panel, .transaction-focus, .return-queue-panel, .history-insights, .rates-overview, .inv-collection, .finance-records, .settings-card, .verification-queue-panel, .verification-history-panel, .terminal-station-card, .analytics-workspace, .maintenance-workspace, .workspace-empty),
 .rates-overview,
 .inv-collection,
 .finance-records,
@@ -15824,15 +15830,19 @@ details[open] .chevron-arrow {
 .terminal-station-card,
 .analytics-workspace .ana-panel,
 .analytics-workspace .ana-summary,
-.maintenance-workspace > .panel:not(.maintenance-metrics),
+.maintenance-workspace > .panel,
 .transaction-focus,
 .return-queue-panel,
-.history-insights {
-  animation: none;
+.history-insights,
+.transaction-table-panel,
+.admin-module {
+  animation: none !important;
+  transform: none;
 }
 
 /* Table Rows: Smooth fast crossfade when paginating (Next/Previous) or filtering, with NO container jumping */
-:is(.admin-table, .finance-table) tbody tr {
+/* Pure smooth fade effect on paginated table rows across all tables (Next / Previous) */
+:is(.admin-table, .inv-table, .inv-unit-table, .finance-table, .rental-panel table, table.ana-table) tbody tr {
   animation: tableContentFade 180ms ease-out both;
   transition: background-color 0.16s ease, box-shadow 0.16s ease;
 }
@@ -17100,7 +17110,7 @@ textarea,
 .dashboard-workspace .dashboard-grid > .panel {
   animation: none;
 }
-.dashboard-workspace .rental-panel tbody tr.record-link-row { animation: none; }
+.dashboard-workspace .rental-panel tbody tr.record-link-row { animation: tableContentFade 180ms ease-out both; }
 
 /* --- Surfaces ----------------------------------------------------------- */
 .dashboard-workspace .panel {

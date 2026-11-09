@@ -39,8 +39,8 @@
 // =============================================================================
 // 2. NETWORK & TERMINAL CONFIGURATION
 // =============================================================================
-const char* WIFI_SSID = "rnld_pstr";
-const char* WIFI_PASSWORD = "lalamove";
+const char* WIFI_SSID = "PLDTHOMEFIBR61930";
+const char* WIFI_PASSWORD = "PLDTWIFIwu5ft";
 
 // Backend API URL (Production cloud URL on Render):
 const char* API_BASE_URL = "https://rent-and-play.onrender.com/api";

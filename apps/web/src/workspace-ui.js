@@ -183,11 +183,11 @@ export function createWorkspaceUI(h) {
   const txSearch = row => txSearchValue(row, search);
   const txCode = row => recordCode(row);
   const txStatus = row => {
-    if(row.delivery_status==='OUT_FOR_DELIVERY')return 'On the way · Lakewood';
-    if(row.delivery_status==='DELIVERY_FAILED')return 'Delivery unsuccessful · receive at shop';
+    if(row.delivery_status==='OUT_FOR_DELIVERY')return 'On the way - Lakewood';
+    if(row.delivery_status==='DELIVERY_FAILED')return 'Delivery unsuccessful - receive at shop';
     if(row.status==='APPROVED'&&row.scheduled_start_at&&!row.delivery_preparation)return 'Scheduled';
     if (row.status === "APPROVED") return row.fulfillment_mode === "SHOP_HANDOVER" ? (row.delivery_status === "PREPARED" ? "Ready for shop handover" : "Preparing equipment") : "Awaiting handover";
-    if (row.status === "RETURN_PENDING_INSPECTION") return "Received · inspection pending";
+    if (row.status === "RETURN_PENDING_INSPECTION") return "Received - inspection pending";
     if (row.status === "PENDING_ADMIN_APPROVAL") return "Pending admin review";
     if (row.status === "PENDING_VERIFICATION") return "Pending verification";
     if (row.status === "CANCELLED") return "Cancelled";

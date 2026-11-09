@@ -200,23 +200,23 @@ export function createInventory(h) {
   function exportInventory() {
     const num = csvNumber;
     const rows = [
-      ['Matching unit codes', 'Equipment', 'Category', 'Available stock', 'Reserved stock', 'Out or awaiting inspection', 'Under maintenance', 'Total active stock', 'Archived units', 'Status', 'Condition', 'Rate basis', 'Rental rate (PHP)', 'Late penalty per hour (PHP)', 'Replacement cost (PHP)'],
+      ['Equipment', 'Category', 'Unit codes', 'Status', 'Condition', 'Available stock', 'Reserved stock', 'Out or awaiting inspection', 'Under maintenance', 'Total active stock', 'Archived units', 'Rate basis', 'Rental rate (PHP)', 'Late penalty per hour (PHP)', 'Replacement cost (PHP)'],
       ...filtered().map(item => [
-        item.visible_units.map(unit => unit.item_code).join(' / '),
-        item.name,
-        item.category,
-        item.available_quantity,
-        item.reserved_quantity,
-        item.rented_quantity,
-        item.maintenance_quantity,
-        item.total_quantity,
-        item.archived_quantity,
-        label(item.effective_status),
-        label(item.condition_status),
-        displayRateUnit(item),
-        num(displayRateAmount(item)),
-        num(displayLatePenalty(item)),
-        num(item.replacement_cost)
+        item.name || '',
+        item.category || '',
+        (item.visible_units || []).map(unit => unit.item_code).filter(Boolean).join(' / ') || item.item_code || '',
+        label(item.effective_status) || '',
+        label(item.condition_status) || '',
+        num(item.available_quantity) !== '' ? num(item.available_quantity) : 0,
+        num(item.reserved_quantity) !== '' ? num(item.reserved_quantity) : 0,
+        num(item.rented_quantity) !== '' ? num(item.rented_quantity) : 0,
+        num(item.maintenance_quantity) !== '' ? num(item.maintenance_quantity) : 0,
+        num(item.total_quantity) !== '' ? num(item.total_quantity) : 0,
+        num(item.archived_quantity) !== '' ? num(item.archived_quantity) : 0,
+        displayRateUnit(item) || '',
+        num(displayRateAmount(item)) !== '' ? num(displayRateAmount(item)) : 0,
+        num(displayLatePenalty(item)) !== '' ? num(displayLatePenalty(item)) : 0,
+        num(item.replacement_cost) !== '' ? num(item.replacement_cost) : 0
       ])
     ];
     downloadCsv(serializeCsv(rows), 'inventory');

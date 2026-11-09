@@ -1,4 +1,4 @@
-import { collectCsvRecords, serializeCsv, downloadCsv } from './csv-export.js';
+import { collectCsvRecords, serializeCsv, downloadCsv, csvNumber } from './csv-export.js';
 import { bindRecordLinks, recordAttrs } from './record-links.js';
 import { recordCode } from './record-codes.js';
 import { bindAccountValidation, nameError, emailError, phoneError, passwordError, passwordMatchError } from './account-validation.js';
@@ -56,7 +56,7 @@ export function nextCustomerCode(customers = []) {
 export function customersCsv(rows) {
   const headings = ['Customer code', 'Full name', 'Email', 'Phone', 'Address', 'Status', 'Confirmed rentals', 'Completed rentals', 'Equipment out', 'Overdue rentals', 'Latest activity (Asia/Manila)', 'Customer created (Asia/Manila)'];
   return serializeCsv([headings, ...rows.map(({ customer: c, total, returned, active, overdue, lastActivity }) =>
-    [c.customer_code, c.full_name, c.email, c.phone, c.address, c.is_active === false ? 'Archived' : 'Active', total, returned, active, overdue, formatPhilippineDateTime(lastActivity), formatPhilippineDateTime(c.created_at)])]);
+    [c.customer_code, c.full_name, c.email, c.phone, c.address, c.is_active === false ? 'Archived' : 'Active', csvNumber(total) !== '' ? csvNumber(total) : 0, csvNumber(returned) !== '' ? csvNumber(returned) : 0, csvNumber(active) !== '' ? csvNumber(active) : 0, csvNumber(overdue) !== '' ? csvNumber(overdue) : 0, formatPhilippineDateTime(lastActivity), formatPhilippineDateTime(c.created_at)])]);
 }
 
 

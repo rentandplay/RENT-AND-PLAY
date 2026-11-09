@@ -66,7 +66,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   // their complete ticket history while skipping web-only administration logs.
   const mobileCollections = new Set(['customers', 'rentals', 'items', 'maintenance_records']);
   const kind = view === 'Customers' ? 'customers' : view === 'Maintenance' ? 'maintenance' : ['Rentals','Returns','Transaction History'].includes(view) ? 'rentals' : null;
-  const pagePromise = kind ? recordPage(db,kind,{...filters,status:filters.status || (view==='Rentals'?'OPEN':view==='Returns'?'RETURN_PENDING_INSPECTION':undefined)}) : Promise.resolve(null);
+  const pagePromise = kind ? recordPage(db,kind,{...filters,limit:filters.limit || (kind==='customers'?100:undefined),status:filters.status || (view==='Rentals'?'OPEN':view==='Returns'?'RETURN_PENDING_INSPECTION':undefined)}) : Promise.resolve(null);
   const viewCollections = view === 'Settings' ? new Set() : view === 'Rates & Fees' ? new Set(['items', 'item_categories', 'item_rates']) : null;
   const readCollection = async name => {
     if (viewCollections && !viewCollections.has(name)) return { docs: [] };
@@ -83,7 +83,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
           if (filters.to) query=query.where('confirmed_rental_at','<=',new Date(Date.parse(filters.to+'T23:59:59.999+08:00')));
         } else query=query.where('status','in',OPEN_RENTALS).limit(201);
       }
-      if (name === 'customers') query=query.limit(50);
+      if (name === 'customers') query=query.limit(100);
       if (name === 'maintenance_records' && view !== 'Reports') query=query.where('status','in',['OPEN','IN_PROGRESS']).limit(100);
       // Reports calculate full-period metrics; the operational page cap would
       // silently truncate terminal verification and utilization exported to CSV.

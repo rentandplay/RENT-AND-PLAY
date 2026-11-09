@@ -73,9 +73,9 @@ export function App() {
     }
   });
   const [navGroupExpanded, setNavGroupExpanded] = useState(() => {
-    const initial = Object.fromEntries(navGroups.map(group => [group.id, true]));
+    const initial = Object.fromEntries(navGroups.map(group => [group.id, false]));
     try {
-      const saved = JSON.parse(localStorage.getItem('rent-play-nav-groups') || '{}');
+      const saved = JSON.parse(localStorage.getItem('rent-play-nav-groups-pinned') || '{}');
       for (const group of navGroups) {
         if (typeof saved[group.id] === 'boolean') initial[group.id] = saved[group.id];
       }
@@ -312,7 +312,7 @@ export function App() {
         setNavGroupExpanded(prev => {
           const updated = { ...prev, [group.id]: true };
           try {
-            localStorage.setItem('rent-play-nav-groups', JSON.stringify(updated));
+            localStorage.setItem('rent-play-nav-groups-pinned', JSON.stringify(updated));
           } catch {}
           return updated;
         });
@@ -934,7 +934,7 @@ export function App() {
       setNavGroupExpanded(prev => {
         const next = { ...prev, [groupId]: !prev[groupId] };
         try {
-          localStorage.setItem('rent-play-nav-groups', JSON.stringify(next));
+          localStorage.setItem('rent-play-nav-groups-pinned', JSON.stringify(next));
         } catch {}
         return next;
       });

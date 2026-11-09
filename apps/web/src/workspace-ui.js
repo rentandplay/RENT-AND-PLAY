@@ -60,7 +60,8 @@ export function createWorkspaceUI(h) {
       ...(rankingRange ? { rankingFrom: rankingRange.from, rankingTo: rankingRange.to } : {}),
       ...(current.cursor ? { cursor: current.cursor } : {}), status: active ? remoteStatus : defaultRecordStatus(view),
       ...(active && remoteFrom ? { from: remoteFrom } : {}), ...(active && remoteTo ? { to: remoteTo } : {}),
-      ...(active && remoteSearch ? { search: remoteSearch } : {}), ...(active && remoteScheduledDay ? { scheduledDay: remoteScheduledDay } : {})
+      ...(active && remoteSearch ? { search: remoteSearch } : {}), ...(active && remoteScheduledDay ? { scheduledDay: remoteScheduledDay } : {}),
+      ...(view === 'Customers' ? { limit: '100' } : {}),
     });
   };
   const readWorkspace = async key => {

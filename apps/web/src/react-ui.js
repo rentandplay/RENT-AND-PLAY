@@ -2160,6 +2160,47 @@ function WorkspaceShell({
     keepFlyoutOpen();
     flyoutCloseTimer.current = setTimeout(() => setSidebarFlyout(null), 180);
   };
+  const [hoveredNavGroup, setHoveredNavGroup] = useState(null);
+  const [hoverSuppressed, setHoverSuppressed] = useState(null);
+  const navHoverTimer = useRef(null);
+  const keepNavHoverOpen = () => clearTimeout(navHoverTimer.current);
+  const handleNavPointerEnter = (groupId, pointerType) => {
+    if (pointerType === "touch") return;
+    keepNavHoverOpen();
+    if (sidebarRail) {
+      openSidebarFlyout(groupId);
+    } else {
+      if (hoverSuppressed !== groupId) {
+        setHoveredNavGroup(groupId);
+      }
+    }
+  };
+  const handleNavPointerLeave = (groupId, pointerType) => {
+    if (pointerType === "touch") return;
+    if (sidebarRail) {
+      closeSidebarFlyout();
+    } else {
+      keepNavHoverOpen();
+      navHoverTimer.current = setTimeout(() => {
+        setHoveredNavGroup(null);
+        setHoverSuppressed(null);
+      }, 140);
+    }
+  };
+  const handleNavGroupClick = (groupId) => {
+    if (sidebarRail) {
+      openSidebarFlyout(groupId);
+      return;
+    }
+    const currentlyPinned = Boolean(navGroupExpanded[groupId]);
+    if (currentlyPinned) {
+      setHoveredNavGroup(null);
+      setHoverSuppressed(groupId);
+    } else {
+      setHoverSuppressed(null);
+    }
+    onToggleNavGroup(groupId);
+  };
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const sidebarRef = useRef(null);
@@ -2428,7 +2469,10 @@ function WorkspaceShell({
       },
       /* @__PURE__ */ React.createElement(BrandLogo, null)
     ),
-    /* @__PURE__ */ React.createElement("nav", { onScroll: () => setSidebarFlyout(null) }, /* @__PURE__ */ React.createElement(
+    /* @__PURE__ */ React.createElement("nav", { onScroll: () => {
+      setSidebarFlyout(null);
+      setHoveredNavGroup(null);
+    } }, /* @__PURE__ */ React.createElement(
       "button",
       {
         "data-page": "Dashboard",
@@ -2446,7 +2490,9 @@ function WorkspaceShell({
       /* @__PURE__ */ React.createElement("span", { className: "sidebar-label" }, "Dashboard"),
       /* @__PURE__ */ React.createElement("span", { className: "nav-tooltip", "aria-hidden": "true" }, "Dashboard")
     ), navGroups.map((group) => {
-      const expanded = Boolean(navGroupExpanded[group.id]);
+      const isPinned = Boolean(navGroupExpanded[group.id]);
+      const isHovered = hoveredNavGroup === group.id && hoverSuppressed !== group.id;
+      const isExpanded = isPinned || isHovered;
       const hasActiveChild = group.items.some(([label, target, section]) => {
         return section ? page === "Reports" && reportSection === section : page === target;
       });
@@ -2455,13 +2501,11 @@ function WorkspaceShell({
         {
           className: `nav-section${hasActiveChild ? " has-active-child" : ""}`,
           key: group.id,
-          onPointerEnter: (event) => {
-            if (event.pointerType !== "touch") openSidebarFlyout(group.id);
-          },
-          onPointerLeave: closeSidebarFlyout,
-          onFocusCapture: () => openSidebarFlyout(group.id),
+          onPointerEnter: (event) => handleNavPointerEnter(group.id, event.pointerType),
+          onPointerLeave: (event) => handleNavPointerLeave(group.id, event.pointerType),
+          onFocusCapture: () => handleNavPointerEnter(group.id),
           onBlurCapture: (event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) closeSidebarFlyout();
+            if (!event.currentTarget.contains(event.relatedTarget)) handleNavPointerLeave(group.id);
           }
         },
         /* @__PURE__ */ React.createElement(
@@ -2471,11 +2515,11 @@ function WorkspaceShell({
             id: `nav-group-toggle-${group.id}`,
             className: `nav-section-title${hasActiveChild ? " group-active" : ""}`,
             "data-nav-group": group.id,
-            "aria-expanded": sidebarRail ? sidebarFlyout === group.id : expanded,
+            "aria-expanded": sidebarRail ? sidebarFlyout === group.id : isExpanded,
             "aria-controls": !sidebarRail || sidebarFlyout === group.id ? `nav-group-${group.id}` : void 0,
             "aria-label": group.label,
             title: group.label,
-            onClick: () => sidebarRail ? openSidebarFlyout(group.id) : onToggleNavGroup(group.id)
+            onClick: () => handleNavGroupClick(group.id)
           },
           /* @__PURE__ */ React.createElement("span", { className: "nav-icon", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: group.icon || "box" })),
           /* @__PURE__ */ React.createElement("span", { className: "sidebar-label" }, group.label),
@@ -2486,13 +2530,13 @@ function WorkspaceShell({
           {
             className: "nav-section-items",
             id: `nav-group-${group.id}`,
-            hidden: !expanded
+            hidden: !isExpanded
           },
-          /* @__PURE__ */ React.createElement("div", { className: "nav-flyout-header", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, group.label)),
-          renderGroupLinks(group)
+          /* @__PURE__ */ React.createElement("div", { className: "nav-section-items-inner" }, /* @__PURE__ */ React.createElement("div", { className: "nav-flyout-header", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, group.label)), renderGroupLinks(group))
         )
       );
-    }), /* @__PURE__ */ React.createElement("div", { className: "nav-divider", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement(
+    })),
+    /* @__PURE__ */ React.createElement("div", { className: "sidebar-bottom" }, /* @__PURE__ */ React.createElement(
       "button",
       {
         "data-page": "Settings",
@@ -2529,8 +2573,7 @@ function WorkspaceShell({
       /* @__PURE__ */ React.createElement("span", { className: "nav-icon", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: "out" })),
       /* @__PURE__ */ React.createElement("span", { className: "sidebar-label" }, "Logout"),
       /* @__PURE__ */ React.createElement("span", { className: "nav-tooltip", "aria-hidden": "true" }, "Logout")
-    )),
-    /* @__PURE__ */ React.createElement("div", { className: "sidebar-bottom" }, /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement("div", { className: "nav-divider", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement(
       "div",
       {
         className: "operator",
@@ -2853,9 +2896,9 @@ function App() {
     }
   });
   const [navGroupExpanded, setNavGroupExpanded] = useState(() => {
-    const initial = Object.fromEntries(navGroups.map((group) => [group.id, true]));
+    const initial = Object.fromEntries(navGroups.map((group) => [group.id, false]));
     try {
-      const saved = JSON.parse(localStorage.getItem("rent-play-nav-groups") || "{}");
+      const saved = JSON.parse(localStorage.getItem("rent-play-nav-groups-pinned") || "{}");
       for (const group of navGroups) {
         if (typeof saved[group.id] === "boolean") initial[group.id] = saved[group.id];
       }
@@ -3056,7 +3099,7 @@ function App() {
         setNavGroupExpanded((prev) => {
           const updated = { ...prev, [group.id]: true };
           try {
-            localStorage.setItem("rent-play-nav-groups", JSON.stringify(updated));
+            localStorage.setItem("rent-play-nav-groups-pinned", JSON.stringify(updated));
           } catch {
           }
           return updated;
@@ -3598,7 +3641,7 @@ function App() {
     setNavGroupExpanded((prev) => {
       const next = { ...prev, [groupId]: !prev[groupId] };
       try {
-        localStorage.setItem("rent-play-nav-groups", JSON.stringify(next));
+        localStorage.setItem("rent-play-nav-groups-pinned", JSON.stringify(next));
       } catch {
       }
       return next;

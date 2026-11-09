@@ -61,6 +61,94 @@ export function renderRentalTaskProgress(row = {}, stage = 'review') {
   ).join('')}</ol><p>Step ${current + 1} of ${steps.length} · ${steps[current][1]}${stage === 'released' ? ' complete' : ' · The next task opens after you confirm this step.'}</p></nav>`;
 }
 
+export function renderRentalSummaryCard(row = {}, h = {}) {
+  const e = h.escape || (str => String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'));
+  const money = h.money || (val => `₱${Number(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
+  const customerName = row.customer_name || 'Customer';
+  const initials = customerName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase() || '')
+    .join('') || 'CU';
+  const isResort = row.fulfillment_mode !== 'SHOP_HANDOVER';
+  const isQr = row.payment_method === 'QR';
+  const feeAmount = typeof row.rental_fee === 'number' || !Number.isNaN(Number(row.rental_fee))
+    ? money(Number(row.rental_fee || 0))
+    : '₱0.00';
+  const durationText = row.fee_breakdown?.billed_minutes
+    ? formatQuoteMinutes(row.fee_breakdown.billed_minutes)
+    : (row.duration_display || 'Standard Rental');
+  const rentalRef = row.rental_code || row.id || 'N/A';
+  const unitCode = row.item_code || row.assigned_code;
+  const categoryName = row.category_name || row.category;
+  const locationText = row.delivery_location || (isResort ? 'Resort Delivery' : 'Shop Counter Handover');
+  const contactText = row.customer_phone || row.customer_email || 'Registered Customer';
+
+  return `<section class="rental-desk-summary-card" aria-label="Rental request details">
+    <div class="summary-card-header">
+      <div class="summary-card-equipment">
+        <div class="equipment-icon-bubble" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
+            <rect x="2" y="6" width="20" height="12" rx="3"></rect>
+            <circle cx="8" cy="12" r="1.5" fill="currentColor"></circle>
+            <circle cx="16" cy="12" r="1.5" fill="currentColor"></circle>
+            <path d="M6 12h4m-2-2v4"></path>
+          </svg>
+        </div>
+        <div class="equipment-meta">
+          <h3 class="equipment-name">${e(row.item_name || 'Equipment')}</h3>
+          <div class="equipment-tags">
+            ${unitCode ? `<span class="equipment-code-chip">${e(unitCode)}</span>` : '<span class="equipment-code-chip">Unit Pending</span>'}
+            ${categoryName ? `<span class="equipment-category-chip">${e(categoryName)}</span>` : ''}
+          </div>
+        </div>
+      </div>
+      <div class="summary-card-ref">
+        <span class="ref-badge-label">Rental Ref</span>
+        <strong class="ref-badge-code">${e(rentalRef)}</strong>
+      </div>
+    </div>
+    <div class="summary-card-grid">
+      <div class="summary-grid-cell">
+        <span class="cell-label">Customer</span>
+        <div class="cell-value customer-cell">
+          <div class="customer-avatar-mini" aria-hidden="true">${e(initials)}</div>
+          <div class="customer-info-mini">
+            <strong class="customer-name">${e(customerName)}</strong>
+            <small class="customer-sub">${e(contactText)}</small>
+          </div>
+        </div>
+      </div>
+      <div class="summary-grid-cell">
+        <span class="cell-label">Fulfillment &amp; Location</span>
+        <div class="cell-value fulfillment-cell">
+          <span class="fulfillment-pill ${isResort ? 'resort' : 'shop'}">
+            ${isResort ? '🏖️ Resort Delivery' : '🏪 Shop Handover'}
+          </span>
+          <span class="fulfillment-location">${e(locationText)}</span>
+        </div>
+      </div>
+      <div class="summary-grid-cell">
+        <span class="cell-label">Rental Fee &amp; Payment</span>
+        <div class="cell-value payment-cell">
+          <strong class="payment-amount">${e(feeAmount)}</strong>
+          <span class="payment-method-chip ${isQr ? 'qr' : 'cash'}">
+            ${isQr ? '📱 QR Transfer' : '💵 Cash on Handover'}
+          </span>
+        </div>
+      </div>
+      <div class="summary-grid-cell">
+        <span class="cell-label">Duration &amp; Schedule</span>
+        <div class="cell-value schedule-cell">
+          <strong class="schedule-duration">${e(durationText)}</strong>
+          <small class="schedule-note">Timer starts at physical handoff</small>
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+
 export function nextRentalStep(row = {}) {
   if (row.status === 'RETURN_PENDING_INSPECTION') return 'inspect';
   if (row.status === 'APPROVED') {
@@ -300,7 +388,31 @@ export function createRentalDesk(h) {
       'Outside Operating / Delivery Hours',
       'Unverified Payment Proof / Reference',
     ].map(preset => `<button type="button" class="secondary duration-chip" data-reject-preset="${e(preset)}">${e(preset)}</button>`).join('');
-    showModal(approve ? 'Approve rental request' : 'Reject rental request', `<form class="admin-form rental-desk-form">${approve ? renderRentalTaskProgress(row, 'review') : ''}<p>${e(row.item_name)} · ${e(row.customer_name)} · ${e(row.rental_code || row.id)}</p>${approve ? '<p>Approval reserves the equipment. Confirm any outstanding rental payment at handoff; the rental timer starts when you confirm delivery.</p><label>Review notes<textarea name="notes" maxlength="1000"></textarea></label>' : `<div class="duration-chip-row" role="group" aria-label="Quick rejection reasons">${rejectPresets}</div><label>Reason for rejection (required)<textarea name="reason" maxlength="1000" rows="3" required placeholder="Select a reason above or enter specific remarks for the customer…"></textarea></label>`}${actions(approve ? 'Approve rental request' : 'Reject rental request')}</form>`);
+    showModal(approve ? 'Approve rental request' : 'Reject rental request', `<form class="admin-form rental-desk-form">${approve ? renderRentalTaskProgress(row, 'review') : ''}${renderRentalSummaryCard(row, h)}${approve ? `
+      <div class="rental-desk-notice" role="note">
+        <div class="notice-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
+            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+          </svg>
+        </div>
+        <div class="notice-body">
+          <strong>Equipment reservation</strong>
+          <p>Approval reserves the equipment. Confirm any outstanding rental payment at handoff; the rental timer starts when you confirm delivery.</p>
+        </div>
+      </div>
+      <div class="rental-notes-group">
+        <div class="rental-notes-header">
+          <label for="review-notes-textarea">Review notes</label>
+          <span class="notes-optional-badge">Optional</span>
+        </div>
+        <textarea id="review-notes-textarea" name="notes" maxlength="1000" rows="3" placeholder="Add optional instructions for preparation or notes for the team…"></textarea>
+        <small class="rental-notes-hint">Recorded in the audit trail and visible to assigned staff.</small>
+      </div>` : `
+      <div class="duration-chip-row" role="group" aria-label="Quick rejection reasons">${rejectPresets}</div>
+      <div class="rental-notes-group">
+        <label for="rejection-reason-textarea">Reason for rejection (required)</label>
+        <textarea id="rejection-reason-textarea" name="reason" maxlength="1000" rows="3" required placeholder="Select a reason above or enter specific remarks for the customer…"></textarea>
+      </div>`}${actions(approve ? 'Approve rental request' : 'Reject rental request')}</form>`);
     const form = modal.querySelector('form');
     form.querySelectorAll?.('[data-reject-preset]')?.forEach(chip => {
       chip.onclick = () => {
@@ -348,7 +460,18 @@ export function createRentalDesk(h) {
     if (!row || row.status !== 'APPROVED') { toast('Approve the rental request before preparing the equipment.'); return; }
     const isDelivery = row.fulfillment_mode !== 'SHOP_HANDOVER';
     const prepareActions = `<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button>${isDelivery ? `<button type="button" class="primary btn-terminal-dispatch" data-prepare-esp32 title="Scan equipment QR and confirm shop departure on the ESP32 counter terminal. Timer stays stopped until resort handoff.">${terminalWifiIcon}<span>Confirm shop departure on terminal</span></button>` : ''}<button type="submit" class="${isDelivery ? 'secondary' : 'primary'}">${row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Mark ready for handover' : 'Mark ready without terminal'}</button></div>`;
-    showModal(row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Prepare walk-in equipment' : 'Prepare equipment for delivery', `<form class="admin-form rental-desk-form">${renderRentalTaskProgress(row, 'prepare')}<p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Scan the assigned unit’s printed QR at the shop. This verifies the exact unit before handover and keeps the rental timer stopped.</p>${scanField('inventoryCode','Assigned equipment QR')}${manualControls}${prepareActions}</form>`);
+    showModal(row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Prepare walk-in equipment' : 'Prepare equipment for delivery', `<form class="admin-form rental-desk-form">${renderRentalTaskProgress(row, 'prepare')}${renderRentalSummaryCard(row, h)}
+      <div class="rental-desk-notice" role="note">
+        <div class="notice-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
+            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+          </svg>
+        </div>
+        <div class="notice-body">
+          <strong>Shop preparation &amp; verification</strong>
+          <p>Scan the assigned unit’s printed QR at the shop. This verifies the exact unit before handover and keeps the rental timer stopped.</p>
+        </div>
+      </div>${scanField('inventoryCode','Assigned equipment QR')}${manualControls}${prepareActions}</form>`);
     const form = modal.querySelector('form'); bindManual(form, row, false);
     const terminalOperationKey = rentalOperationKey();
     const espBtn = form.querySelector('[data-prepare-esp32]');

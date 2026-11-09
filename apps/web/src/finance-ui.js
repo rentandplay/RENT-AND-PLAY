@@ -116,36 +116,45 @@ export function createFinanceUI(h) {
     const t = summary?.totals || {};
     const expectedCash = hasOverride ? expectedOverride : Number(t.cash_net_movement || 0);
     showModal('Cash drawer count (Z-Reading)', `<form class="admin-form cash-drawer-form">
-      <div class="cash-drawer-summary">
-        <div>
+      <div class="cash-drawer-col cash-drawer-left">
+        <div class="cash-drawer-summary">
           <span class="eyebrow">EXPECTED DRAWER CASH (NET MOVEMENT)</span>
           <strong class="cash-expected-amount">${e(money(expectedCash))}</strong>
           <small>Recorded cash collections minus cash expenses and refunds for the selected period.</small>
         </div>
+        <div class="cash-variance-card">
+          <span class="eyebrow">RECONCILIATION VARIANCE</span>
+          <div class="cash-variance-display" data-cash-variance>
+            <span>Variance: </span><strong data-variance-val>₱0.00</strong> <small data-variance-label>(Enter cash count)</small>
+          </div>
+        </div>
+        <label class="cash-notes-label">Operator shift note / signature (optional)
+          <textarea name="closeoutNotes" maxlength="500" rows="3" placeholder="e.g. End of shift count by Reynold. ₱500 float retained."></textarea>
+        </label>
       </div>
-      <section class="cash-count-section">
-        <h3>Count physical cash in drawer</h3>
-        <div class="cash-denominations-grid">
-          <label>₱1,000 <input type="number" min="0" data-denom="1000" placeholder="Qty" /></label>
-          <label>₱500 <input type="number" min="0" data-denom="500" placeholder="Qty" /></label>
-          <label>₱200 <input type="number" min="0" data-denom="200" placeholder="Qty" /></label>
-          <label>₱100 <input type="number" min="0" data-denom="100" placeholder="Qty" /></label>
-          <label>₱50 <input type="number" min="0" data-denom="50" placeholder="Qty" /></label>
-          <label>₱20 <input type="number" min="0" data-denom="20" placeholder="Qty" /></label>
-          <label>Coins (₱ total) <input type="number" min="0" step="0.25" data-denom="1" placeholder="Coins ₱" /></label>
-        </div>
-        <label class="cash-total-override">Or enter total counted cash directly (₱)
-          <input name="countedTotal" type="number" min="0" step="0.01" placeholder="0.00" />
-        </label>
-        <div class="cash-variance-display" data-cash-variance>
-          <span>Variance: </span><strong data-variance-val>₱0.00</strong> <small data-variance-label>(Enter cash count above)</small>
-        </div>
-        <label>Operator shift note / signature (optional)
-          <textarea name="closeoutNotes" maxlength="500" rows="2" placeholder="e.g. End of shift count by Reynold. ₱500 float retained."></textarea>
-        </label>
-      </section>
-      <div class="form-actions">
-        <button type="button" class="secondary" data-close>Close</button>
+      <div class="cash-drawer-col cash-drawer-right">
+        <section class="cash-count-section">
+          <h3>Count physical cash in drawer</h3>
+          <div class="cash-denominations-grid">
+            <label><span class="denom-tag">₱1,000</span> <input type="number" min="0" data-denom="1000" placeholder="Qty" /></label>
+            <label><span class="denom-tag">₱500</span> <input type="number" min="0" data-denom="500" placeholder="Qty" /></label>
+            <label><span class="denom-tag">₱200</span> <input type="number" min="0" data-denom="200" placeholder="Qty" /></label>
+            <label><span class="denom-tag">₱100</span> <input type="number" min="0" data-denom="100" placeholder="Qty" /></label>
+            <label><span class="denom-tag">₱50</span> <input type="number" min="0" data-denom="50" placeholder="Qty" /></label>
+            <label><span class="denom-tag">₱20</span> <input type="number" min="0" data-denom="20" placeholder="Qty" /></label>
+          </div>
+          <div class="cash-coins-row">
+            <label><span class="denom-tag">Coins (₱ total)</span> <input type="number" min="0" step="0.25" data-denom="1" placeholder="Coins ₱" /></label>
+          </div>
+          <div class="cash-total-override-wrap">
+            <label class="cash-total-override">Or enter total counted cash directly (₱)
+              <input name="countedTotal" type="number" min="0" step="0.01" placeholder="0.00" />
+            </label>
+          </div>
+        </section>
+      </div>
+      <div class="form-actions cash-drawer-actions">
+        <button type="button" class="secondary" data-close>Cancel</button>
         <button type="button" class="secondary" data-print-closeout>Print report</button>
         <button type="submit" class="primary">Record closeout</button>
       </div>
@@ -173,7 +182,7 @@ export function createFinanceUI(h) {
       varianceVal.textContent = money(Math.abs(diff));
       if (sum === 0 && !totalInput.value) {
         varianceVal.textContent = '₱0.00';
-        varianceLabel.textContent = '(Enter cash count above)';
+        varianceLabel.textContent = '(Enter cash count)';
         varianceDisplay.className = 'cash-variance-display';
       } else if (Math.abs(diff) < 0.01) {
         varianceLabel.textContent = 'Exact match ✓ Balanced';

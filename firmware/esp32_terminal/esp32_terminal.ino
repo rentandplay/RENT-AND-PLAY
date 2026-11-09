@@ -43,8 +43,8 @@ const char* WIFI_SSID = "rnld_pstr";
 const char* WIFI_PASSWORD = "lalamove";
 
 // Backend API URL (Production cloud URL on Render):
-// const char* API_BASE_URL = "https://rent-and-play.onrender.com/api";
-const char* API_BASE_URL = "http://192.168.1.7:3000/api";
+const char* API_BASE_URL = "https://rent-and-play.onrender.com/api";
+// const char* API_BASE_URL = "http://192.168.1.7:3000/api";
 
 // Terminal credentials provisioned in Supabase:
 const char* TERMINAL_ID = "TERM-01";

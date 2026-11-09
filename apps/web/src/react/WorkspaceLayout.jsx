@@ -316,6 +316,51 @@ export function WorkspaceShell({
     keepFlyoutOpen();
     flyoutCloseTimer.current = setTimeout(() => setSidebarFlyout(null), 180);
   };
+
+  const [hoveredNavGroup, setHoveredNavGroup] = useState(null);
+  const [hoverSuppressed, setHoverSuppressed] = useState(null);
+  const navHoverTimer = useRef(null);
+  const keepNavHoverOpen = () => clearTimeout(navHoverTimer.current);
+
+  const handleNavPointerEnter = (groupId, pointerType) => {
+    if (pointerType === 'touch') return;
+    keepNavHoverOpen();
+    if (sidebarRail) {
+      openSidebarFlyout(groupId);
+    } else {
+      if (hoverSuppressed !== groupId) {
+        setHoveredNavGroup(groupId);
+      }
+    }
+  };
+
+  const handleNavPointerLeave = (groupId, pointerType) => {
+    if (pointerType === 'touch') return;
+    if (sidebarRail) {
+      closeSidebarFlyout();
+    } else {
+      keepNavHoverOpen();
+      navHoverTimer.current = setTimeout(() => {
+        setHoveredNavGroup(null);
+        setHoverSuppressed(null);
+      }, 140);
+    }
+  };
+
+  const handleNavGroupClick = groupId => {
+    if (sidebarRail) {
+      openSidebarFlyout(groupId);
+      return;
+    }
+    const currentlyPinned = Boolean(navGroupExpanded[groupId]);
+    if (currentlyPinned) {
+      setHoveredNavGroup(null);
+      setHoverSuppressed(groupId);
+    } else {
+      setHoverSuppressed(null);
+    }
+    onToggleNavGroup(groupId);
+  };
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
@@ -640,7 +685,7 @@ export function WorkspaceShell({
             <BrandLogo />
           </a>
 
-          <nav onScroll={() => setSidebarFlyout(null)}>
+          <nav onScroll={() => { setSidebarFlyout(null); setHoveredNavGroup(null); }}>
             <button
               data-page="Dashboard"
               className={`nav-root${page === 'Dashboard' ? ' active' : ''}`}
@@ -661,7 +706,9 @@ export function WorkspaceShell({
             </button>
 
             {navGroups.map(group => {
-              const expanded = Boolean(navGroupExpanded[group.id]);
+              const isPinned = Boolean(navGroupExpanded[group.id]);
+              const isHovered = hoveredNavGroup === group.id && hoverSuppressed !== group.id;
+              const isExpanded = isPinned || isHovered;
               const hasActiveChild = group.items.some(([label, target, section]) => {
                 return section
                   ? page === 'Reports' && reportSection === section
@@ -671,21 +718,21 @@ export function WorkspaceShell({
                 <section
                   className={`nav-section${hasActiveChild ? ' has-active-child' : ''}`}
                   key={group.id}
-                  onPointerEnter={event => { if (event.pointerType !== 'touch') openSidebarFlyout(group.id); }}
-                  onPointerLeave={closeSidebarFlyout}
-                  onFocusCapture={() => openSidebarFlyout(group.id)}
-                  onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) closeSidebarFlyout(); }}
+                  onPointerEnter={event => handleNavPointerEnter(group.id, event.pointerType)}
+                  onPointerLeave={event => handleNavPointerLeave(group.id, event.pointerType)}
+                  onFocusCapture={() => handleNavPointerEnter(group.id)}
+                  onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) handleNavPointerLeave(group.id); }}
                 >
                   <button
                     type="button"
                     id={`nav-group-toggle-${group.id}`}
                     className={`nav-section-title${hasActiveChild ? ' group-active' : ''}`}
                     data-nav-group={group.id}
-                    aria-expanded={sidebarRail ? sidebarFlyout === group.id : expanded}
+                    aria-expanded={sidebarRail ? sidebarFlyout === group.id : isExpanded}
                     aria-controls={!sidebarRail || sidebarFlyout === group.id ? `nav-group-${group.id}` : undefined}
                     aria-label={group.label}
                     title={group.label}
-                    onClick={() => sidebarRail ? openSidebarFlyout(group.id) : onToggleNavGroup(group.id)}
+                    onClick={() => handleNavGroupClick(group.id)}
                   >
                     <span className="nav-icon" aria-hidden="true">
                       <Icon name={group.icon || 'box'} />
@@ -698,18 +745,21 @@ export function WorkspaceShell({
                   {!sidebarRail && <div
                     className="nav-section-items"
                     id={`nav-group-${group.id}`}
-                    hidden={!expanded}
+                    hidden={!isExpanded}
                   >
-                    <div className="nav-flyout-header" aria-hidden="true">
-                      <span>{group.label}</span>
+                    <div className="nav-section-items-inner">
+                      <div className="nav-flyout-header" aria-hidden="true">
+                        <span>{group.label}</span>
+                      </div>
+                      {renderGroupLinks(group)}
                     </div>
-                    {renderGroupLinks(group)}
                   </div>}
                 </section>
               );
             })}
-            <div className="nav-divider" aria-hidden="true" />
+          </nav>
 
+          <div className="sidebar-bottom">
             <button
               data-page="Settings"
               className={`nav-root${page === 'Settings' ? ' active' : ''}`}
@@ -749,9 +799,7 @@ export function WorkspaceShell({
               <span className="sidebar-label">Logout</span>
               <span className="nav-tooltip" aria-hidden="true">Logout</span>
             </button>
-          </nav>
-
-          <div className="sidebar-bottom">
+            <div className="nav-divider" aria-hidden="true" />
             <div
               className="operator"
               data-page="Profile"

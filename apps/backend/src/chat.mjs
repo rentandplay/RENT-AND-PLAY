@@ -70,36 +70,31 @@ export async function listChats(db, actor, { before, status } = {}) {
   return { threads: rows, next_cursor: result.docs.length > 30 ? rows.at(-1).sort_key : null };
 }
 
-const typingState = new Map();
-
-export function setTyping(actor, id, isTyping = true) {
+export async function setTyping(db, actor, id, isTyping = true) {
   checkActor(actor);
   requiredId(id);
-  const now = Date.now();
-  let entry = typingState.get(id);
-  if (!entry) {
-    entry = { customer: null, staff: null };
-    typingState.set(id, entry);
-  }
+  const ref = db.collection('chat_threads').doc(id);
+  const snapshot = await ref.get();
+  const row = snapshot.exists ? snapshot.data() : null;
+  authorize(actor, row);
   const team = staff(actor);
   const key = team ? 'staff' : 'customer';
-  if (isTyping) {
-    const raw = (actor.full_name || actor.name || (team ? 'Staff' : 'Customer')).trim();
-    const name = team ? `${raw.split(/\s+/)[0]} (Staff)` : raw;
-    entry[key] = { name, at: now };
-  } else {
-    entry[key] = null;
-  }
+  const raw = (actor.full_name || actor.name || (team ? 'Staff' : 'Customer')).trim();
+  const name = team ? `${raw.split(/\s+/)[0]} (Staff)` : raw;
+  await ref.update({ [`${key}_typing`]: isTyping ? { name, at: Date.now() } : null });
   return { ok: true };
 }
 
-export function getTyping(actor, id) {
-  const entry = typingState.get(id);
-  if (!entry) return null;
+export async function getTyping(db, actor, id) {
+  checkActor(actor);
+  requiredId(id);
+  const snapshot = await db.collection('chat_threads').doc(id).get();
+  const row = snapshot.exists ? snapshot.data() : null;
+  authorize(actor, row);
   const now = Date.now();
   const team = staff(actor);
   const otherKey = team ? 'customer' : 'staff';
-  const target = entry[otherKey];
+  const target = row[`${otherKey}_typing`];
   if (target && now - target.at < 5000) {
     return { is_typing: true, name: target.name, role: otherKey.toUpperCase() };
   }
@@ -120,7 +115,7 @@ export async function chatMessages(db, actor, id, options = {}) {
   if (!after) rows.reverse();
   return { thread: view(row, actor), messages: rows, has_more: result.docs.length > 50,
     next_cursor: result.docs.length > 50 ? String(after ? rows.at(-1).seq : rows[0].seq) : null,
-    typing: getTyping(actor, id) };
+    typing: await getTyping(db, actor, id) };
 }
 
 export async function sendChatMessage(db, actor, id, input, now = new Date()) {
@@ -130,7 +125,7 @@ export async function sendChatMessage(db, actor, id, input, now = new Date()) {
   const text = input.text.trim(), team = staff(actor);
   const ref = db.collection('chat_threads').doc(id);
   const operation = db.collection('chat_operations').doc(hash(`${actor.id}:${input.requestKey}`));
-  return db.runTransaction(async tx => {
+  const result = await db.runTransaction(async tx => {
     const thread = await tx.get(ref), old = thread.exists ? thread.data() : null;
     authorize(actor, old);
     const previous = await tx.get(operation);
@@ -144,7 +139,8 @@ export async function sendChatMessage(db, actor, id, input, now = new Date()) {
     const limit = await tx.get(limitRef);
     if (team && old.status === 'RESOLVED') fail(409, 'Reopen this conversation before replying.');
     const seq = old.last_seq + 1, msgId = messageId(id, seq);
-    const row = { ...old, last_seq: seq, customer_count: old.customer_count + (team ? 0 : 1), staff_count: old.staff_count + (team ? 1 : 0),
+    const row = { ...old, [`${team ? 'staff' : 'customer'}_typing`]: null,
+      last_seq: seq, customer_count: old.customer_count + (team ? 0 : 1), staff_count: old.staff_count + (team ? 1 : 0),
       status: 'OPEN', resolved_at: null, resolved_by: null, last_message: text, updated_at: now.toISOString(), sort_key: `${now.toISOString()}_${id}` };
     const message = { id: msgId, thread_id: id, seq, sender_id: actor.id,
       sender_role: team ? 'STAFF' : 'CUSTOMER', sender_name: team ? actor.full_name || actor.name || 'Rental support' : row.customer_name,
@@ -156,7 +152,6 @@ export async function sendChatMessage(db, actor, id, input, now = new Date()) {
     queueChatNotification(tx, db, row, message, now);
     return { message, thread: view(row, actor), duplicate: false };
   });
-  setTyping(actor, id, false);
   return result;
 }
 

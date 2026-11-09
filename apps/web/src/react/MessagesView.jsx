@@ -8,12 +8,25 @@ const initials = name => {
   return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase();
 };
 
-const QUICK_REPLIES = [
-  { label: '🪪 Accepted IDs', text: 'Tumatanggap po kami ng National ID, Driver\'s License, Passport, UMID, Postal ID, o Valid School ID (basta currently enrolled with proof of registration).' },
-  { label: '📋 Rental Requirements', text: 'Kailangan lamang po ng 1 Valid ID (Government o School ID), pirma sa rental agreement, at active contact details.' },
-  { label: '⏰ Store Hours', text: 'Bukas po ang aming rental desk mula 8:00 AM hanggang 8:00 PM araw-araw para sa pickup at return.' },
-  { label: '📍 Pickup & Return', text: 'Maaari ninyong i-pickup at i-return ang equipment sa aming shop desk habang operating hours.' },
+const DEFAULT_QUICK_REPLIES = [
+  { id: 'qr-1', label: '🪪 Accepted IDs', text: 'Tumatanggap po kami ng National ID, Driver\'s License, Passport, UMID, Postal ID, o Valid School ID (basta currently enrolled with proof of registration).' },
+  { id: 'qr-2', label: '📋 Rental Requirements', text: 'Kailangan lamang po ng 1 Valid ID (Government o School ID), pirma sa rental agreement, at active contact details.' },
+  { id: 'qr-3', label: '⏰ Store Hours', text: 'Bukas po ang aming rental desk mula 8:00 AM hanggang 8:00 PM araw-araw para sa pickup at return.' },
+  { id: 'qr-4', label: '📍 Pickup & Return', text: 'Maaari ninyong i-pickup at i-return ang equipment sa aming shop desk habang operating hours.' },
 ];
+
+function loadStoredQuickReplies() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem('rent-play-quick-replies');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    }
+  } catch {}
+  return DEFAULT_QUICK_REPLIES;
+}
 
 export function MessagesView({ api, user }) {
   const storageKey = `rental-support-drafts:${user.id}`;
@@ -27,6 +40,85 @@ export function MessagesView({ api, user }) {
   const [loading, setLoading] = useState(true), [synced, setSynced] = useState(null);
   const [listError, setListError] = useState('');
   const [typing, setTyping] = useState(null);
+  const [quickReplies, setQuickReplies] = useState(loadStoredQuickReplies);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [editingQrId, setEditingQrId] = useState(null);
+  const [formLabel, setFormLabel] = useState('');
+  const [formText, setFormText] = useState('');
+  const [qrError, setQrError] = useState('');
+
+  function persistQuickReplies(next) {
+    setQuickReplies(next);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('rent-play-quick-replies', JSON.stringify(next));
+      }
+    } catch {}
+  }
+
+  function handleStartAddQr() {
+    setEditingQrId('NEW');
+    setFormLabel('');
+    setFormText('');
+    setQrError('');
+  }
+
+  function handleStartEditQr(qr) {
+    setEditingQrId(qr.id || qr.label);
+    setFormLabel(qr.label);
+    setFormText(qr.text);
+    setQrError('');
+  }
+
+  function handleCancelEditQr() {
+    setEditingQrId(null);
+    setQrError('');
+  }
+
+  function handleSaveQr(e) {
+    e.preventDefault();
+    const label = formLabel.trim();
+    const text = formText.trim();
+    if (!label) {
+      setQrError('Please enter a label for this quick reply.');
+      return;
+    }
+    if (!text) {
+      setQrError('Please enter the quick reply message.');
+      return;
+    }
+
+    if (editingQrId === 'NEW') {
+      const newQr = { id: 'qr-' + Date.now(), label, text };
+      persistQuickReplies([...quickReplies, newQr]);
+    } else {
+      persistQuickReplies(quickReplies.map(qr => ((qr.id || qr.label) === editingQrId ? { ...qr, label, text } : qr)));
+    }
+    setEditingQrId(null);
+    setQrError('');
+  }
+
+  function handleDeleteQr(targetId) {
+    persistQuickReplies(quickReplies.filter(qr => (qr.id || qr.label) !== targetId));
+  }
+
+  function handleResetQuickReplies() {
+    persistQuickReplies(DEFAULT_QUICK_REPLIES);
+    setEditingQrId(null);
+    setQrError('');
+  }
+
+  useEffect(() => {
+    if (!showQrModal) return;
+    const onKeyDown = e => {
+      if (e.key === 'Escape') {
+        setShowQrModal(false);
+        setEditingQrId(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showQrModal]);
   const listVersion = useRef(0), statusRef = useRef(status), retryConversation = useRef(() => {});
   statusRef.current = status;
   const generation = useRef(0), sequence = useRef(0), busy = useRef(false), listBusy = useRef(false), bottom = useRef(null);
@@ -178,7 +270,18 @@ export function MessagesView({ api, user }) {
       {error && <div role="alert" className="support-error"><p>{error}</p><button type="button" onClick={() => retryConversation.current()}>Refresh conversation</button></div>}
       {!active ? <div className="support-empty"><h2>Rental support</h2><p>Select a conversation to help a customer.</p><p>Replies are saved and customers receive an alert. Staff share this inbox.</p></div> : <>
         <header className="support-header"><div><h2>{thread?.customer_name || 'Loading conversation…'}</h2><p>{thread?.subject} {thread?.rental_code && `· ${thread.rental_code}`}</p><small>{synced ? `Last synced ${synced.toLocaleTimeString()}` : 'Connecting…'}</small></div>
-          {thread && <button disabled={sending} onClick={changeStatus}>{thread.status === 'OPEN' ? 'Resolve conversation' : 'Reopen conversation'}</button>}</header>
+          {thread && (
+            <button
+              type="button"
+              className={`support-thread-status-btn status-${thread.status.toLowerCase()}`}
+              disabled={sending}
+              onClick={changeStatus}
+              title={thread.status === 'OPEN' ? 'Mark conversation as resolved' : 'Reopen this conversation'}
+            >
+              <span className="status-btn-icon" aria-hidden="true">{thread.status === 'OPEN' ? '✓' : '↺'}</span>
+              {thread.status === 'OPEN' ? 'Resolve conversation' : 'Reopen conversation'}
+            </button>
+          )}</header>
         <div className="support-conversation-body">
           <div className="support-conversation-main">
             <div className="support-messages" role="log" aria-label="Messages" aria-live="polite" onScroll={e => { atBottom.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80; }}>
@@ -204,7 +307,30 @@ export function MessagesView({ api, user }) {
               <div className="support-composer-header">
                 <label htmlFor="support-reply">Reply to customer</label>
                 <div className="support-quick-chips">
-                  {QUICK_REPLIES.map(qr => <button key={qr.label} type="button" className="quick-chip-btn" disabled={!thread || thread?.status === 'RESOLVED'} onClick={() => handleDraftChange(qr.text)}>{qr.label}</button>)}
+                  {quickReplies.map(qr => (
+                    <button
+                      key={qr.id || qr.label}
+                      type="button"
+                      className="quick-chip-btn"
+                      disabled={!thread || thread?.status === 'RESOLVED'}
+                      onClick={() => handleDraftChange(qr.text)}
+                      title={qr.text}
+                    >
+                      {qr.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="quick-chip-btn manage-qr-btn"
+                    onClick={() => {
+                      setEditingQrId(null);
+                      setQrError('');
+                      setShowQrModal(true);
+                    }}
+                    title="Add, edit, or customize quick replies"
+                  >
+                    ⚙️ Customize
+                  </button>
                 </div>
               </div>
               <textarea id="support-reply" rows="3" maxLength={2000} value={pending?.text ?? draft} disabled={!!pending || !thread || thread?.status === 'RESOLVED'} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!sending && !pending && (pending?.text ?? draft).trim()) send(e); } }} onChange={e => handleDraftChange(e.target.value)} placeholder="Help with availability, pricing, or a rental… (Press Enter to send)" />
@@ -231,5 +357,104 @@ export function MessagesView({ api, user }) {
         </div>
       </>}
     </div>
+    {showQrModal && (
+      <div className="qr-modal-overlay" onClick={() => { setShowQrModal(false); setEditingQrId(null); }}>
+        <div className="qr-modal-window" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="qr-modal-title">
+          <div className="qr-modal-header">
+            <div>
+              <h3 id="qr-modal-title">Customize Quick Replies</h3>
+              <p className="qr-modal-subtitle">Add or edit canned response snippets for faster customer support.</p>
+            </div>
+            <button type="button" className="icon-button qr-modal-close" onClick={() => { setShowQrModal(false); setEditingQrId(null); }} aria-label="Close dialog">✕</button>
+          </div>
+
+          {editingQrId ? (
+            <form className="qr-edit-form" onSubmit={handleSaveQr}>
+              <div className="qr-form-header">
+                <h4>{editingQrId === 'NEW' ? '+ Add New Quick Reply' : 'Edit Quick Reply'}</h4>
+              </div>
+              {qrError && <div className="qr-form-error" role="alert">{qrError}</div>}
+              <label className="qr-field-label">
+                <span>Button / Chip Label</span>
+                <input
+                  type="text"
+                  required
+                  maxLength={40}
+                  placeholder="e.g. 💳 GCash Payment, 📍 Delivery Info"
+                  value={formLabel}
+                  onChange={e => setFormLabel(e.target.value)}
+                />
+                <small>Short name shown on the chip above the reply box.</small>
+              </label>
+              <label className="qr-field-label">
+                <span>Quick Reply Message</span>
+                <textarea
+                  required
+                  rows={4}
+                  maxLength={1500}
+                  placeholder="The message that will be placed into the composer when clicked..."
+                  value={formText}
+                  onChange={e => setFormText(e.target.value)}
+                />
+                <small>{formText.length}/1500 characters</small>
+              </label>
+              <div className="qr-form-actions">
+                <button type="button" className="secondary" onClick={handleCancelEditQr}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary">
+                  {editingQrId === 'NEW' ? 'Add Quick Reply' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="qr-manager-body">
+              <div className="qr-items-list">
+                {quickReplies.length === 0 ? (
+                  <p className="qr-empty-notice">No quick replies yet. Click "+ Add Quick Reply" below or reset to defaults.</p>
+                ) : (
+                  quickReplies.map(qr => (
+                    <div key={qr.id || qr.label} className="qr-card-item">
+                      <div className="qr-card-content">
+                        <span className="qr-chip-preview">{qr.label}</span>
+                        <p className="qr-card-text">{qr.text}</p>
+                      </div>
+                      <div className="qr-card-actions">
+                        <button
+                          type="button"
+                          className="qr-btn-edit"
+                          onClick={() => handleStartEditQr(qr)}
+                          title="Edit this template"
+                        >
+                          ✏️ Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="qr-btn-delete"
+                          onClick={() => handleDeleteQr(qr.id || qr.label)}
+                          title="Delete this template"
+                          aria-label={`Delete ${qr.label}`}
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="qr-manager-footer">
+                <button type="button" className="text-button qr-reset-link" onClick={handleResetQuickReplies}>
+                  Reset to defaults
+                </button>
+                <button type="button" className="primary qr-create-btn" onClick={handleStartAddQr}>
+                  + Add Quick Reply
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
   </section>;
 }

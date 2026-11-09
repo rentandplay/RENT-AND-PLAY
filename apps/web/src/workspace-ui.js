@@ -1,3 +1,4 @@
+import { collectCsvRecords, serializeCsv, csvNumber, downloadCsv } from './csv-export.js';
 import { renderRentalTaskProgress } from './rental-desk.js';
 import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
@@ -18,7 +19,7 @@ import { createMaintenanceUI } from './maintenance.js';
 import { createFinanceUI } from './finance-ui.js';
 import { createReportPayments } from './report-payments.js';
 import { createRentalPlanning } from './rental-planning.js';
-import { manilaDateTimeInput, manilaDateTimeIso, formatPhilippineDateTime, formatExcelCsvCell } from './date-time.js';
+import { manilaDateTimeInput, manilaDateTimeIso, formatPhilippineDateTime } from './date-time.js';
 import { bindAccountValidation, nameError, emailError, passwordError, passwordMatchError, passwordHelp } from './account-validation.js';
 
 export function createWorkspaceUI(h) {
@@ -44,7 +45,8 @@ export function createWorkspaceUI(h) {
   let settingsTab = 'business', businessDraft = null, businessDirty = false, businessSaving = false, preferencesDraft = null, businessSubTab = 'profile';
   let activeSessions = null, securityAlerts = null, securityLoading = false, securityErrors = {}, securityAttempted = false, securityEpoch = 0;
   const analyticsSelection = { period: preferences.reportPeriod, from: '', to: '', categoryId: '', itemId: '', groupBy: preferences.reportGrouping };
-  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', forecastScenario: 'baseline', recommendationType: 'all', details: {} };
+  let demoHistoryBatch = '';
+  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', forecastScenario: 'baseline', forecastModel: 'auto', recommendationType: 'all', details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
   const status = value => `<span class="badge ${e(String(value || 'unknown').toLowerCase().replaceAll('_', '-').replaceAll(' ', '-'))}">${e(String(value || 'Unknown').replaceAll('_', ' '))}</span>`;
   const invalidate = () => { cancelPreload(); cacheVersion++; loadError = ''; financeUI.reset(); reportPayments.reset(); };
@@ -153,7 +155,8 @@ export function createWorkspaceUI(h) {
   };
   const workflow = createTransactionWorkflow({ ...h, model: () => model, refresh, applyResponse, redraw: () => redraw(), transactionDetails });
   const setRecordScope=async value=>{if(remoteStatus===value)return;remoteStatus=value;remote[searchPage]={cursor:'',previous:[]};await load(false).catch(()=>{});redraw();};
-  const customerUI = createCustomerUI({ ...h, model: () => model, refresh, transactionDetails, onRecordScope:setRecordScope });
+  const customerUI = createCustomerUI({ ...h, model: () => model, refresh, transactionDetails, onRecordScope:setRecordScope,
+    exportScope: () => Object.fromEntries(new URL(workspaceRequest(), 'https://local.invalid').searchParams) });
   const maintenanceUI = createMaintenanceUI({ ...h, model: () => model, refresh, redraw: () => redraw(), resetPage: () => { pages.Maintenance = 0; }, onRecordScope:setRecordScope, transactionDetails });
   const recordDetails = createRecordDetails({ ...h, model: () => model, transactionDetails, maintenanceDetails: maintenanceUI.details });
   const empty = (title, text) => `<div class="workspace-empty">${icon('box')}<h3>${e(title)}</h3><p>${e(text)}</p></div>`;
@@ -175,7 +178,8 @@ export function createWorkspaceUI(h) {
   const txIsReturned = row => row.status === 'COMPLETED' || Boolean(row.confirmed_return_at);
   const txIsLate = row => { const returnedAt = txDate(actualReturnTime(row)), dueAt = txDate(row.due_at); return Boolean(returnedAt && dueAt && returnedAt > dueAt); };
   const txPending = type => (model.verification || []).filter(request => request.status === "PENDING" && String(request.transaction_type || request.type || "").toUpperCase() === type);
-  const txSearch = row => [row.rental_code, row.legacy_rental_code, row.id, row.item_name, row.item_code, row.customer_name, row.status].join(" ").toLowerCase().includes(search.toLowerCase());
+  const txSearchValue = (row, query) => [row.rental_code, row.legacy_rental_code, row.id, row.item_name, row.item_code, row.customer_name, row.status].join(" ").toLowerCase().includes(query.toLowerCase());
+  const txSearch = row => txSearchValue(row, search);
   const txCode = row => recordCode(row);
   const txStatus = row => {
     if(row.delivery_status==='OUT_FOR_DELIVERY')return 'On the way · Lakewood';
@@ -192,10 +196,10 @@ export function createWorkspaceUI(h) {
   const txMetric = (label, value, note, glyph, tone = "blue") => `<article><div class="transaction-metric-label"><span>${e(label)}</span><i class="transaction-metric-icon ${e(tone)}">${icon(glyph)}</i></div><strong>${e(value)}</strong><small>${e(note)}</small></article>`;
   const txFilter = (page, label, count) => `<button type="button" class="transaction-filter ${txState[page].filter === label ? "selected" : ""}" data-transaction-filter="${e(label)}" aria-pressed="${txState[page].filter === label}">${e(label)}<span>${count}</span></button>`;
   const txDueCell = row => { if (["APPROVED","PENDING_ADMIN_APPROVAL"].includes(row.status)) return `<strong>${row.scheduled_start_at?e(formatDate(row.scheduled_start_at)):'Starts at handoff'}</strong><small>Hold until ${e(formatDate(row.handoff_expires_at || row.hold_expires_at))}</small>`; const due = txDate(row.due_at), now = new Date(), label = txStatus(row), active = row.status === "ACTIVE", received = txDate(row.received_at || row.returned_at || row.confirmed_return_at), overdue = active && due && due < now, dueToday = active && due && due >= now && txDay(due) === txDay(now), lateAtReceipt = row.status === "RETURN_PENDING_INSPECTION" && due && received && received > due; const hint = overdue ? `${row.latest_return_request_status === "PENDING_ADMIN_APPROVAL" ? "Return requested · " : ""}overdue by ${Math.max(1, Math.ceil((now - due) / 3600000))}h` : dueToday ? "Due today" : lateAtReceipt ? "Received late · timer stopped" : row.status === "RETURN_PENDING_INSPECTION" ? "Timer stopped at receipt" : label === "Pending verification" ? "Waiting at counter" : "Due date"; const tone = overdue || lateAtReceipt ? "transaction-alert-text" : dueToday ? "transaction-due-text" : ""; return `<strong>${e(formatDate(row.due_at))}</strong><small class="${tone}">${e(hint)}</small>`; };
-  const txCsvCell = formatExcelCsvCell;
-  const txHistoryMatches = (row, state) => {
-    const date = txDate(row.confirmed_rental_at || row.created_at), today = txDay(new Date());
-    if (!txSearch(row)) return false;
+  let exportingTransactions = false;
+  const txHistoryMatches = (row, state, { searchText = search, verification = model.verification || [], now = new Date() } = {}) => {
+    const date = txDate(row.confirmed_rental_at || row.created_at), today = txDay(now);
+    if (!txSearchValue(row, searchText)) return false;
     if (state.status === "Returned" && !txIsReturned(row)) return false;
     if (state.status === "Awaiting handover" && row.status !== "APPROVED") return false;
     if (state.status === "Inspection pending" && row.status !== "RETURN_PENDING_INSPECTION") return false;
@@ -203,12 +207,12 @@ export function createWorkspaceUI(h) {
     if (state.status === "Pending admin review" && row.status !== "PENDING_ADMIN_APPROVAL") return false;
     if (state.status === "Pending verification" && row.status !== "PENDING_VERIFICATION") return false;
     if (state.status === "Cancelled" && !/CANCEL/i.test(String(row.status || ""))) return false;
-    if (['Rejected', 'Expired'].includes(state.status) && !outcomeMatches(row, model.verification || [], state.status.toUpperCase())) return false;
+    if (['Rejected', 'Expired'].includes(state.status) && !outcomeMatches(row, verification, state.status.toUpperCase()) && !(row.verification_outcomes || []).includes(state.status.toUpperCase())) return false;
     if (state.period === "All time") return true;
     if (!date) return false;
     if (state.period === "This month") return txDay(date).slice(0, 7) === today.slice(0, 7);
     if (state.period === "This year") return txDay(date).slice(0, 4) === today.slice(0, 4);
-    return state.period !== "Last 30 days" || date >= new Date(Date.now() - 30 * 86400000);
+    return state.period !== "Last 30 days" || date >= new Date(now.getTime() - 30 * 86400000);
   };
 
   function transactionDetails(row) {
@@ -434,7 +438,7 @@ export function createWorkspaceUI(h) {
     const popularMarkup = mostRented.length ? `<ol class="equipment-leaderboard">${mostRented.map(({name,rentals:count,item_id}, index) => `<li ${recordAttrs('equipment', item_id, name)}><span class="equipment-rank ${index === 0 ? 'leading' : ''}">${index + 1}</span><div><strong>${e(name)}</strong><small>Across all physical units</small></div><span class="equipment-rank-count"><strong>${count}</strong><small>rental${count === 1 ? '' : 's'}</small></span></li>`).join('')}</ol>` : `<p class="history-insight-empty" role="status">${ranking ? 'No confirmed rentals in this ranking period.' : !loadError && modelVersion !== cacheVersion ? 'Loading complete ranking…' : 'Complete ranking is unavailable. Refresh to try again.'}</p>`;
     const rankingControls = `<label class="history-ranking-period">Ranking period<select id="history-ranking-period">${[['all','All time'],['30d','Last 30 days'],['90d','Last 90 days'],['365d','Last 365 days']].map(([value,label])=>`<option value="${value}" ${rankingPeriod===value?'selected':''}>${label}</option>`).join('')}</select></label>`;
     const rankingNote = ranking ? `<p class="history-ranking-note">${ranking.total_rentals} confirmed rental${ranking.total_rentals===1?'':'s'} across ${ranking.equipment_count} equipment type${ranking.equipment_count===1?'':'s'} · Top 5 · Ties sorted by name</p>` : '';
-    const view = paged(records, mode), action = `<button type="button" class="secondary" id="transaction-export" ${records.length ? '' : 'disabled'}>${icon("download")} Export filtered CSV</button>`;
+    const view = paged(records, mode), action = `<button type="button" class="secondary" id="transaction-export" title="Export all matching transactions across all pages" ${records.length || model.page_meta ? '' : 'disabled'}>${icon("download")} Export filtered CSV</button>`;
     const statuses = ["All statuses", "Active", "Pending admin review", "Awaiting handover", "Inspection pending", "Pending verification", "Returned", "Rejected", "Expired", "Cancelled"], periods = ["All time", "Last 30 days", "This month", "This year"];
     const statusSelect = `<label class="transaction-select"><span>Status</span><select id="transaction-status-filter" aria-label="Filter by status">${statuses.map(option => `<option ${historyState.status === option ? "selected" : ""}>${e(option)}</option>`).join("")}</select></label>`;
     const periodSelect = `<label class="transaction-select"><span>Date range</span><select id="transaction-period-filter" aria-label="Filter by date">${periods.map(option => `<option ${historyState.period === option ? "selected" : ""}>${e(option)}</option>`).join("")}</select></label>`;
@@ -507,6 +511,10 @@ export function createWorkspaceUI(h) {
   function maintenance() { return maintenanceUI.render(search, { paged, table, status, empty }); }
 
   function reports() {
+    if (model.demo_data?.active && demoHistoryBatch !== model.demo_data.batch_id) {
+      demoHistoryBatch = model.demo_data.batch_id;
+      Object.assign(analyticsSelection, { period:'90d', groupBy:'daily' });
+    }
     const isPerformance = !reportView.section || reportView.section === 'performance';
     return renderAnalyticsReport(model, analyticsSelection, reportView, {
       escape: e,
@@ -726,47 +734,61 @@ export function createWorkspaceUI(h) {
       equipment: id => h.showEquipmentDetails(id),
       rate: recordDetails.rate, maintenance: recordDetails.maintenance, user: recordDetails.user, audit: recordDetails.audit
     });
-    document.querySelector("#transaction-export")?.addEventListener("click", () => {
-      const state = txState["Transaction History"], records = model.transactions.filter(row => txHistoryMatches(row, state));
-      if (!records.length) { toast("There are no matching transactions to export."); return; }
-      const headings = ["Rental code", "Item", "Item code", "Customer", "Customer phone", "Customer email", "Fulfillment mode", "Delivery location", "Status", "Rental confirmed", "Due date", "Returned date", "Payment method", "Payment status", "Rental fee (PHP)", "Saved rate / package", "Billed minutes", "Overtime units", "Overtime rate (PHP)", "Overtime fee (PHP)", "Penalty (PHP)", "Penalty reason", "Amount paid (PHP)", "Balance due (PHP)", "Refund due (PHP)", "Final rental charges (PHP)", "Terminal", "Outcome / notes"];
-      const fulfillmentText = mode => mode === 'SHOP_HANDOVER' ? 'Shop Handover' : mode === 'RESORT_DELIVERY' ? 'Resort Delivery' : mode === 'WALK_IN' ? 'Counter Walk-In' : (mode || '').replaceAll('_', ' ');
-      const numVal = val => typeof val === 'number' && Number.isFinite(val) ? val : (val != null && val !== '' && Number.isFinite(Number(val)) ? Number(val) : '');
-      const csv = "\uFEFF" + [headings, ...records.map(row => {
-        const sc = savedCharges(row);
-        return [
-          txCode(row),
-          row.item_name || "Unknown equipment",
-          row.item_code || "",
-          row.customer_name || "Unknown customer",
-          row.customer_phone || row.phone || "",
-          row.customer_email || row.email || "",
-          fulfillmentText(row.fulfillment_mode),
-          row.delivery_location || (row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Counter Handover' : ''),
-          txStatus(row),
-          formatPhilippineDateTime(row.confirmed_rental_at),
-          formatPhilippineDateTime(row.due_at),
-          formatPhilippineDateTime(actualReturnTime(row)),
-          row.payment_method ? String(row.payment_method).toUpperCase() : (row.request_source === 'WALK_IN' ? 'CASH' : ''),
-          row.payment_status ? String(row.payment_status).replaceAll('_', ' ') : '',
-          numVal(row.rental_fee),
-          sc.rate_label || "",
-          numVal(sc.billed_minutes),
-          numVal(sc.overtime_units),
-          numVal(sc.overtime_rate),
-          numVal(sc.overtime_fee),
-          numVal(sc.penalty_amount),
-          sc.penalty_reason || "",
-          numVal(row.rental_paid_amount),
-          numVal(row.balance_due),
-          typeof row.refund_due === 'number' && row.refund_due > 0 ? row.refund_due : '',
-          numVal(sc.final_rental_charges),
-          row.terminal_code || row.terminal_name || "",
-          row.final_reason || row.latest_return_request_reason || ""
-        ];
-      })].map(line => line.map(txCsvCell).join(",")).join("\r\n");
-      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })), link = document.createElement("a");
-      link.href = url; link.download = "rent-and-play-transactions.csv"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast("Filtered transaction history exported.");
+    document.querySelector("#transaction-export")?.addEventListener("click", async event => {
+      if (exportingTransactions) return;
+      exportingTransactions = true;
+      const button = event.currentTarget, label = button.innerHTML;
+      const state = { ...txState['Transaction History'] }, searchText = search, now = new Date();
+      const scope = Object.fromEntries(new URL(workspaceRequest(), 'https://local.invalid').searchParams);
+      scope.includeVerification = 'true';
+      button.disabled = true;
+      try {
+        const all = await collectCsvRecords(api, 'rentals', scope, count => { button.textContent = `Loading ${count} transactions…`; });
+        const records = all.filter(row => txHistoryMatches(row, state, { searchText, verification: [], now }))
+          .sort((a, b) => (txDate(b.confirmed_rental_at || b.created_at)?.getTime() || 0) - (txDate(a.confirmed_rental_at || a.created_at)?.getTime() || 0));
+        if (!records.length) { toast("There are no matching transactions to export."); return; }
+        const headings = ["Rental code", "Item", "Item code", "Customer", "Customer phone", "Customer email", "Fulfillment mode", "Delivery location", "Status", "Request created (Asia/Manila)", "Rental confirmed (Asia/Manila)", "Due date (Asia/Manila)", "Physically received (Asia/Manila)", "Return inspection completed (Asia/Manila)", "Payment method", "Payment status", "Rental fee (PHP)", "Saved rate / package", "Billed minutes", "Overtime units", "Overtime rate (PHP)", "Overtime fee (PHP)", "Penalty (PHP)", "Penalty reason", "Amount paid (PHP)", "Balance due (PHP)", "Refund due (PHP)", "Final rental charges (PHP)", "Terminal", "Verification attempt outcomes", "Outcome / notes"];
+        const fulfillmentText = mode => mode === 'SHOP_HANDOVER' ? 'Shop Handover' : ['RESORT_DELIVERY', 'DELIVERY'].includes(mode) ? 'Resort Delivery' : mode === 'WALK_IN' ? 'Counter Walk-In' : (mode || '').replaceAll('_', ' ');
+        const numVal = csvNumber;
+        const csv = serializeCsv([headings, ...records.map(row => {
+          const sc = savedCharges(row);
+          return [
+            txCode(row),
+            row.item_name || "Unknown equipment",
+            row.item_code || "",
+            row.customer_name || "Unknown customer",
+            row.customer_phone || row.phone || "",
+            row.customer_email || row.email || "",
+            fulfillmentText(row.fulfillment_mode),
+            row.delivery_location || (row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Counter Handover' : ''),
+            txStatus(row),
+            formatPhilippineDateTime(row.created_at),
+            formatPhilippineDateTime(row.confirmed_rental_at),
+            formatPhilippineDateTime(row.due_at),
+            formatPhilippineDateTime(actualReturnTime(row)),
+            formatPhilippineDateTime(row.confirmed_return_at),
+            row.payment_method ? String(row.payment_method).toUpperCase() : (row.request_source === 'WALK_IN' ? 'CASH' : ''),
+            row.payment_status ? String(row.payment_status).replaceAll('_', ' ') : '',
+            numVal(row.rental_fee),
+            sc.rate_label || "",
+            numVal(sc.billed_minutes),
+            numVal(sc.overtime_units),
+            numVal(sc.overtime_rate),
+            numVal(sc.overtime_fee),
+            numVal(sc.penalty_amount),
+            sc.penalty_reason || "",
+            numVal(row.rental_paid_amount),
+            numVal(row.balance_due),
+            numVal(row.refund_due),
+            numVal(sc.final_rental_charges),
+            (row.terminal_code || row.terminal_name || ""),
+            (row.verification_outcomes || []).join(" / "),
+            row.final_reason || row.latest_return_request_reason || ""
+          ];
+        })]);
+        downloadCsv(csv, 'transactions'); toast(`${records.length} matching transactions exported across all pages.`);
+      } catch (error) { toast(`Export failed. ${error.message}`); }
+      finally { exportingTransactions = false; button.disabled = false; button.innerHTML = label; }
     });
     document.querySelectorAll('[data-settings-tab]').forEach(button => {
       button.onclick = () => switchSettingsTab(button.dataset.settingsTab);
@@ -1051,6 +1073,7 @@ export function createWorkspaceUI(h) {
     document.querySelector('#analytics-reset')?.addEventListener('click', () => { Object.assign(analyticsSelection, { period: preferences.reportPeriod, groupBy: preferences.reportGrouping, from: '', to: '', categoryId: '', itemId: '' }); updateAnalytics(); });
     document.querySelectorAll('[data-analytics-metric]').forEach(button => { button.onclick = () => { const chart = button.dataset.analyticsChart; reportView[chart === 'forecast' ? 'forecastMetric' : 'performanceMetric'] = button.dataset.analyticsMetric; rerender(); document.querySelector(`[data-analytics-chart="${chart}"][data-analytics-metric="${button.dataset.analyticsMetric}"]`)?.focus(); }; });
     document.querySelectorAll('[data-forecast-scenario]').forEach(button => { button.onclick = () => { reportView.forecastScenario = button.dataset.forecastScenario; rerender(); document.querySelector(`[data-forecast-scenario="${reportView.forecastScenario}"]`)?.focus(); }; });
+    document.querySelectorAll('[data-forecast-model]').forEach(button => { button.onclick = () => { reportView.forecastModel = button.dataset.forecastModel; rerender(); document.querySelector(`[data-forecast-model="${reportView.forecastModel}"]`)?.focus(); }; });
     document.querySelectorAll('[data-recommendation-type]').forEach(button => { button.onclick = () => { reportView.recommendationType = button.dataset.recommendationType; rerender(); document.querySelectorAll('[data-recommendation-type]').forEach(next => { if (next.dataset.recommendationType === reportView.recommendationType) next.focus(); }); }; });
     document.querySelectorAll('[data-analytics-history]').forEach(button => { button.onclick = () => { analyticsSelection.period = '90d'; analyticsSelection.groupBy = button.dataset.analyticsHistory; updateAnalytics(); }; });
     document.querySelectorAll('[data-analytics-go-page]').forEach(button => { button.onclick = () => h.navigate?.(button.dataset.analyticsGoPage); });
@@ -1058,9 +1081,11 @@ export function createWorkspaceUI(h) {
     document.querySelectorAll('[data-analytics-detail]').forEach(detail => detail.addEventListener('toggle', () => { if (detail.isConnected) reportView.details[detail.dataset.analyticsDetail] = detail.open; }));
     document.querySelector('#report-export')?.addEventListener('click', () => {
       const result = calculateDetailedAnalytics(model, analyticsSelection); if (result.error) { toast(result.error); return; }
-      result.forecast.points = forecastScenario(result.forecast, reportView.forecastScenario); result.forecast.scenario = reportView.forecastScenario;
-      const csv = analyticsCsv(result, model, analyticsSelection), url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), link = document.createElement('a');
-      link.href = url; link.download = 'rent-and-play-analytics-' + result.range.from + '-to-' + result.range.to + '.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast('Complete filtered analytics exported.');
+      result.forecast.points = forecastScenario(result.forecast, reportView.forecastScenario, reportView.forecastModel); result.forecast.scenario = reportView.forecastScenario; result.forecast.selectedModel = reportView.forecastModel;
+      const selectedModel = reportView.forecastModel === 'auto' ? (result.forecast.benchmark.recommended || result.forecast.benchmark.models.find(row => row.id === 'seasonal')) : result.forecast.benchmark.models.find(row => row.id === reportView.forecastModel);
+      if (selectedModel) { result.forecast.selectedModel = selectedModel.id; result.forecast.method = selectedModel.description; }
+      const csv = analyticsCsv(result, model, analyticsSelection);
+      downloadCsv(csv, 'analytics-' + result.range.from + '-to-' + result.range.to); toast('Complete filtered analytics exported.');
     });
   }
   async function openTransaction(id, meta = {}) {

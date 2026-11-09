@@ -44,7 +44,7 @@ const roundMoney=value=>Math.round(Number(value||0)*100)/100;
 export async function loadDashboard(db,now=new Date()) {
   const today=dateKey(now);
   const names=['items','item_categories','item_rates','customers','rentals','verification_requests','terminals'];
-  const [todayFinancialDoc,...snapshots]=await Promise.all([db.collection('financial_daily').doc(today).get(),...names.map(name=>name==='customers'?Promise.resolve({docs:[]}):name==='rentals'?db.collection(name).where('status','in',OPEN_RENTALS).get():db.collection(name).get())]);
+  const [todayFinancialDoc,demoDoc,...snapshots]=await Promise.all([db.collection('financial_daily').doc(today).get(),db.collection('report_summary_state').doc('presentation_demo').get(),...names.map(name=>name==='customers'?Promise.resolve({docs:[]}):name==='rentals'?db.collection(name).where('status','in',OPEN_RENTALS).get():db.collection(name).get())]);
   const source=Object.fromEntries(names.map((name,index)=>[name,rows(snapshots[index])]));
   source.customers=(await Promise.all([...new Set(source.rentals.map(rental=>rental.customer_id).filter(Boolean))].map(id=>db.collection('customers').doc(String(id)).get()))).filter(doc=>doc.exists).map(docData);
   const daily=await rentalDailySummary(db,dateKey(new Date(now.getTime()-14*86400000)),dateKey(now));
@@ -100,7 +100,12 @@ export async function loadDashboard(db,now=new Date()) {
   };
   return {
     items:items.map(serialize),customers:source.customers.filter(c=>c.is_active!==false).sort((a,b)=>a.full_name.localeCompare(b.full_name)).map(serialize),categories,
+    demo_data:demoDoc.exists ? serialize(demoDoc.data()) : null,
     rentals:rentals.map(serialize),pending:pending.map(serialize),terminals:terminals.map(serialize),revenue,collections,
+    analyticsHistory: {
+      coverageStart: [...source.items.map(item=>databaseDate(item.created_at)).filter(date=>date&&Number.isFinite(date.getTime())).map(dateKey), ...daily.daily.map(row=>row.business_day)].filter(Boolean).sort()[0] || null,
+      daily: daily.daily.map(row=>({ date:row.business_day, fees:Number(row.fees||0), rentals:Number(row.rentals||0) }))
+    },
     stats:{active:active.length,available:items.filter(item=>item.status==='AVAILABLE'&&!reserved.has(item.id)).length,dueToday:active.filter(r=>rentalStatus(r,now)==='Due today').length,overdue:rentals.filter(r=>r.displayStatus==='Overdue').length,fees:active.reduce((total,r)=>total+Number(r.rental_fee||0),0)},
     refreshedAt:now.toISOString()
   };

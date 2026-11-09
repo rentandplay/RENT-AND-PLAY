@@ -5,6 +5,37 @@ const sum = (rows, key) => rows.reduce((total, row) => total + Number(row[key] |
 const shift = (key, days) => new Date(Date.parse(key + 'T00:00:00Z') + days * DAY).toISOString().slice(0, 10);
 const mean = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 
+export const FORECAST_MODEL_CATALOG = Object.freeze([
+  {
+    id: 'seasonal',
+    name: 'Seasonal Baseline (Weekday / Period SMA)',
+    shortName: 'Seasonal SMA',
+    formula: 'Ŷ_t = (1/k) Σ Y_{t−i·s}',
+    description: 'Averages matching weekdays (daily) or recent complete intervals to capture recurring weekend and weekday demand patterns.'
+  },
+  {
+    id: 'ses',
+    name: 'Simple Exponential Smoothing (SES)',
+    shortName: 'SES (Exponential)',
+    formula: 'Ŷ_{t+1} = αY_t + (1−α)Ŷ_t (α = 0.35)',
+    description: 'Uses alpha 0.35, initialized at the first training observation. Recent activity has more weight; all future periods share the final smoothed level.'
+  },
+  {
+    id: 'wma',
+    name: 'Weighted Moving Average (WMA)',
+    shortName: 'WMA (Weighted)',
+    formula: 'Ŷ_{t+1} = (Σ w_i Y_i) / (Σ w_i)',
+    description: 'Uses the last 7 daily periods (6 for weekly/monthly), weighted 1 to n from oldest to newest. Multi-step forecasts hold this weighted level constant.'
+  },
+  {
+    id: 'linear',
+    name: 'Linear Trend Regression (OLS)',
+    shortName: 'Linear Regression',
+    formula: 'Ŷ_t = max(0, a + b·t)',
+    description: 'Fits an ordinary least-squares trend line across the training window to measure overall demand growth or contraction.'
+  }
+]);
+
 export function analyticsEquipmentOptions(items = []) {
   const groups = new Map();
   for (const item of items) {
@@ -58,6 +89,71 @@ function comparisonFor(data, selection, current, now) {
     fees: change('fees'), rentals: change('rentals'), averageFee: change('averageFee'), utilization: change('utilization'), repeatCustomerRate: change('repeatCustomerRate') };
 }
 
+function olsFit(values) {
+  const n = values.length;
+  if (!n) return { intercept: 0, slope: 0, predict: () => 0 };
+  if (n === 1) return { intercept: values[0], slope: 0, predict: () => Math.max(0, values[0]) };
+  const xMean = (n - 1) / 2, yMean = mean(values) ?? 0;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (i - xMean) * (values[i] - yMean);
+    den += (i - xMean) ** 2;
+  }
+  const slope = den > 0 ? num / den : 0;
+  const intercept = yMean - slope * xMean;
+  return { intercept, slope, predict: stepIndex => Math.max(0, intercept + slope * stepIndex) };
+}
+
+function sesPredict(values, alpha = 0.35) {
+  if (!values.length) return 0;
+  let level = Number(values[0] || 0);
+  for (let i = 1; i < values.length; i++) {
+    level = alpha * Number(values[i] || 0) + (1 - alpha) * level;
+  }
+  return Math.max(0, level);
+}
+
+function wmaPredict(values) {
+  if (!values.length) return 0;
+  let weightedSum = 0, weightTotal = 0;
+  for (let i = 0; i < values.length; i++) {
+    const w = i + 1;
+    weightedSum += w * Number(values[i] || 0);
+    weightTotal += w;
+  }
+  return weightTotal > 0 ? Math.max(0, weightedSum / weightTotal) : 0;
+}
+
+function predictByModel(modelId, window, groupBy, targetFrom, stepOffset = 0, metric = 'rentals') {
+  const allValues = window.map(row => Number(row[metric] || 0));
+  const weekdaySamples = groupBy === 'daily' && targetFrom
+    ? window.filter(row => new Date(row.from + 'T00:00:00Z').getUTCDay() === new Date(targetFrom + 'T00:00:00Z').getUTCDay()).slice(-4)
+    : window;
+  const sampleValues = (weekdaySamples.length ? weekdaySamples : window).map(row => Number(row[metric] || 0));
+
+  if (modelId === 'seasonal') {
+    return mean(sampleValues) ?? 0;
+  }
+  if (modelId === 'ses') {
+    return sesPredict(allValues, 0.35);
+  }
+  if (modelId === 'wma') {
+    return wmaPredict(allValues.slice(groupBy === 'daily' ? -7 : -6));
+  }
+  if (modelId === 'linear') {
+    const fit = olsFit(allValues);
+    const lastFrom = window.at(-1)?.from;
+    let steps = stepOffset + 1;
+    if (lastFrom && targetFrom) {
+      steps = groupBy === 'monthly'
+        ? (Number(targetFrom.slice(0, 4)) - Number(lastFrom.slice(0, 4))) * 12 + Number(targetFrom.slice(5, 7)) - Number(lastFrom.slice(5, 7))
+        : (Date.parse(targetFrom) - Date.parse(lastFrom)) / DAY / (groupBy === 'weekly' ? 7 : 1);
+    }
+    return fit.predict(allValues.length - 1 + steps);
+  }
+  return mean(sampleValues) ?? 0;
+}
+
 function backtest(trend, groupBy, today, coverageStart) {
   const completed = trend.filter(row => (!coverageStart || row.from >= coverageStart) && row.to < today && (groupBy === 'daily' || groupBy === 'weekly' && new Date(row.from + 'T00:00:00Z').getUTCDay() === 1 && (Date.parse(row.to) - Date.parse(row.from)) / DAY === 6 || groupBy === 'monthly' && row.from.endsWith('-01') && new Date(Date.parse(row.to) + DAY).getUTCDate() === 1));
   const training = groupBy === 'daily' ? 28 : groupBy === 'weekly' ? 8 : 6, holdout = groupBy === 'daily' ? 7 : 2;
@@ -65,13 +161,137 @@ function backtest(trend, groupBy, today, coverageStart) {
   const windows = completed.slice(-holdout).map((actual, index) => {
     const at = completed.length - holdout + index, window = completed.slice(Math.max(0, at - training), at);
     const samples = groupBy === 'daily' ? window.filter(row => new Date(row.from + 'T00:00:00Z').getUTCDay() === new Date(actual.from + 'T00:00:00Z').getUTCDay()) : window;
-    return { actual, samples, trainingRentals: sum(window, 'rentals') };
+    return { actual, samples, window, trainingRentals: sum(window, 'rentals') };
   });
   if (windows.some(row => row.trainingRentals < 4)) return { available: false, required: training + holdout, found: completed.length, reason: 'There is not enough confirmed rental activity in the earlier training windows to evaluate the forecast. Each requires at least 4 confirmed rentals.' };
-  const rows = windows.map(({ actual, samples }) => ({ label: actual.label, actualRentals: actual.rentals, estimatedRentals: mean(samples.map(row => row.rentals)), actualFees: actual.fees, estimatedFees: mean(samples.map(row => row.fees)) }));
+  const rows = windows.map(({ actual, samples }) => ({ label: actual.label, from: actual.from, actualRentals: actual.rentals, estimatedRentals: mean(samples.map(row => row.rentals)), actualFees: actual.fees, estimatedFees: mean(samples.map(row => row.fees)) }));
   const rentals = rows.map(row => Math.abs(row.actualRentals - row.estimatedRentals)), fees = rows.map(row => Math.abs(row.actualFees - row.estimatedFees));
-  return { available: true, rows, periods: holdout, rentalError: mean(rentals), feeError: mean(fees),
+  return { available: true, rows, windows, periods: holdout, rentalError: mean(rentals), feeError: mean(fees),
     rentalErrorRate: sum(rows, 'actualRentals') > 0 ? rentals.reduce((a, b) => a + b, 0) / sum(rows, 'actualRentals') : null };
+}
+
+function benchmarkForecastModels(baseForecast, backtestResult) {
+  const historyWindow = baseForecast.history || [];
+  const rentalTrendFit = olsFit(historyWindow.map(row => Number(row.rentals || 0)));
+  const feeTrendFit = olsFit(historyWindow.map(row => Number(row.fees || 0)));
+  const completeness = baseForecast.requiredPeriods > 0 ? Math.min(1, baseForecast.completedPeriods / baseForecast.requiredPeriods) : 0;
+
+  const buildModelFuturePoints = modelId => {
+    if (!baseForecast.available) return [];
+    if (modelId === 'seasonal') return baseForecast.points;
+    return baseForecast.points.map((pt, idx) => {
+      const estRentals = predictByModel(modelId, historyWindow, baseForecast.groupBy, pt.from, idx, 'rentals');
+      const estFees = predictByModel(modelId, historyWindow, baseForecast.groupBy, pt.from, idx, 'fees');
+      return {
+        ...pt,
+        rentals: estRentals,
+        fees: estFees,
+        // The seasonal sample spread is not an uncertainty interval for other models.
+        rentalSpread: null,
+        feeSpread: null,
+        samplePeriods: historyWindow.length
+      };
+    });
+  };
+
+  if (!backtestResult.available) {
+    const models = FORECAST_MODEL_CATALOG.map(meta => ({
+      ...meta,
+      rank: null,
+      isBestFit: false,
+      maeRentals: null,
+      rmseRentals: null,
+      smapeRentals: null,
+      errorRateRentals: null,
+      accuracyRentals: null,
+      maeFees: null,
+      rmseFees: null,
+      errorRateFees: null,
+      accuracyFees: null,
+      validationRentals: [],
+      validationFees: [],
+      points: buildModelFuturePoints(meta.id)
+    }));
+    return {
+      available: false,
+      models,
+      recommended: null,
+      growthSlopeRentals: baseForecast.available ? rentalTrendFit.slope : null,
+      growthSlopeFees: baseForecast.available ? feeTrendFit.slope : null,
+      confidenceRating: 'Not validated',
+      completeness,
+      holdoutLabels: [],
+      holdoutActualRentals: [],
+      holdoutActualFees: []
+    };
+  }
+
+  const windows = backtestResult.windows || [];
+  const totalActualRentals = windows.reduce((acc, w) => acc + Number(w.actual.rentals || 0), 0);
+  const totalActualFees = windows.reduce((acc, w) => acc + Number(w.actual.fees || 0), 0);
+
+  const evaluated = FORECAST_MODEL_CATALOG.map(meta => {
+    const validationRentals = windows.map(w => predictByModel(meta.id, w.window, baseForecast.groupBy, w.actual.from, 0, 'rentals'));
+    const validationFees = windows.map(w => predictByModel(meta.id, w.window, baseForecast.groupBy, w.actual.from, 0, 'fees'));
+    const absRentalErrors = windows.map((w, i) => Math.abs(w.actual.rentals - validationRentals[i]));
+    const sqRentalErrors = windows.map((w, i) => (w.actual.rentals - validationRentals[i]) ** 2);
+    const smapeRentalTerms = windows.map((w, i) => {
+      const denom = (Math.abs(w.actual.rentals) + Math.abs(validationRentals[i])) / 2;
+      return denom > 0 ? Math.abs(w.actual.rentals - validationRentals[i]) / denom : 0;
+    });
+    const absFeeErrors = windows.map((w, i) => Math.abs(w.actual.fees - validationFees[i]));
+    const sqFeeErrors = windows.map((w, i) => (w.actual.fees - validationFees[i]) ** 2);
+
+    const maeRentals = mean(absRentalErrors);
+    const rmseRentals = Math.sqrt(mean(sqRentalErrors) ?? 0);
+    const smapeRentals = mean(smapeRentalTerms);
+    const errorRateRentals = totalActualRentals > 0 ? absRentalErrors.reduce((a, b) => a + b, 0) / totalActualRentals : null;
+    const accuracyRentals = errorRateRentals !== null ? Math.max(0, Math.min(1, 1 - errorRateRentals)) : null;
+
+    const maeFees = mean(absFeeErrors);
+    const rmseFees = Math.sqrt(mean(sqFeeErrors) ?? 0);
+    const errorRateFees = totalActualFees > 0 ? absFeeErrors.reduce((a, b) => a + b, 0) / totalActualFees : null;
+    const accuracyFees = errorRateFees !== null ? Math.max(0, Math.min(1, 1 - errorRateFees)) : null;
+
+    return {
+      ...meta,
+      maeRentals,
+      rmseRentals,
+      smapeRentals,
+      errorRateRentals,
+      accuracyRentals,
+      maeFees,
+      rmseFees,
+      errorRateFees,
+      accuracyFees,
+      validationRentals,
+      validationFees,
+      points: buildModelFuturePoints(meta.id)
+    };
+  });
+
+  const ranked = [...evaluated].sort((a, b) => (a.rmseRentals ?? Infinity) - (b.rmseRentals ?? Infinity) || (a.maeRentals ?? Infinity) - (b.maeRentals ?? Infinity));
+  ranked.forEach((m, index) => {
+    m.rank = index + 1;
+    m.isBestFit = index === 0;
+  });
+
+  const recommended = ranked[0];
+  // A short retrospective error score does not measure statistical confidence.
+  const confidenceRating = 'Limited historical validation';
+
+  return {
+    available: true,
+    models: ranked,
+    recommended,
+    growthSlopeRentals: rentalTrendFit.slope,
+    growthSlopeFees: feeTrendFit.slope,
+    confidenceRating,
+    completeness,
+    holdoutLabels: windows.map(w => w.actual.label),
+    holdoutActualRentals: windows.map(w => w.actual.rentals),
+    holdoutActualFees: windows.map(w => w.actual.fees)
+  };
 }
 
 function recommendationsFor(result, groups, comparison) {
@@ -113,7 +333,7 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   const peakWeekday = [...weekdays].sort((a, b) => b.rentals - a.rentals)[0];
   const peakHour = [...hours].sort((a, b) => b.rentals - a.rentals)[0];
   const fleetUnits = Object.entries(result.equipmentStatus).filter(([status]) => status !== 'Archived').reduce((total, [, count]) => total + count, 0);
-  const topEquipment = groups.filter(row => row.rentals > 0).slice(0, 5), idleEquipment = groups.filter(row => row.known && row.active && row.rentals === 0);
+  const topEquipment = groups.filter(row => row.rentals > 0).slice(0, 5), idleEquipment = groups.filter(row=> row.known && row.active && row.rentals === 0);
   const history = result.forecast.history, first = history[0]?.from, last = history.at(-1)?.to, mix = new Map();
   const itemMap = new Map((data.items || []).map(item => [String(item.id), item]));
   for (const row of result.confirmed) {
@@ -122,13 +342,30 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   }
   const mixTotal = [...mix.values()].reduce((a, b) => a + b, 0), expectedRentals = sum(result.forecast.points, 'rentals');
   const demandMix = groups.filter(row => mix.has(row.stockGroupId)).map(row => ({ ...row, historyRentals: mix.get(row.stockGroupId), share: mixTotal ? mix.get(row.stockGroupId) / mixTotal : 0, expectedRentals: mixTotal ? expectedRentals * mix.get(row.stockGroupId) / mixTotal : 0 })).sort((a, b) => b.expectedRentals - a.expectedRentals);
+  const bt = backtest(result.trend, result.groupBy, manilaDateKey(now), result.forecast.coverageStart);
+  const benchmark = benchmarkForecastModels(result.forecast, bt);
   return { ...result, comparison, groups, weekdays, peakWeekday, hours, peakHour, fleetUnits, topEquipment, idleEquipment, demandMix,
-    forecast: { ...result.forecast, backtest: backtest(result.trend, result.groupBy, manilaDateKey(now), result.forecast.coverageStart), retrospective: result.range.to < manilaDateKey(now) },
+    forecast: { ...result.forecast, backtest: bt, benchmark, retrospective: result.range.to < manilaDateKey(now) },
     recommendations: recommendationsFor(result, groups, comparison) };
 }
 
-export function forecastScenario(forecast, scenario = 'baseline') {
+export function forecastScenario(forecast, scenario = 'baseline', modelId = '') {
   const factor = ({ lower: .8, baseline: 1, higher: 1.2 })[scenario] || 1;
-  return forecast.points.map(row => ({ ...row, rentals: row.rentals * factor, fees: row.fees * factor,
-    rentalSpread: { low: row.rentalSpread.low * factor, high: row.rentalSpread.high * factor }, feeSpread: { low: row.feeSpread.low * factor, high: row.feeSpread.high * factor } }));
+  let sourcePoints = forecast.points;
+  if (modelId && modelId !== 'seasonal' && modelId !== 'baseline' && forecast.benchmark) {
+    if (modelId === 'auto' && forecast.benchmark.recommended?.points?.length) {
+      sourcePoints = forecast.benchmark.recommended.points;
+    } else {
+      const matched = forecast.benchmark.models?.find(m => m.id === modelId);
+      if (matched?.points?.length) sourcePoints = matched.points;
+    }
+  }
+  return sourcePoints.map(row => ({ ...row, rentals: row.rentals * factor, fees: row.fees * factor,
+    rentalSpread: row.rentalSpread ? { ...row.rentalSpread, low: row.rentalSpread.low * factor, high: row.rentalSpread.high * factor } : null,
+    feeSpread: row.feeSpread ? { ...row.feeSpread, low: row.feeSpread.low * factor, high: row.feeSpread.high * factor } : null }));
+}
+
+export function forecastEquipmentMix(mix, points) {
+  const total = sum(points, 'rentals');
+  return mix.map(row => ({ ...row, expectedRentals: total * row.share }));
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateDetailedAnalytics, analyticsEquipmentOptions, groupEquipmentPerformance, forecastScenario } from '../src/analytics-insights.js';
+import { calculateDetailedAnalytics, analyticsEquipmentOptions, groupEquipmentPerformance, forecastScenario, forecastEquipmentMix } from '../src/analytics-insights.js';
 import { analyticsCsv } from '../src/analytics.js';
 
 const now = new Date('2026-10-13T03:00:00Z');
@@ -140,4 +140,95 @@ test('CSV includes matched comparisons, grouped unit codes, scenarios and recomm
   const csv = analyticsCsv(result, stock, {});
   for (const value of ['PREVIOUS MATCHED PERIOD', 'Training periods used', 'higher', 'Rental spread low', 'Trigger rule', 'EQUIP-001 / EQUIP-002 / EQUIP-003']) assert.ok(csv.includes(value), value);
   assert.ok(!csv.includes('NaN'));
+});
+
+test('CSV identifies synthetic rentals in the selected report', () => {
+  const data=history(40);data.transactions[0].is_demo=true;
+  const result=calculateDetailedAnalytics(data,{period:'90d',groupBy:'daily'},now);
+  const csv=analyticsCsv(result,data,{});
+  assert.ok(csv.includes('PRESENTATION DEMO'));
+  assert.ok(csv.includes('Synthetic rentals in this selection'));
+});
+
+
+test('multi-model forecast benchmarking ranks 4 time-series algorithms and supports model switching', () => {
+  const result = calculateDetailedAnalytics(history(), { period: '90d', groupBy: 'daily' }, now);
+  const bm = result.forecast.benchmark;
+  assert.ok(bm.available);
+  assert.equal(bm.models.length, 4);
+  assert.deepEqual(bm.models.map(m => m.rank), [1, 2, 3, 4]);
+  assert.equal(bm.models.filter(m => m.isBestFit).length, 1);
+  assert.equal(bm.recommended.id, bm.models[0].id);
+  for (const model of bm.models) {
+    assert.ok(Number.isFinite(model.maeRentals));
+    assert.ok(Number.isFinite(model.rmseRentals));
+    assert.ok(Number.isFinite(model.smapeRentals));
+    assert.ok(Number.isFinite(model.accuracyRentals));
+    assert.equal(model.validationRentals.length, 7);
+    const pts = forecastScenario(result.forecast, 'baseline', model.id);
+    assert.equal(pts.length, result.forecast.horizon);
+    assert.ok(pts.every(pt => Number.isFinite(pt.rentals) && Number.isFinite(pt.fees)));
+  }
+});
+
+test('unvalidated models have no performance rank, winner or recommendation', () => {
+  const result = calculateDetailedAnalytics(history(29), { period: '30d', groupBy: 'daily' }, now);
+  assert.ok(result.forecast.available);
+  const bm = result.forecast.benchmark;
+  assert.equal(bm.available, false);
+  assert.equal(bm.recommended, null);
+  assert.ok(bm.models.every(m => m.rank === null && !m.isBestFit && m.maeRentals === null));
+});
+
+test('SES, WMA and OLS match their displayed formulas without hidden seasonal blending', () => {
+  const transactions = Array.from({ length: 4 }, (_, i) => rental(`impulse-${i}`, 'bike', '2026-10-12 10:00:00', 100));
+  const f = calculateDetailedAnalytics({ ...stock, transactions }, { period: '30d', groupBy: 'daily' }, now).forecast;
+  assert.ok(f.available);
+  const ses = forecastScenario(f, 'baseline', 'ses'), wma = forecastScenario(f, 'baseline', 'wma'), linear = forecastScenario(f, 'baseline', 'linear');
+  assert.ok(ses.every(p => Math.abs(p.rentals - 1.4) < 1e-10));
+  assert.ok(wma.every(p => Math.abs(p.rentals - 1) < 1e-10));
+  // Oct 13 is partial/excluded; the first target Oct 14 is two steps after Oct 12.
+  assert.equal(linear[0].from, '2026-10-14');
+  assert.ok(Math.abs(linear[0].rentals - (4 / 7 + 54 / 1827)) < 1e-10);
+  assert.ok(linear.at(-1).rentals > linear[0].rentals);
+  assert.equal(ses[0].rentalSpread, null);
+  assert.equal(wma[0].feeSpread, null);
+  for (const model of ['seasonal', 'ses', 'wma', 'linear', 'auto']) {
+    const points = forecastScenario(f, 'higher', model);
+    const mix = forecastEquipmentMix([{ share: .2 }, { share: .8 }], points);
+    assert.ok(Math.abs(mix.reduce((sum, row) => sum + row.expectedRentals, 0) - points.reduce((sum, row) => sum + row.rentals, 0)) < 1e-10);
+  }
+});
+
+test('walk-forward predictions never learn from the held-out observation or later records', () => {
+  const original = history(), altered = structuredClone(original);
+  altered.transactions.push(...Array.from({ length: 20 }, (_, i) => rental(`last-${i}`, 'bike', '2026-10-12 12:00:00', 9999)));
+  const before = calculateDetailedAnalytics(original, { period: '90d', groupBy: 'daily' }, now).forecast.benchmark;
+  const after = calculateDetailedAnalytics(altered, { period: '90d', groupBy: 'daily' }, now).forecast.benchmark;
+  for (const m of before.models) {
+    const next = after.models.find(row => row.id === m.id);
+    assert.deepEqual(next.validationRentals, m.validationRentals);
+    assert.deepEqual(next.validationFees, m.validationFees);
+  }
+  const seasonal = before.models.find(m => m.id === 'seasonal');
+  assert.equal(seasonal.maeRentals, 0);
+  assert.equal(seasonal.rmseRentals, 0);
+  assert.equal(seasonal.smapeRentals, 0);
+  assert.equal(seasonal.accuracyRentals, 1);
+});
+
+test('zero held-out totals leave WAPE fit score undefined and nonzero errors remain measurable', () => {
+  const transactions = Array.from({ length: 4 }, (_, i) => rental(`old-${i}`, 'bike', '2026-10-01 10:00:00', 100));
+  const bm = calculateDetailedAnalytics({ ...stock, transactions }, { period:'90d', groupBy:'daily' }, now).forecast.benchmark;
+  assert.ok(bm.available);
+  const ses = bm.models.find(m => m.id === 'ses');
+  assert.equal(ses.accuracyRentals, null);
+  assert.equal(ses.errorRateRentals, null);
+  assert.ok(ses.maeRentals > 0);
+  const errors = ses.validationRentals;
+  const mae = errors.reduce((a, b) => a + b, 0) / 7;
+  const rmse = Math.sqrt(errors.reduce((a, b) => a + b * b, 0) / 7);
+  assert.ok(Math.abs(ses.maeRentals - mae) < 1e-10);
+  assert.ok(Math.abs(ses.rmseRentals - rmse) < 1e-10);
+  assert.equal(ses.smapeRentals, 2);
 });

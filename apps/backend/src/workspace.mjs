@@ -85,18 +85,21 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
       }
       if (name === 'customers') query=query.limit(50);
       if (name === 'maintenance_records' && view !== 'Reports') query=query.where('status','in',['OPEN','IN_PROGRESS']).limit(100);
-      if (['item_status_history','item_condition_records','verification_requests'].includes(name)) query=query.limit(100);
+      // Reports calculate full-period metrics; the operational page cap would
+      // silently truncate terminal verification and utilization exported to CSV.
+      if (view !== 'Reports' && ['item_status_history','item_condition_records','verification_requests'].includes(name)) query=query.limit(100);
     }
     return query.get();
   };
   // Start independent database reads together instead of adding several network round trips.
-  const [snapshots, auditSnapshot, settingsDoc, pricing, usersSnapshot, page] = await Promise.all([
+  const [snapshots, auditSnapshot, settingsDoc, pricing, usersSnapshot, page, demoDoc] = await Promise.all([
     Promise.all(names.map(name => !mobile || mobileCollections.has(name) ? readCollection(name) : Promise.resolve({ docs: [] }))),
     !mobile && isStaffRole(role) && (!view || view === 'Reports') ? auditQuery.get() : Promise.resolve({ docs: [] }),
     db.collection('settings').doc('business').get(),
     mobile ? Promise.resolve({}) : loadPricing(db, { allowInvalidFallback: true }),
     role === 'OWNER' && !mobile && (!view || view === 'Settings') ? db.collection('users').get() : Promise.resolve({ docs: [] }),
-    pagePromise
+    pagePromise,
+    !mobile && view === 'Reports' ? db.collection('report_summary_state').doc('presentation_demo').get() : Promise.resolve({ exists:false })
   ]);
   const source = Object.fromEntries(names.map((name, index) => [name, rows(snapshots[index])]));
   const rankingPromise = view === 'Transaction History' ? equipmentRentalRanking(db,source.items,{from:filters.rankingFrom,to:filters.rankingTo},now) : Promise.resolve(null);
@@ -212,7 +215,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
       ? { ...customer, full_name: linkedProfile.full_name || linkedProfile.name || customer.full_name, email: linkedProfile.email || customer.email, phone: linkedProfile.phone || customer.phone }
       : customer;
   });
-  return { view_meta: { view, from: filters.from || null, to: filters.to || null }, rental_ranking: rentalRanking, customers: customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, page_meta:page ? {kind,nextCursor:page.nextCursor,limit:page.limit} : null, refreshedAt: now.toISOString() };
+  return { demo_data:demoDoc.exists ? serial(demoDoc.data()) : null, view_meta: { view, from: filters.from || null, to: filters.to || null }, rental_ranking: rentalRanking, customers: customers.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')).map(serial), transactions: transactions.map(serial), maintenance: maintenance.map(serial), rates: rates.map(serial), items: source.items.map(serial), categories: source.item_categories.sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(serial), terminals: source.terminals.map(publicTerminal).map(serial), verification: source.verification_requests.map(serial), conditionRecords: source.item_condition_records.map(serial), statusHistory, auditLogs, settings: serial(settings), pricing, users, page_meta:page ? {kind,nextCursor:page.nextCursor,limit:page.limit} : null, refreshedAt: now.toISOString() };
 }
 
 export async function syncMissingCustomerProfiles(db, now = new Date()) {

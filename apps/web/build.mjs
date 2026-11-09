@@ -78,6 +78,7 @@ const sourceFiles = [
   'account-validation.js',
   'notifications.js',
   'date-time.js',
+  'csv-export.js',
   'workspace-navigation.js',
   'confirmation-dialog.js',
   'form-ux.js',
@@ -108,7 +109,9 @@ const sourceFiles = [
   'analytics-report.js',
   'analytics-workspace.js',
   'analytics-insights.js',
+  'dashboard-analytics.js',
   'analytics-charts.js',
+  'analytics-chart-motion.js',
   'styles.css',
   'workspace-design.css'
 ];

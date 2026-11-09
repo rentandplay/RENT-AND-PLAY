@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { memoryFirestore } from './support/memory-firestore.mjs';
-import { openChat, listChats, chatMessages, sendChatMessage, readChat, setChatStatus } from '../src/chat.mjs';
+import { openChat, listChats, chatMessages, sendChatMessage, readChat, setChatStatus, setTyping, getTyping } from '../src/chat.mjs';
 import { listNotifications } from '../src/notifications.mjs';
 import { createApi, createFirebaseServices } from '../src/server.mjs';
 
@@ -11,6 +11,28 @@ const now = new Date('2026-11-07T12:00:00Z');
 const input = (n, text = 'Rental question') => ({ text, requestKey: n.toString(16).padStart(32, '0') });
 const status = value => e => e.status === value;
 const fixture = () => memoryFirestore({ users: { alice: customer, bob: other, staff: admin }, rentals: { r1: { customer_id: 'alice', item_name: 'Console', rental_code: 'RN-001' } } });
+
+test('typing is shared through storage, scoped to the conversation and cleared on send', async () => {
+  const db = fixture(), { thread } = await openChat(db, customer, {}, now);
+  const secondInstance = await import('../src/chat.mjs?typing-second-instance');
+  await setTyping(db, customer, thread.id);
+  assert.equal((await secondInstance.getTyping(db, admin, thread.id)).name, 'Alice');
+  assert.equal(await getTyping(db, customer, thread.id), null);
+  await assert.rejects(setTyping(db, other, thread.id), status(404));
+  await assert.rejects(setTyping(db, other, thread.id, false), status(404));
+  await assert.rejects(getTyping(db, other, thread.id), status(404));
+  await sendChatMessage(db, customer, thread.id, input(1), now);
+  assert.equal((await chatMessages(db, admin, thread.id)).typing, null);
+  await setTyping(db, admin, thread.id);
+  assert.equal((await chatMessages(db, customer, thread.id)).typing.role, 'STAFF');
+  await sendChatMessage(db, admin, thread.id, input(2), now);
+  assert.equal(await getTyping(db, customer, thread.id), null);
+  await setTyping(db, customer, thread.id);
+  await setTyping(db, customer, thread.id, false);
+  assert.equal(await getTyping(db, admin, thread.id), null);
+  await db.collection('chat_threads').doc(thread.id).update({ customer_typing: { name: 'Alice', at: Date.now() - 6000 } });
+  assert.equal(await getTyping(db, admin, thread.id), null);
+});
 
 test('one conversation per customer and rental; other customer rentals stay private', async () => {
   const db = fixture();
@@ -119,6 +141,10 @@ test('HTTP endpoints support bearer and cookie auth, deny anonymous, inactive an
     assert.equal((await fetch(base,{ method:'POST',headers:{...headers,Origin:'https://evil.example'},body:'{}' })).status,403);
     const result = await fetch(base,{ method:'POST',headers,body:'{}' }); assert.equal(result.status,200);
     const {thread} = await result.json();
+    const typing = await fetch(`${base}/${thread.id}/typing`, { method:'POST', headers, body:'{"typing":true}' });
+    assert.equal(typing.status, 200); assert.deepEqual(await typing.json(), { ok:true });
+    const staffTyping = await fetch(`${base}/${thread.id}/messages`, { headers:{Cookie:'rent_play_session=staff'} });
+    assert.equal((await staffTyping.json()).typing.name, 'Alice');
     assert.equal((await fetch(`${base}/${thread.id}/messages`,{ method:'POST',headers,body:JSON.stringify(input(1)) })).status,201);
     const staffResponse = await fetch(base,{ headers:{Cookie:'rent_play_session=staff'} });
     assert.equal(staffResponse.status,200); assert.equal((await staffResponse.json()).threads[0].unread_count,1);

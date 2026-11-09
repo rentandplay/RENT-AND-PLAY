@@ -39,6 +39,26 @@ test('an empty database produces zero cards and empty lists rather than sample r
     entryCount:0
   });
 });
+
+test('dashboard exposes dated fee and rental history with a real coverage start for the pulse', async () => {
+  const { memoryFirestore } = await import('./support/memory-firestore.mjs');
+  const db = memoryFirestore({
+    items: { one: { name:'Bicycle', is_active:true, status:'AVAILABLE', created_at:'2026-09-01T00:00:00+08:00' } },
+    rental_daily: { '2026-09-14': { business_day:'2026-09-14', rentals:4, fees:800 } }
+  });
+  const result = await loadDashboard(db, new Date('2026-09-15T12:00:00+08:00'));
+  assert.equal(result.analyticsHistory.coverageStart, '2026-09-01');
+  assert.deepEqual(result.analyticsHistory.daily, [{ date:'2026-09-14', fees:800, rentals:4 }]);
+});
+
+test('dashboard reports active demo metadata separately from actual current inventory', async () => {
+  const {memoryFirestore}=await import('./support/memory-firestore.mjs');
+  const db=memoryFirestore({report_summary_state:{presentation_demo:{active:true,status:'ready',record_count:293}}});
+  const result=await loadDashboard(db,new Date('2026-11-09T00:00:00+08:00'));
+  assert.equal(result.demo_data.record_count,293);
+  assert.equal(result.stats.active,0);
+  assert.equal(result.items.length,0);
+});
 test('loadDashboard exposes Manila business-day Cash vs QR collections and drawer movement',async()=>{
   const {memoryFirestore}=await import('./support/memory-firestore.mjs');
   const db=memoryFirestore({

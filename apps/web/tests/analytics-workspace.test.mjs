@@ -62,3 +62,26 @@ test('observed count axes use unique whole counts and comparisons expose their r
   assert.ok(html.includes('Prior period · Sep 1: 1'));
   assert.ok(!html.includes('Prior period · Oct 1: 1'));
 });
+
+test('a preliminary forecast never presents candidate order as evaluated performance', () => {
+  const model = { items:[{ id:'bike', name:'Bicycle', status:'AVAILABLE', is_active:true, created_at:'2026-07-01' }], transactions:Array.from({length:4}, (_, i)=>({ id:'r-'+i, item_id:'bike', status:'COMPLETED', confirmed_rental_at:'2026-10-12 10:00:00', rental_fee:100 })) };
+  const html = renderAnalyticsReport(model, selection, { section:'forecast' }, helpers);
+  assert.ok(html.includes('Preliminary · not yet validated'));
+  assert.ok(html.includes('Not yet validated'));
+  assert.ok(!html.includes('#1'));
+  assert.ok(!html.includes('>Evaluated<'));
+  assert.ok(!html.includes('Confidence:'));
+  assert.ok(html.includes('data-forecast-model="auto" aria-pressed="false" disabled'));
+  const ses = renderAnalyticsReport(model, selection, { section:'forecast', forecastModel:'ses' }, helpers);
+  assert.ok(!ses.includes('ana-range-key'));
+  assert.ok(ses.includes('SES (Exponential) estimates'));
+});
+
+test('presentation datasets are visibly identified without labeling ordinary reports as demos', () => {
+  const demo_data={ active:true,status:'ready',record_count:293,batch_id:'presentation-test' };
+  const html=renderAnalyticsReport({demo_data},selection,{section:'performance'},helpers);
+  assert.ok(html.includes('Presentation demo data'));
+  assert.ok(html.includes('293 simulated historical rentals'));
+  assert.ok(html.includes('Full demo history'));
+  assert.ok(!renderAnalyticsReport({},selection,{},helpers).includes('Presentation demo data'));
+});

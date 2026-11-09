@@ -396,7 +396,7 @@ function LoginView({
       control.disabled = true;
     });
     button.setAttribute("aria-busy", "true");
-    button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span> Logging in\u2026';
+    button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span> Signing in\u2026';
     setErrorMsg("");
     try {
       const result = await api("/auth/login", { method: "POST", body: JSON.stringify(body) });
@@ -577,6 +577,25 @@ function PasswordChangeView({
 import { pageInfo } from "./workspace-navigation.js";
 import { renderRentalNotifications } from "./notifications.js";
 
+// src/react/AnalyticsPulse.jsx
+import { calculateDashboardPulse } from "./dashboard-analytics.js";
+var dateLabel = (key) => new Intl.DateTimeFormat("en-PH", { month: "short", day: "numeric", timeZone: "UTC" }).format(/* @__PURE__ */ new Date(`${key}T00:00:00Z`));
+function AnalyticsPulse({ data, onNavigate }) {
+  const p = calculateDashboardPulse(data, new Date(data.refreshedAt || Date.now()));
+  const overdue = Number(data.stats?.overdue || 0);
+  const pending = data.pending?.length || 0;
+  const reviewPage = overdue ? "Rentals" : pending ? "ESP32 terminal" : p.utilization >= 60 ? "Returns" : "Reports";
+  const action = overdue ? `Follow up on ${overdue} overdue return${overdue === 1 ? "" : "s"}.` : pending ? `Review ${pending} pending terminal handover${pending === 1 ? "" : "s"}.` : p.utilization >= 60 ? "Review incoming returns before the next handover." : "No overdue rentals or pending terminal handovers.";
+  const peak = Math.max(1, ...p.recent.map((row) => row.fees), p.forecast || 0);
+  const top = Math.ceil(peak / 10 ** Math.floor(Math.log10(peak))) * 10 ** Math.floor(Math.log10(peak));
+  const x = (index) => 55 + index * 455 / Math.max(7, p.recent.length);
+  const y = (value) => 155 - value / top * 125;
+  const points = p.recent.map((row, index) => `${x(index)},${y(row.fees)}`).join(" ");
+  const last = p.recent.at(-1);
+  const share = (value) => p.channelTotal ? value / p.channelTotal * 100 : 0;
+  return /* @__PURE__ */ React.createElement("section", { className: "panel analytics-pulse-panel", "aria-label": "Operations and fleet analytics" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chart" }), " Analytics pulse"), /* @__PURE__ */ React.createElement("p", null, "Recent rental activity and your next operational step")), /* @__PURE__ */ React.createElement("button", { type: "button", className: "text-button", onClick: () => onNavigate("Reports") }, "Full analytics ", /* @__PURE__ */ React.createElement(Icon, { name: "arrow" }))), data.demo_data?.active ? /* @__PURE__ */ React.createElement("aside", { className: "pulse-demo-note" }, /* @__PURE__ */ React.createElement("strong", null, "Presentation demo data"), /* @__PURE__ */ React.createElement("span", null, data.demo_data.status === "ready" ? `${data.demo_data.record_count} simulated historical rentals included. Forecast accuracy here describes demo data.` : "Demo history is being prepared.")) : null, /* @__PURE__ */ React.createElement("div", { className: "pulse-overview" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-outlook" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-outlook-heading" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "pulse-caption" }, "Next-day rental fees"), /* @__PURE__ */ React.createElement("strong", null, p.forecast == null ? "\u2014" : money(p.forecast))), /* @__PURE__ */ React.createElement("span", { className: "pulse-model-badge" }, "SES \xB7 \u03B1 0.35")), /* @__PURE__ */ React.createElement("p", { className: "pulse-estimate-note" }, p.forecast == null ? "Building a usable history" : `${dateLabel(p.forecastDate)} \xB7 preliminary estimate`), p.recent.length ? /* @__PURE__ */ React.createElement("figure", { className: "pulse-history-chart" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 560 200", role: "img", "aria-labelledby": "pulse-history-title" }, /* @__PURE__ */ React.createElement("title", { id: "pulse-history-title" }, "Recorded daily rental fees for the last ", p.recent.length, " complete days", p.forecast == null ? "" : ` and next-day SES estimate ${money(p.forecast)}`, ". Today is excluded."), [0, 0.5, 1].map((fraction) => /* @__PURE__ */ React.createElement("g", { key: fraction }, /* @__PURE__ */ React.createElement("line", { x1: "55", x2: "525", y1: y(top * fraction), y2: y(top * fraction), className: "pulse-grid-line" }), /* @__PURE__ */ React.createElement("text", { x: "45", y: y(top * fraction) + 4, textAnchor: "end" }, new Intl.NumberFormat("en-PH", { notation: "compact", maximumFractionDigits: 1 }).format(top * fraction)))), /* @__PURE__ */ React.createElement("polygon", { points: `${x(0)},155 ${points} ${x(p.recent.length - 1)},155`, className: "pulse-history-area" }), /* @__PURE__ */ React.createElement("polyline", { points, className: "pulse-history-line" }), p.recent.map((row, index) => /* @__PURE__ */ React.createElement("circle", { key: row.date, cx: x(index), cy: y(row.fees), r: "3", className: "pulse-history-point", tabIndex: "0" }, /* @__PURE__ */ React.createElement("title", null, dateLabel(row.date), ": ", money(row.fees), " \xB7 ", row.rentals, " confirmed rentals"))), p.forecast != null && last ? /* @__PURE__ */ React.createElement("g", null, /* @__PURE__ */ React.createElement("line", { x1: x(p.recent.length - 1), y1: y(last.fees), x2: "510", y2: y(p.forecast), className: "pulse-estimate-line" }), /* @__PURE__ */ React.createElement("circle", { cx: "510", cy: y(p.forecast), r: "4", className: "pulse-estimate-point", tabIndex: "0" }, /* @__PURE__ */ React.createElement("title", null, dateLabel(p.forecastDate), " estimate: ", money(p.forecast))), /* @__PURE__ */ React.createElement("text", { x: "525", y: "180", textAnchor: "end" }, dateLabel(p.forecastDate), " est.")) : null, /* @__PURE__ */ React.createElement("text", { x: "55", y: "180" }, dateLabel(p.recent[0].date)), /* @__PURE__ */ React.createElement("text", { className: "pulse-last-complete-label", x: x(p.recent.length - 1), y: "180", textAnchor: "end" }, dateLabel(last.date))), /* @__PURE__ */ React.createElement("figcaption", null, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", null), " Recorded fees"), p.forecast != null ? /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "is-estimate" }), " Next-day estimate") : null, /* @__PURE__ */ React.createElement("span", null, "PHP \xB7 complete days only"))) : /* @__PURE__ */ React.createElement("div", { className: "pulse-no-history" }, /* @__PURE__ */ React.createElement(Icon, { name: "chart" }), /* @__PURE__ */ React.createElement("strong", null, "No completed activity history yet"), /* @__PURE__ */ React.createElement("span", null, "Recorded rental fees will appear here.")), /* @__PURE__ */ React.createElement("p", { className: "pulse-history-footnote" }, p.forecast == null ? p.reason : `${p.trainingDays} complete days \xB7 ${p.rentalSamples} rentals used \xB7 accuracy not yet validated`)), /* @__PURE__ */ React.createElement("div", { className: "pulse-operations" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-live-heading" }, /* @__PURE__ */ React.createElement("span", { className: "pulse-caption" }, "Live operations"), /* @__PURE__ */ React.createElement("span", null, "Current snapshot")), /* @__PURE__ */ React.createElement("div", { className: "pulse-live-grid" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-fleet-card" }, /* @__PURE__ */ React.createElement("h4", null, "Fleet in use"), /* @__PURE__ */ React.createElement("div", { className: "pulse-fleet-body" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-fleet-donut" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 88 88", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("circle", { cx: "44", cy: "44", r: "35" }), /* @__PURE__ */ React.createElement("circle", { cx: "44", cy: "44", r: "35", className: "pulse-fleet-arc", strokeDasharray: `${p.utilization * 2.1991} 219.91`, transform: "rotate(-90 44 44)" })), /* @__PURE__ */ React.createElement("strong", null, Math.round(p.utilization), "%")), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("strong", null, p.rented, /* @__PURE__ */ React.createElement("small", null, " / ", p.totalUnits)), /* @__PURE__ */ React.createElement("span", null, "units rented now"))), /* @__PURE__ */ React.createElement("small", null, "All active units, including maintenance and reservations.")), /* @__PURE__ */ React.createElement("div", { className: "pulse-channels-card" }, /* @__PURE__ */ React.createElement("h4", null, "Active rental channels"), /* @__PURE__ */ React.createElement("strong", { className: "pulse-channel-total" }, p.channelTotal, /* @__PURE__ */ React.createElement("small", null, " ", p.channelTotal === 1 ? "rental" : "rentals", " in progress")), /* @__PURE__ */ React.createElement("div", { className: "pulse-channel-bar", role: "img", "aria-label": `${p.resort} resort delivery, ${p.counter} shop counter, ${p.unknown} unspecified` }, /* @__PURE__ */ React.createElement("span", { className: "pulse-channel-resort", style: { width: `${share(p.resort)}%` } }), /* @__PURE__ */ React.createElement("span", { className: "pulse-channel-counter", style: { width: `${share(p.counter)}%` } }), /* @__PURE__ */ React.createElement("span", { className: "pulse-channel-unknown", style: { width: `${share(p.unknown)}%` } })), /* @__PURE__ */ React.createElement("dl", null, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, /* @__PURE__ */ React.createElement("i", { className: "pulse-dot resort" }), "Resort delivery"), /* @__PURE__ */ React.createElement("dd", null, p.resort)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, /* @__PURE__ */ React.createElement("i", { className: "pulse-dot counter" }), "Shop counter"), /* @__PURE__ */ React.createElement("dd", null, p.counter)), p.unknown > 0 ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "Unspecified"), /* @__PURE__ */ React.createElement("dd", null, p.unknown)) : null))), /* @__PURE__ */ React.createElement("div", { className: `pulse-action-strip ${overdue ? "has-alert" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "pulse-action-icon" }, /* @__PURE__ */ React.createElement(Icon, { name: overdue ? "clock" : "arrow" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "pulse-caption" }, overdue || pending ? "Needs attention" : p.utilization >= 60 ? "Capacity review" : "Current status"), /* @__PURE__ */ React.createElement("strong", null, action)), /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", onClick: () => onNavigate(reviewPage, false, overdue ? "Overdue" : "All rentals") }, overdue || pending ? "Review" : "Explore", " ", /* @__PURE__ */ React.createElement(Icon, { name: "arrow" }))))));
+}
+
 // src/react/DashboardView.jsx
 var prefersReducedMotion = () => {
   try {
@@ -728,22 +747,6 @@ function DashboardView({
   const clampedPage = Math.min(rentalPage, pageCount - 1);
   const start = clampedPage * pageSize;
   const rows = allRows.slice(start, start + pageSize);
-  const totalActive = Number(s?.active || 0);
-  const totalAvailable = Number(s?.available || 0);
-  const totalUnits = totalActive + totalAvailable || (Array.isArray(data.items) ? data.items.length : 0) || 1;
-  const utilizationRate = Math.min(100, Math.round(totalActive / Math.max(1, totalUnits) * 100));
-  const allRentalsList = Array.isArray(data.rentals) ? data.rentals : [];
-  const resortCount = allRentalsList.filter(
-    (r) => r.fulfillment_mode === "DELIVERY" || Boolean(r.delivery_location)
-  ).length;
-  const counterCount = Math.max(0, totalActive - resortCount);
-  const resortShare = totalActive > 0 ? Math.round(resortCount / totalActive * 100) : 50;
-  const counterShare = totalActive > 0 ? 100 - resortShare : 50;
-  const thisWeekRevenue = Array.isArray(data.revenue?.["This week"]) ? data.revenue["This week"].reduce((sum2, n) => sum2 + Number(n || 0), 0) : 0;
-  const lastWeekRevenue = Array.isArray(data.revenue?.["Last week"]) ? data.revenue["Last week"].reduce((sum2, n) => sum2 + Number(n || 0), 0) : 0;
-  const pulseDelta = lastWeekRevenue > 0 ? Math.round((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue * 100) : thisWeekRevenue > 0 ? 100 : 0;
-  const pulseDeltaText = lastWeekRevenue > 0 ? `${pulseDelta >= 0 ? "\u25B2" : "\u25BC"} ${Math.abs(pulseDelta)}% vs last wk` : thisWeekRevenue > 0 ? "\u25B2 Active momentum" : "Paced on track";
-  const overdueCount = Number(s?.overdue || 0);
   const openRental = (id) => {
     const r = data.rentals.find((item) => String(item.id) === String(id));
     if (!r) return;
@@ -856,6 +859,7 @@ function DashboardView({
   const average = total / (todayIndex >= 0 ? todayIndex + 1 : 7);
   const pct = (value) => Math.max(0, Math.min(100, (Number(value) || 0) / scale * 100));
   const activeDay = hoverDay ?? selectedDay;
+  const peakDayLabel = peak > 0 ? `${days[amounts.indexOf(peak)]} (${money(peak)})` : "\u2014";
   const focusBar = (index) => {
     setSelectedDay(index);
     chartRef.current?.querySelector(`[data-day="${index}"]`)?.focus();
@@ -1080,7 +1084,75 @@ function DashboardView({
       onClick: () => onRentalPageChange(clampedPage + 1)
     },
     "Next \u2192"
-  )))), /* @__PURE__ */ React.createElement("section", { className: "panel collections-panel", "aria-label": "Today's collections" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "money" }), " Today\u2019s collections"), /* @__PURE__ */ React.createElement("p", null, "Confirmed receipts today \xB7 Philippine time"))), /* @__PURE__ */ React.createElement("div", { className: "collections-hero" }, /* @__PURE__ */ React.createElement("strong", null, /* @__PURE__ */ React.createElement(CountUp, { value: todayTotal, format: money })), /* @__PURE__ */ React.createElement("span", null, collections.entryCount ? `${collections.entryCount} ledger ${collections.entryCount === 1 ? "entry" : "entries"} today` : "No dated receipts yet today")), /* @__PURE__ */ React.createElement(
+  )))), /* @__PURE__ */ React.createElement("section", { className: "panel terminal-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " ESP32 terminal")), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-status", "data-online": Boolean(t?.online) }, /* @__PURE__ */ React.createElement("span", { className: "dashboard-status-dot", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, t ? t.online ? "Connected" : "Offline" : "Not configured"), /* @__PURE__ */ React.createElement("span", null, t ? `${t.name || "Counter terminal"} \xB7 ${t.terminal_code}` : "Set up a terminal to confirm counter handovers."))), /* @__PURE__ */ React.createElement("div", { className: "terminal-meta" }, /* @__PURE__ */ React.createElement("span", null, "Awaiting confirmation"), /* @__PURE__ */ React.createElement("strong", null, queue.length)), /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, "Confirm counter handovers, delivery dispatches, and completed inspections."), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", id: "cmd-ping-terminal", disabled: !t || !api || testingTerminal, onClick: async () => {
+    setTestingTerminal(true);
+    try {
+      await api("/terminals/test-ping", { method: "POST", body: JSON.stringify({ terminalCode: t.terminal_code }) });
+      toast?.("Test sent. Check the terminal for a response.");
+    } catch (err) {
+      toast?.(err.message || "The terminal test could not be sent.");
+    } finally {
+      setTestingTerminal(false);
+    }
+  } }, testingTerminal ? "Sending test\u2026" : "Test terminal")), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "secondary wide",
+      "data-page": "ESP32 terminal",
+      onClick: () => onNavigate("ESP32 terminal")
+    },
+    "Open terminal ",
+    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
+  )), /* @__PURE__ */ React.createElement("section", { className: "panel revenue-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rental fees"), /* @__PURE__ */ React.createElement("p", null, "Recorded charges by confirmation date. Not cash collected.")), /* @__PURE__ */ React.createElement("div", { className: "revenue-actions" }, /* @__PURE__ */ React.createElement(
+    "select",
+    {
+      id: "period",
+      "aria-label": "Revenue period",
+      value: period,
+      onChange: (e) => {
+        setSelectedDay(null);
+        onPeriodChange(e.target.value);
+      }
+    },
+    /* @__PURE__ */ React.createElement("option", { value: "This week" }, "This week"),
+    /* @__PURE__ */ React.createElement("option", { value: "Last week" }, "Last week")
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "text-button",
+      "data-page": "Reports",
+      onClick: () => onNavigate("Reports")
+    },
+    "View analytics \u2192"
+  ))), /* @__PURE__ */ React.createElement("div", { className: "revenue-total" }, /* @__PURE__ */ React.createElement(CountUp, { value: total, format: money }), /* @__PURE__ */ React.createElement("span", null, "Recorded rental charges"), delta !== null ? /* @__PURE__ */ React.createElement("em", { className: `revenue-delta ${delta >= 0 ? "up" : "down"}` }, delta >= 0 ? "\u25B2" : "\u25BC", " ", Math.abs(delta), "% vs last full week \xB7 this week is partial") : null, /* @__PURE__ */ React.createElement("div", { className: "revenue-summary-pills" }, /* @__PURE__ */ React.createElement("span", { className: "revenue-pill", title: todayIndex >= 0 ? "Average over calendar days so far, including partial today." : "Average over the full seven-day week." }, /* @__PURE__ */ React.createElement("small", null, "Daily avg"), /* @__PURE__ */ React.createElement("strong", null, money(Math.round(average)))), /* @__PURE__ */ React.createElement("span", { className: "revenue-pill" }, /* @__PURE__ */ React.createElement("small", null, "Peak day"), /* @__PURE__ */ React.createElement("strong", null, peakDayLabel)))), /* @__PURE__ */ React.createElement("div", { className: "chart-legend", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch current" }), period), compareKey ? /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch previous" }), compareKey) : null, average > 0 ? /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch average" }), "Daily average") : null), /* @__PURE__ */ React.createElement("div", { className: "chart", ref: chartRef, onMouseLeave: () => setHoverDay(null) }, /* @__PURE__ */ React.createElement("div", { className: "axis" }, [1, 0.75, 0.5, 0.25, 0].map((x) => /* @__PURE__ */ React.createElement("span", { key: x }, money(scale * x)))), /* @__PURE__ */ React.createElement("div", { className: "bars", role: "group", "aria-label": "Rental fees by day. Use the arrow keys to move between days." }, /* @__PURE__ */ React.createElement("div", { className: "chart-gridlines", "aria-hidden": "true" }, [0, 0.25, 0.5, 0.75, 1].map((x) => /* @__PURE__ */ React.createElement("span", { key: x, style: { bottom: `${x * 100}%` } }))), average > 0 ? /* @__PURE__ */ React.createElement("div", { className: "chart-avg-line", style: { bottom: `${pct(average)}%` }, "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, "Avg ", money(Math.round(average)))) : null, amounts.map((amount, i) => {
+    const columnClass = [
+      "bar-column",
+      i === 0 ? "is-first" : "",
+      i === 6 ? "is-last" : "",
+      i === todayIndex ? "is-today" : "",
+      todayIndex >= 0 && i > todayIndex ? "is-future" : "",
+      activeDay === i ? "is-active" : ""
+    ].filter(Boolean).join(" ");
+    return /* @__PURE__ */ React.createElement("div", { className: columnClass, key: days[i], style: { "--i": i } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        className: `bar ${amount === peak && peak > 0 ? "highlight" : ""}`,
+        style: { height: "100%" },
+        "data-day": i,
+        "aria-label": `${days[i]}: ${money(amount)} in rental fees`,
+        "aria-pressed": selectedDay === i,
+        onClick: () => setSelectedDay(selectedDay === i ? null : i),
+        onMouseEnter: () => setHoverDay(i),
+        onFocus: () => setHoverDay(i),
+        onBlur: () => setHoverDay(null),
+        onKeyDown: (event) => handleBarKeyDown(event, i)
+      },
+      compareKey ? /* @__PURE__ */ React.createElement("span", { className: "dashboard-bar-ghost", style: { height: `${pct(compare[i])}%` } }) : null,
+      /* @__PURE__ */ React.createElement("span", { className: "dashboard-bar-fill", style: { height: `${Math.max(2, pct(amount))}%` } }),
+      activeDay === i ? /* @__PURE__ */ React.createElement("span", { className: "chart-tooltip", "aria-hidden": "true", style: { bottom: `calc(${Math.max(2, pct(amount))}% + 10px)` } }, /* @__PURE__ */ React.createElement("strong", null, money(amount)), /* @__PURE__ */ React.createElement("small", null, DAY_NAMES[i], i === todayIndex ? " \xB7 today" : "", compareKey ? ` \xB7 last wk ${money(Number(compare[i]) || 0)}` : "")) : null
+    ), /* @__PURE__ */ React.createElement("span", null, days[i]));
+  }))), /* @__PURE__ */ React.createElement("div", { className: "dashboard-chart-detail", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("div", { className: "chart-detail-inner", key: activeDay ?? "none" }, activeDay === null ? /* @__PURE__ */ React.createElement("span", null, "Hover a bar, or select one and use the arrow keys, to explore each day.") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", null, DAY_NAMES[activeDay]), /* @__PURE__ */ React.createElement("strong", null, money(amounts[activeDay])), /* @__PURE__ */ React.createElement("span", null, "in recorded charges"), total > 0 ? /* @__PURE__ */ React.createElement("span", { className: "chart-detail-share" }, Math.round((Number(amounts[activeDay]) || 0) / total * 100), "% of the week") : null))), amounts.every((v) => v === 0) ? /* @__PURE__ */ React.createElement("p", { className: "chart-empty" }, "No confirmed rental fees in this period.") : null), /* @__PURE__ */ React.createElement("section", { className: "panel collections-panel", "aria-label": "Today's collections" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "money" }), " Today\u2019s collections"), /* @__PURE__ */ React.createElement("p", null, "Confirmed receipts today \xB7 Philippine time"))), /* @__PURE__ */ React.createElement("div", { className: "collections-hero" }, /* @__PURE__ */ React.createElement("strong", null, /* @__PURE__ */ React.createElement(CountUp, { value: todayTotal, format: money })), /* @__PURE__ */ React.createElement("span", null, collections.entryCount ? `${collections.entryCount} ledger ${collections.entryCount === 1 ? "entry" : "entries"} today` : "No dated receipts yet today")), /* @__PURE__ */ React.createElement(
     "div",
     {
       className: "collections-split-bar",
@@ -1126,56 +1198,7 @@ function DashboardView({
     },
     "Open payments ",
     /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
-  )), /* @__PURE__ */ React.createElement("section", { className: "panel revenue-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, "Rental fees"), /* @__PURE__ */ React.createElement("p", null, "Recorded charges by confirmation date. Not cash collected.")), /* @__PURE__ */ React.createElement("div", { className: "revenue-actions" }, /* @__PURE__ */ React.createElement(
-    "select",
-    {
-      id: "period",
-      "aria-label": "Revenue period",
-      value: period,
-      onChange: (e) => {
-        setSelectedDay(null);
-        onPeriodChange(e.target.value);
-      }
-    },
-    /* @__PURE__ */ React.createElement("option", { value: "This week" }, "This week"),
-    /* @__PURE__ */ React.createElement("option", { value: "Last week" }, "Last week")
-  ), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      className: "text-button",
-      "data-page": "Reports",
-      onClick: () => onNavigate("Reports")
-    },
-    "View analytics \u2192"
-  ))), /* @__PURE__ */ React.createElement("div", { className: "revenue-total" }, /* @__PURE__ */ React.createElement(CountUp, { value: total, format: money }), /* @__PURE__ */ React.createElement("span", null, "Recorded rental charges"), delta !== null ? /* @__PURE__ */ React.createElement("em", { className: `revenue-delta ${delta >= 0 ? "up" : "down"}` }, delta >= 0 ? "\u25B2" : "\u25BC", " ", Math.abs(delta), "% vs last week") : null), /* @__PURE__ */ React.createElement("div", { className: "chart-legend", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch current" }), period), compareKey ? /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch previous" }), compareKey) : null, average > 0 ? /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "swatch average" }), "Daily average") : null), /* @__PURE__ */ React.createElement("div", { className: "chart", ref: chartRef, onMouseLeave: () => setHoverDay(null) }, /* @__PURE__ */ React.createElement("div", { className: "axis" }, [1, 0.75, 0.5, 0.25, 0].map((x) => /* @__PURE__ */ React.createElement("span", { key: x }, money(scale * x)))), /* @__PURE__ */ React.createElement("div", { className: "bars", role: "group", "aria-label": "Rental fees by day. Use the arrow keys to move between days." }, /* @__PURE__ */ React.createElement("div", { className: "chart-gridlines", "aria-hidden": "true" }, [0, 0.25, 0.5, 0.75, 1].map((x) => /* @__PURE__ */ React.createElement("span", { key: x, style: { bottom: `${x * 100}%` } }))), average > 0 ? /* @__PURE__ */ React.createElement("div", { className: "chart-avg-line", style: { bottom: `${pct(average)}%` }, "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("span", null, "Avg ", money(Math.round(average)))) : null, amounts.map((amount, i) => {
-    const columnClass = [
-      "bar-column",
-      i === 0 ? "is-first" : "",
-      i === 6 ? "is-last" : "",
-      i === todayIndex ? "is-today" : "",
-      todayIndex >= 0 && i > todayIndex ? "is-future" : "",
-      activeDay === i ? "is-active" : ""
-    ].filter(Boolean).join(" ");
-    return /* @__PURE__ */ React.createElement("div", { className: columnClass, key: days[i], style: { "--i": i } }, /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        type: "button",
-        className: `bar ${amount === peak && peak > 0 ? "highlight" : ""}`,
-        style: { height: "100%" },
-        "data-day": i,
-        "aria-label": `${days[i]}: ${money(amount)} in rental fees`,
-        "aria-pressed": selectedDay === i,
-        onClick: () => setSelectedDay(selectedDay === i ? null : i),
-        onMouseEnter: () => setHoverDay(i),
-        onFocus: () => setHoverDay(i),
-        onBlur: () => setHoverDay(null),
-        onKeyDown: (event) => handleBarKeyDown(event, i)
-      },
-      compareKey ? /* @__PURE__ */ React.createElement("span", { className: "dashboard-bar-ghost", style: { height: `${pct(compare[i])}%` } }) : null,
-      /* @__PURE__ */ React.createElement("span", { className: "dashboard-bar-fill", style: { height: `${Math.max(2, pct(amount))}%` } }),
-      activeDay === i ? /* @__PURE__ */ React.createElement("span", { className: "chart-tooltip", "aria-hidden": "true", style: { bottom: `calc(${Math.max(2, pct(amount))}% + 10px)` } }, /* @__PURE__ */ React.createElement("strong", null, money(amount)), /* @__PURE__ */ React.createElement("small", null, DAY_NAMES[i], i === todayIndex ? " ? today" : "", compareKey ? ` ? last wk ${money(Number(compare[i]) || 0)}` : "")) : null
-    ), /* @__PURE__ */ React.createElement("span", null, days[i]));
-  }))), /* @__PURE__ */ React.createElement("div", { className: "dashboard-chart-detail", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("div", { className: "chart-detail-inner", key: activeDay ?? "none" }, activeDay === null ? /* @__PURE__ */ React.createElement("span", null, "Hover a bar, or select one and use the arrow keys, to explore each day.") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", null, DAY_NAMES[activeDay]), /* @__PURE__ */ React.createElement("strong", null, money(amounts[activeDay])), /* @__PURE__ */ React.createElement("span", null, "in recorded charges"), total > 0 ? /* @__PURE__ */ React.createElement("span", { className: "chart-detail-share" }, Math.round((Number(amounts[activeDay]) || 0) / total * 100), "% of the week") : null))), amounts.every((v) => v === 0) ? /* @__PURE__ */ React.createElement("p", { className: "chart-empty" }, "No confirmed rental fees in this period.") : null), /* @__PURE__ */ React.createElement("section", { className: "panel category-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "box" }), " Equipment by category"), /* @__PURE__ */ React.createElement("p", null, "Select a category to view its inventory.")), /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement(AnalyticsPulse, { data, onNavigate }), /* @__PURE__ */ React.createElement("section", { className: "panel category-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "box" }), " Equipment by category"), /* @__PURE__ */ React.createElement("p", null, "Select a category to view its inventory.")), /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -1206,76 +1229,6 @@ function DashboardView({
       onClick: () => onNavigate("Inventory", false, "All rentals", "")
     },
     "View all inventory ",
-    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
-  )), /* @__PURE__ */ React.createElement("section", { className: "panel analytics-pulse-panel", "aria-label": "Operations and fleet analytics" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chart" }), " Analytics pulse"), /* @__PURE__ */ React.createElement("p", null, "Fleet utilization & performance metrics")), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      type: "button",
-      className: "text-button",
-      "data-page": "Reports",
-      onClick: () => onNavigate("Reports")
-    },
-    "Full report ",
-    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
-  )), /* @__PURE__ */ React.createElement("div", { className: "analytics-pulse-metrics" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-block" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-head" }, /* @__PURE__ */ React.createElement("span", null, "Fleet utilization"), /* @__PURE__ */ React.createElement("strong", { className: "pulse-metric-val" }, /* @__PURE__ */ React.createElement(CountUp, { value: utilizationRate }), "%")), /* @__PURE__ */ React.createElement(
-    "div",
-    {
-      className: "pulse-progress-bar",
-      role: "progressbar",
-      "aria-label": "Fleet utilization rate",
-      "aria-valuenow": utilizationRate,
-      "aria-valuemin": "0",
-      "aria-valuemax": "100"
-    },
-    /* @__PURE__ */ React.createElement(
-      "span",
-      {
-        className: "pulse-progress-fill",
-        style: { width: `${Math.min(100, Math.max(utilizationRate, totalActive > 0 ? 8 : 0))}%` }
-      }
-    )
-  ), /* @__PURE__ */ React.createElement("small", { className: "pulse-metric-sub" }, /* @__PURE__ */ React.createElement("strong", null, totalActive), " of ", /* @__PURE__ */ React.createElement("strong", null, totalUnits), " units currently rented")), /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-block" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-head" }, /* @__PURE__ */ React.createElement("span", null, "Fulfillment channels"), /* @__PURE__ */ React.createElement("strong", { className: "pulse-metric-val" }, resortCount > 0 && counterCount > 0 ? `${resortShare}% Resort` : resortCount > 0 ? "100% Resort" : `${counterShare}% Counter`)), /* @__PURE__ */ React.createElement("div", { className: "pulse-channel-bar", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(
-    "span",
-    {
-      className: "pulse-channel-resort",
-      style: { width: `${resortShare}%` },
-      title: `Resort delivery: ${resortCount}`
-    }
-  ), /* @__PURE__ */ React.createElement(
-    "span",
-    {
-      className: "pulse-channel-counter",
-      style: { width: `${counterShare}%` },
-      title: `Counter handover: ${counterCount}`
-    }
-  )), /* @__PURE__ */ React.createElement("small", { className: "pulse-metric-sub" }, /* @__PURE__ */ React.createElement("span", { className: "pulse-dot resort", "aria-hidden": "true" }), " ", resortCount, " Resort delivery \xB7", " ", /* @__PURE__ */ React.createElement("span", { className: "pulse-dot counter", "aria-hidden": "true" }), " ", counterCount, " Shop counter")), /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-block" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-head" }, /* @__PURE__ */ React.createElement("span", null, "Weekly velocity"), /* @__PURE__ */ React.createElement("strong", { className: "pulse-metric-val" }, /* @__PURE__ */ React.createElement(CountUp, { value: thisWeekRevenue, format: money }))), /* @__PURE__ */ React.createElement("small", { className: "pulse-metric-sub" }, "Avg ", /* @__PURE__ */ React.createElement("strong", null, money(Math.round(thisWeekRevenue / 7))), "/day \xB7 ", pulseDeltaText)), /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-block" }, /* @__PURE__ */ React.createElement("div", { className: "pulse-metric-head" }, /* @__PURE__ */ React.createElement("span", null, "Return punctuality"), /* @__PURE__ */ React.createElement("span", { className: `pulse-health-pill ${overdueCount > 0 ? "alert" : "ok"}` }, overdueCount > 0 ? `${overdueCount} Overdue` : "100% On-time")), /* @__PURE__ */ React.createElement("small", { className: "pulse-metric-sub" }, overdueCount > 0 ? "Follow up required on overdue rentals" : "All rentals are running on schedule"))), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      type: "button",
-      className: "secondary wide pulse-explore-btn",
-      "data-page": "Reports",
-      onClick: () => onNavigate("Reports")
-    },
-    "Open full analytics ",
-    /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
-  )), /* @__PURE__ */ React.createElement("section", { className: "panel terminal-panel" }, /* @__PURE__ */ React.createElement("div", { className: "panel-title" }, /* @__PURE__ */ React.createElement("h3", null, /* @__PURE__ */ React.createElement(Icon, { name: "chip" }), " ESP32 terminal")), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-status", "data-online": Boolean(t?.online) }, /* @__PURE__ */ React.createElement("span", { className: "dashboard-status-dot", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, t ? t.online ? "Connected" : "Offline" : "Not configured"), /* @__PURE__ */ React.createElement("span", null, t ? `${t.name || "Counter terminal"} \xB7 ${t.terminal_code}` : "Set up a terminal to confirm counter handovers."))), /* @__PURE__ */ React.createElement("div", { className: "terminal-meta" }, /* @__PURE__ */ React.createElement("span", null, "Awaiting confirmation"), /* @__PURE__ */ React.createElement("strong", null, queue.length)), /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, "Confirm counter handovers, delivery dispatches, and completed inspections."), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", id: "cmd-ping-terminal", disabled: !t || !api || testingTerminal, onClick: async () => {
-    setTestingTerminal(true);
-    try {
-      await api("/terminals/test-ping", { method: "POST", body: JSON.stringify({ terminalCode: t.terminal_code }) });
-      toast?.("Test sent. Check the terminal for a response.");
-    } catch (err) {
-      toast?.(err.message || "The terminal test could not be sent.");
-    } finally {
-      setTestingTerminal(false);
-    }
-  } }, testingTerminal ? "Sending test\u2026" : "Test terminal")), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      className: "secondary wide",
-      "data-page": "ESP32 terminal",
-      onClick: () => onNavigate("ESP32 terminal")
-    },
-    "Open terminal ",
     /* @__PURE__ */ React.createElement(Icon, { name: "arrow" })
   ))));
 }
@@ -1502,12 +1455,25 @@ var initials2 = (name) => {
   const parts = name.trim().split(/\s+/);
   return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
 };
-var QUICK_REPLIES = [
-  { label: "\u{1FAAA} Accepted IDs", text: "Tumatanggap po kami ng National ID, Driver's License, Passport, UMID, Postal ID, o Valid School ID (basta currently enrolled with proof of registration)." },
-  { label: "\u{1F4CB} Rental Requirements", text: "Kailangan lamang po ng 1 Valid ID (Government o School ID), pirma sa rental agreement, at active contact details." },
-  { label: "\u23F0 Store Hours", text: "Bukas po ang aming rental desk mula 8:00 AM hanggang 8:00 PM araw-araw para sa pickup at return." },
-  { label: "\u{1F4CD} Pickup & Return", text: "Maaari ninyong i-pickup at i-return ang equipment sa aming shop desk habang operating hours." }
+var DEFAULT_QUICK_REPLIES = [
+  { id: "qr-1", label: "\u{1FAAA} Accepted IDs", text: "Tumatanggap po kami ng National ID, Driver's License, Passport, UMID, Postal ID, o Valid School ID (basta currently enrolled with proof of registration)." },
+  { id: "qr-2", label: "\u{1F4CB} Rental Requirements", text: "Kailangan lamang po ng 1 Valid ID (Government o School ID), pirma sa rental agreement, at active contact details." },
+  { id: "qr-3", label: "\u23F0 Store Hours", text: "Bukas po ang aming rental desk mula 8:00 AM hanggang 8:00 PM araw-araw para sa pickup at return." },
+  { id: "qr-4", label: "\u{1F4CD} Pickup & Return", text: "Maaari ninyong i-pickup at i-return ang equipment sa aming shop desk habang operating hours." }
 ];
+function loadStoredQuickReplies() {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem("rent-play-quick-replies");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    }
+  } catch {
+  }
+  return DEFAULT_QUICK_REPLIES;
+}
 function MessagesView({ api, user }) {
   const storageKey = `rental-support-drafts:${user.id}`;
   function saved(kind) {
@@ -1534,6 +1500,77 @@ function MessagesView({ api, user }) {
   const [loading, setLoading] = useState(true), [synced, setSynced] = useState(null);
   const [listError, setListError] = useState("");
   const [typing, setTyping] = useState(null);
+  const [quickReplies, setQuickReplies] = useState(loadStoredQuickReplies);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [editingQrId, setEditingQrId] = useState(null);
+  const [formLabel, setFormLabel] = useState("");
+  const [formText, setFormText] = useState("");
+  const [qrError, setQrError] = useState("");
+  function persistQuickReplies(next2) {
+    setQuickReplies(next2);
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem("rent-play-quick-replies", JSON.stringify(next2));
+      }
+    } catch {
+    }
+  }
+  function handleStartAddQr() {
+    setEditingQrId("NEW");
+    setFormLabel("");
+    setFormText("");
+    setQrError("");
+  }
+  function handleStartEditQr(qr) {
+    setEditingQrId(qr.id || qr.label);
+    setFormLabel(qr.label);
+    setFormText(qr.text);
+    setQrError("");
+  }
+  function handleCancelEditQr() {
+    setEditingQrId(null);
+    setQrError("");
+  }
+  function handleSaveQr(e) {
+    e.preventDefault();
+    const label = formLabel.trim();
+    const text = formText.trim();
+    if (!label) {
+      setQrError("Please enter a label for this quick reply.");
+      return;
+    }
+    if (!text) {
+      setQrError("Please enter the quick reply message.");
+      return;
+    }
+    if (editingQrId === "NEW") {
+      const newQr = { id: "qr-" + Date.now(), label, text };
+      persistQuickReplies([...quickReplies, newQr]);
+    } else {
+      persistQuickReplies(quickReplies.map((qr) => (qr.id || qr.label) === editingQrId ? { ...qr, label, text } : qr));
+    }
+    setEditingQrId(null);
+    setQrError("");
+  }
+  function handleDeleteQr(targetId) {
+    persistQuickReplies(quickReplies.filter((qr) => (qr.id || qr.label) !== targetId));
+  }
+  function handleResetQuickReplies() {
+    persistQuickReplies(DEFAULT_QUICK_REPLIES);
+    setEditingQrId(null);
+    setQrError("");
+  }
+  useEffect(() => {
+    if (!showQrModal) return;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setShowQrModal(false);
+        setEditingQrId(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showQrModal]);
   const listVersion = useRef(0), statusRef = useRef(status), retryConversation = useRef(() => {
   });
   statusRef.current = status;
@@ -1731,14 +1768,94 @@ function MessagesView({ api, user }) {
     }
   }
   const filtered = threads.filter((row) => `${row.customer_name} ${row.subject} ${row.rental_code || ""}`.toLowerCase().includes(search.toLowerCase()));
-  return /* @__PURE__ */ React.createElement("section", { className: "support-chat panel", "aria-label": "Customer rental support" }, /* @__PURE__ */ React.createElement("aside", { className: "support-inbox" }, /* @__PURE__ */ React.createElement("h2", null, "Customer inbox"), /* @__PURE__ */ React.createElement("label", null, "Search shown conversations", /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Customer or rental reference" })), /* @__PURE__ */ React.createElement("label", null, "Status", /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "All conversations"), /* @__PURE__ */ React.createElement("option", { value: "OPEN" }, "Open"), /* @__PURE__ */ React.createElement("option", { value: "RESOLVED" }, "Resolved"))), /* @__PURE__ */ React.createElement("div", { className: "support-thread-list" }, filtered.map((row) => /* @__PURE__ */ React.createElement("button", { key: row.id, className: `support-thread ${active === row.id ? "selected" : ""}`, onClick: () => setActive(row.id) }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, row.customer_name), row.unread_count > 0 && /* @__PURE__ */ React.createElement("b", { className: "support-unread" }, row.unread_count)), /* @__PURE__ */ React.createElement("span", null, row.subject), /* @__PURE__ */ React.createElement("small", null, row.rental_code || "General inquiry", " \xB7 ", row.status.toLowerCase()), /* @__PURE__ */ React.createElement("p", null, row.last_message || "No messages yet"), /* @__PURE__ */ React.createElement("time", null, when(row.updated_at))))), listError && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, listError, threads.length ? " Showing previously loaded conversations." : ""), /* @__PURE__ */ React.createElement("button", { type: "button", disabled: loading, onClick: () => loadThreads() }, "Try again")), !filtered.length && !listError && /* @__PURE__ */ React.createElement("p", { className: "support-muted", role: "status" }, loading ? "Loading conversations\u2026" : search ? "No conversations match your search. Try another name or rental reference." : "No conversations yet. Customer inquiries will appear here."), next && /* @__PURE__ */ React.createElement("button", { disabled: loading, onClick: () => loadThreads(next) }, loading ? "Loading\u2026" : "Load more conversations")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation" }, error && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, error), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => retryConversation.current() }, "Refresh conversation")), !active ? /* @__PURE__ */ React.createElement("div", { className: "support-empty" }, /* @__PURE__ */ React.createElement("h2", null, "Rental support"), /* @__PURE__ */ React.createElement("p", null, "Select a conversation to help a customer."), /* @__PURE__ */ React.createElement("p", null, "Replies are saved and customers receive an alert. Staff share this inbox.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("header", { className: "support-header" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", null, thread?.customer_name || "Loading conversation\u2026"), /* @__PURE__ */ React.createElement("p", null, thread?.subject, " ", thread?.rental_code && `\xB7 ${thread.rental_code}`), /* @__PURE__ */ React.createElement("small", null, synced ? `Last synced ${synced.toLocaleTimeString()}` : "Connecting\u2026")), thread && /* @__PURE__ */ React.createElement("button", { disabled: sending, onClick: changeStatus }, thread.status === "OPEN" ? "Resolve conversation" : "Reopen conversation")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation-body" }, /* @__PURE__ */ React.createElement("div", { className: "support-conversation-main" }, /* @__PURE__ */ React.createElement("div", { className: "support-messages", role: "log", "aria-label": "Messages", "aria-live": "polite", onScroll: (e) => {
+  return /* @__PURE__ */ React.createElement("section", { className: "support-chat panel", "aria-label": "Customer rental support" }, /* @__PURE__ */ React.createElement("aside", { className: "support-inbox" }, /* @__PURE__ */ React.createElement("h2", null, "Customer inbox"), /* @__PURE__ */ React.createElement("label", null, "Search shown conversations", /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Customer or rental reference" })), /* @__PURE__ */ React.createElement("label", null, "Status", /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "All conversations"), /* @__PURE__ */ React.createElement("option", { value: "OPEN" }, "Open"), /* @__PURE__ */ React.createElement("option", { value: "RESOLVED" }, "Resolved"))), /* @__PURE__ */ React.createElement("div", { className: "support-thread-list" }, filtered.map((row) => /* @__PURE__ */ React.createElement("button", { key: row.id, className: `support-thread ${active === row.id ? "selected" : ""}`, onClick: () => setActive(row.id) }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, row.customer_name), row.unread_count > 0 && /* @__PURE__ */ React.createElement("b", { className: "support-unread" }, row.unread_count)), /* @__PURE__ */ React.createElement("span", null, row.subject), /* @__PURE__ */ React.createElement("small", null, row.rental_code || "General inquiry", " \xB7 ", row.status.toLowerCase()), /* @__PURE__ */ React.createElement("p", null, row.last_message || "No messages yet"), /* @__PURE__ */ React.createElement("time", null, when(row.updated_at))))), listError && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, listError, threads.length ? " Showing previously loaded conversations." : ""), /* @__PURE__ */ React.createElement("button", { type: "button", disabled: loading, onClick: () => loadThreads() }, "Try again")), !filtered.length && !listError && /* @__PURE__ */ React.createElement("p", { className: "support-muted", role: "status" }, loading ? "Loading conversations\u2026" : search ? "No conversations match your search. Try another name or rental reference." : "No conversations yet. Customer inquiries will appear here."), next && /* @__PURE__ */ React.createElement("button", { disabled: loading, onClick: () => loadThreads(next) }, loading ? "Loading\u2026" : "Load more conversations")), /* @__PURE__ */ React.createElement("div", { className: "support-conversation" }, error && /* @__PURE__ */ React.createElement("div", { role: "alert", className: "support-error" }, /* @__PURE__ */ React.createElement("p", null, error), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => retryConversation.current() }, "Refresh conversation")), !active ? /* @__PURE__ */ React.createElement("div", { className: "support-empty" }, /* @__PURE__ */ React.createElement("h2", null, "Rental support"), /* @__PURE__ */ React.createElement("p", null, "Select a conversation to help a customer."), /* @__PURE__ */ React.createElement("p", null, "Replies are saved and customers receive an alert. Staff share this inbox.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("header", { className: "support-header" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", null, thread?.customer_name || "Loading conversation\u2026"), /* @__PURE__ */ React.createElement("p", null, thread?.subject, " ", thread?.rental_code && `\xB7 ${thread.rental_code}`), /* @__PURE__ */ React.createElement("small", null, synced ? `Last synced ${synced.toLocaleTimeString()}` : "Connecting\u2026")), thread && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: `support-thread-status-btn status-${thread.status.toLowerCase()}`,
+      disabled: sending,
+      onClick: changeStatus,
+      title: thread.status === "OPEN" ? "Mark conversation as resolved" : "Reopen this conversation"
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "status-btn-icon", "aria-hidden": "true" }, thread.status === "OPEN" ? "\u2713" : "\u21BA"),
+    thread.status === "OPEN" ? "Resolve conversation" : "Reopen conversation"
+  )), /* @__PURE__ */ React.createElement("div", { className: "support-conversation-body" }, /* @__PURE__ */ React.createElement("div", { className: "support-conversation-main" }, /* @__PURE__ */ React.createElement("div", { className: "support-messages", role: "log", "aria-label": "Messages", "aria-live": "polite", onScroll: (e) => {
     atBottom.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 80;
-  } }, older && /* @__PURE__ */ React.createElement("button", { onClick: loadOlder }, "Load earlier messages"), messages.map((message) => /* @__PURE__ */ React.createElement("article", { key: message.id, className: `support-bubble ${message.sender_role === "STAFF" ? "outgoing" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "support-bubble-header" }, /* @__PURE__ */ React.createElement("strong", null, message.sender_role === "STAFF" ? `${message.sender_name}${message.sender_id === user?.id ? " (you)" : ""}` : thread?.customer_name), /* @__PURE__ */ React.createElement("span", { className: `support-role-tag role-${message.sender_role.toLowerCase()}` }, message.sender_role === "STAFF" ? "Staff" : "Customer")), /* @__PURE__ */ React.createElement("p", null, message.text), /* @__PURE__ */ React.createElement("small", null, when(message.created_at), message.sender_role === "STAFF" ? ` \xB7 ${thread?.customer_read_seq >= message.seq ? "Read" : "Sent"}` : ""))), typing?.is_typing && /* @__PURE__ */ React.createElement("article", { className: "support-bubble support-typing-bubble", role: "status", "aria-label": `${typing.name} is typing` }, /* @__PURE__ */ React.createElement("div", { className: "typing-indicator-row" }, /* @__PURE__ */ React.createElement("span", { className: "typing-dots" }, /* @__PURE__ */ React.createElement("span", { className: "dot" }), /* @__PURE__ */ React.createElement("span", { className: "dot" }), /* @__PURE__ */ React.createElement("span", { className: "dot" })), /* @__PURE__ */ React.createElement("span", { className: "typing-label" }, /* @__PURE__ */ React.createElement("strong", null, typing.name), " is typing\u2026"))), !messages.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, error ? "Messages could not be updated. Your reply is kept below." : thread ? "No messages yet." : "Loading messages\u2026"), /* @__PURE__ */ React.createElement("div", { ref: bottom })), thread?.status === "RESOLVED" && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Resolved. Reopen to reply. A new customer message also reopens this conversation."), /* @__PURE__ */ React.createElement("form", { className: "support-composer", onSubmit: send }, /* @__PURE__ */ React.createElement("div", { className: "support-composer-header" }, /* @__PURE__ */ React.createElement("label", { htmlFor: "support-reply" }, "Reply to customer"), /* @__PURE__ */ React.createElement("div", { className: "support-quick-chips" }, QUICK_REPLIES.map((qr) => /* @__PURE__ */ React.createElement("button", { key: qr.label, type: "button", className: "quick-chip-btn", disabled: !thread || thread?.status === "RESOLVED", onClick: () => handleDraftChange(qr.text) }, qr.label)))), /* @__PURE__ */ React.createElement("textarea", { id: "support-reply", rows: "3", maxLength: 2e3, value: pending?.text ?? draft, disabled: !!pending || !thread || thread?.status === "RESOLVED", onKeyDown: (e) => {
+  } }, older && /* @__PURE__ */ React.createElement("button", { onClick: loadOlder }, "Load earlier messages"), messages.map((message) => /* @__PURE__ */ React.createElement("article", { key: message.id, className: `support-bubble ${message.sender_role === "STAFF" ? "outgoing" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "support-bubble-header" }, /* @__PURE__ */ React.createElement("strong", null, message.sender_role === "STAFF" ? `${message.sender_name}${message.sender_id === user?.id ? " (you)" : ""}` : thread?.customer_name), /* @__PURE__ */ React.createElement("span", { className: `support-role-tag role-${message.sender_role.toLowerCase()}` }, message.sender_role === "STAFF" ? "Staff" : "Customer")), /* @__PURE__ */ React.createElement("p", null, message.text), /* @__PURE__ */ React.createElement("small", null, when(message.created_at), message.sender_role === "STAFF" ? ` \xB7 ${thread?.customer_read_seq >= message.seq ? "Read" : "Sent"}` : ""))), typing?.is_typing && /* @__PURE__ */ React.createElement("article", { className: "support-bubble support-typing-bubble", role: "status", "aria-label": `${typing.name} is typing` }, /* @__PURE__ */ React.createElement("div", { className: "typing-indicator-row" }, /* @__PURE__ */ React.createElement("span", { className: "typing-dots" }, /* @__PURE__ */ React.createElement("span", { className: "dot" }), /* @__PURE__ */ React.createElement("span", { className: "dot" }), /* @__PURE__ */ React.createElement("span", { className: "dot" })), /* @__PURE__ */ React.createElement("span", { className: "typing-label" }, /* @__PURE__ */ React.createElement("strong", null, typing.name), " is typing\u2026"))), !messages.length && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, error ? "Messages could not be updated. Your reply is kept below." : thread ? "No messages yet." : "Loading messages\u2026"), /* @__PURE__ */ React.createElement("div", { ref: bottom })), thread?.status === "RESOLVED" && /* @__PURE__ */ React.createElement("p", { className: "support-muted" }, "Resolved. Reopen to reply. A new customer message also reopens this conversation."), /* @__PURE__ */ React.createElement("form", { className: "support-composer", onSubmit: send }, /* @__PURE__ */ React.createElement("div", { className: "support-composer-header" }, /* @__PURE__ */ React.createElement("label", { htmlFor: "support-reply" }, "Reply to customer"), /* @__PURE__ */ React.createElement("div", { className: "support-quick-chips" }, quickReplies.map((qr) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: qr.id || qr.label,
+      type: "button",
+      className: "quick-chip-btn",
+      disabled: !thread || thread?.status === "RESOLVED",
+      onClick: () => handleDraftChange(qr.text),
+      title: qr.text
+    },
+    qr.label
+  )), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "quick-chip-btn manage-qr-btn",
+      onClick: () => {
+        setEditingQrId(null);
+        setQrError("");
+        setShowQrModal(true);
+      },
+      title: "Add, edit, or customize quick replies"
+    },
+    "\u2699\uFE0F Customize"
+  ))), /* @__PURE__ */ React.createElement("textarea", { id: "support-reply", rows: "3", maxLength: 2e3, value: pending?.text ?? draft, disabled: !!pending || !thread || thread?.status === "RESOLVED", onKeyDown: (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (!sending && !pending && (pending?.text ?? draft).trim()) send(e);
     }
-  }, onChange: (e) => handleDraftChange(e.target.value), placeholder: "Help with availability, pricing, or a rental\u2026 (Press Enter to send)" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("small", null, (pending?.text ?? draft).length, "/2000 \xB7 Press Enter to send, Shift+Enter for new line"), /* @__PURE__ */ React.createElement("button", { type: "submit", disabled: sending || !thread || thread.status === "RESOLVED" || !(pending?.text ?? draft).trim() }, sending ? "Sending\u2026" : pending ? "Retry message" : "Send reply")))), thread && /* @__PURE__ */ React.createElement("aside", { className: "support-context-rail" }, /* @__PURE__ */ React.createElement("div", { className: "context-card-header" }, /* @__PURE__ */ React.createElement("div", { className: "context-avatar" }, initials2(thread.customer_name)), /* @__PURE__ */ React.createElement("h3", null, thread.customer_name), /* @__PURE__ */ React.createElement("span", { className: `context-status-pill status-${thread.status.toLowerCase()}` }, thread.status)), /* @__PURE__ */ React.createElement("div", { className: "context-details-group" }, /* @__PURE__ */ React.createElement("h4", null, "Inquiry Summary"), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Type"), /* @__PURE__ */ React.createElement("strong", null, thread.subject)), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Rental Reference"), /* @__PURE__ */ React.createElement("strong", null, thread.rental_code || "General inquiry")), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Last Updated"), /* @__PURE__ */ React.createElement("time", null, when(thread.updated_at)))), /* @__PURE__ */ React.createElement("div", { className: "context-details-group" }, /* @__PURE__ */ React.createElement("h4", null, "Operator Tips"), /* @__PURE__ */ React.createElement("p", { className: "context-tip-text" }, "Customer views replies live in the mobile app. Double-check equipment availability, condition, and valid ID before confirming pickup.")))))));
+  }, onChange: (e) => handleDraftChange(e.target.value), placeholder: "Help with availability, pricing, or a rental\u2026 (Press Enter to send)" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("small", null, (pending?.text ?? draft).length, "/2000 \xB7 Press Enter to send, Shift+Enter for new line"), /* @__PURE__ */ React.createElement("button", { type: "submit", disabled: sending || !thread || thread.status === "RESOLVED" || !(pending?.text ?? draft).trim() }, sending ? "Sending\u2026" : pending ? "Retry message" : "Send reply")))), thread && /* @__PURE__ */ React.createElement("aside", { className: "support-context-rail" }, /* @__PURE__ */ React.createElement("div", { className: "context-card-header" }, /* @__PURE__ */ React.createElement("div", { className: "context-avatar" }, initials2(thread.customer_name)), /* @__PURE__ */ React.createElement("h3", null, thread.customer_name), /* @__PURE__ */ React.createElement("span", { className: `context-status-pill status-${thread.status.toLowerCase()}` }, thread.status)), /* @__PURE__ */ React.createElement("div", { className: "context-details-group" }, /* @__PURE__ */ React.createElement("h4", null, "Inquiry Summary"), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Type"), /* @__PURE__ */ React.createElement("strong", null, thread.subject)), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Rental Reference"), /* @__PURE__ */ React.createElement("strong", null, thread.rental_code || "General inquiry")), /* @__PURE__ */ React.createElement("div", { className: "context-row" }, /* @__PURE__ */ React.createElement("span", null, "Last Updated"), /* @__PURE__ */ React.createElement("time", null, when(thread.updated_at)))), /* @__PURE__ */ React.createElement("div", { className: "context-details-group" }, /* @__PURE__ */ React.createElement("h4", null, "Operator Tips"), /* @__PURE__ */ React.createElement("p", { className: "context-tip-text" }, "Customer views replies live in the mobile app. Double-check equipment availability, condition, and valid ID before confirming pickup.")))))), showQrModal && /* @__PURE__ */ React.createElement("div", { className: "qr-modal-overlay", onClick: () => {
+    setShowQrModal(false);
+    setEditingQrId(null);
+  } }, /* @__PURE__ */ React.createElement("div", { className: "qr-modal-window", onClick: (e) => e.stopPropagation(), role: "dialog", "aria-modal": "true", "aria-labelledby": "qr-modal-title" }, /* @__PURE__ */ React.createElement("div", { className: "qr-modal-header" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", { id: "qr-modal-title" }, "Customize Quick Replies"), /* @__PURE__ */ React.createElement("p", { className: "qr-modal-subtitle" }, "Add or edit canned response snippets for faster customer support.")), /* @__PURE__ */ React.createElement("button", { type: "button", className: "icon-button qr-modal-close", onClick: () => {
+    setShowQrModal(false);
+    setEditingQrId(null);
+  }, "aria-label": "Close dialog" }, "\u2715")), editingQrId ? /* @__PURE__ */ React.createElement("form", { className: "qr-edit-form", onSubmit: handleSaveQr }, /* @__PURE__ */ React.createElement("div", { className: "qr-form-header" }, /* @__PURE__ */ React.createElement("h4", null, editingQrId === "NEW" ? "+ Add New Quick Reply" : "Edit Quick Reply")), qrError && /* @__PURE__ */ React.createElement("div", { className: "qr-form-error", role: "alert" }, qrError), /* @__PURE__ */ React.createElement("label", { className: "qr-field-label" }, /* @__PURE__ */ React.createElement("span", null, "Button / Chip Label"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      required: true,
+      maxLength: 40,
+      placeholder: "e.g. \u{1F4B3} GCash Payment, \u{1F4CD} Delivery Info",
+      value: formLabel,
+      onChange: (e) => setFormLabel(e.target.value)
+    }
+  ), /* @__PURE__ */ React.createElement("small", null, "Short name shown on the chip above the reply box.")), /* @__PURE__ */ React.createElement("label", { className: "qr-field-label" }, /* @__PURE__ */ React.createElement("span", null, "Quick Reply Message"), /* @__PURE__ */ React.createElement(
+    "textarea",
+    {
+      required: true,
+      rows: 4,
+      maxLength: 1500,
+      placeholder: "The message that will be placed into the composer when clicked...",
+      value: formText,
+      onChange: (e) => setFormText(e.target.value)
+    }
+  ), /* @__PURE__ */ React.createElement("small", null, formText.length, "/1500 characters")), /* @__PURE__ */ React.createElement("div", { className: "qr-form-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", onClick: handleCancelEditQr }, "Cancel"), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "primary" }, editingQrId === "NEW" ? "Add Quick Reply" : "Save Changes"))) : /* @__PURE__ */ React.createElement("div", { className: "qr-manager-body" }, /* @__PURE__ */ React.createElement("div", { className: "qr-items-list" }, quickReplies.length === 0 ? /* @__PURE__ */ React.createElement("p", { className: "qr-empty-notice" }, 'No quick replies yet. Click "+ Add Quick Reply" below or reset to defaults.') : quickReplies.map((qr) => /* @__PURE__ */ React.createElement("div", { key: qr.id || qr.label, className: "qr-card-item" }, /* @__PURE__ */ React.createElement("div", { className: "qr-card-content" }, /* @__PURE__ */ React.createElement("span", { className: "qr-chip-preview" }, qr.label), /* @__PURE__ */ React.createElement("p", { className: "qr-card-text" }, qr.text)), /* @__PURE__ */ React.createElement("div", { className: "qr-card-actions" }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "qr-btn-edit",
+      onClick: () => handleStartEditQr(qr),
+      title: "Edit this template"
+    },
+    "\u270F\uFE0F Edit"
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      className: "qr-btn-delete",
+      onClick: () => handleDeleteQr(qr.id || qr.label),
+      title: "Delete this template",
+      "aria-label": `Delete ${qr.label}`
+    },
+    "\u{1F5D1}\uFE0F"
+  ))))), /* @__PURE__ */ React.createElement("div", { className: "qr-manager-footer" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "text-button qr-reset-link", onClick: handleResetQuickReplies }, "Reset to defaults"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "primary qr-create-btn", onClick: handleStartAddQr }, "+ Add Quick Reply"))))));
 }
 
 // src/react/WorkspaceStatus.jsx
@@ -2375,15 +2492,18 @@ function WorkspaceShell({
           renderGroupLinks(group)
         )
       );
-    })),
-    /* @__PURE__ */ React.createElement("div", { className: "sidebar-bottom" }, /* @__PURE__ */ React.createElement(
+    }), /* @__PURE__ */ React.createElement("div", { className: "nav-divider", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement(
       "button",
       {
         "data-page": "Settings",
-        className: page === "Settings" ? "active" : "",
+        className: `nav-root${page === "Settings" ? " active" : ""}`,
         "aria-label": "Settings",
         title: "Settings",
         "aria-current": page === "Settings" ? "page" : void 0,
+        onPointerEnter: () => queuePagePrefetch("Settings"),
+        onPointerLeave: cancelPagePrefetch,
+        onFocus: () => queuePagePrefetch("Settings"),
+        onBlur: cancelPagePrefetch,
         onClick: (e) => {
           e.preventDefault();
           setMobileDrawerOpen(false);
@@ -2397,6 +2517,8 @@ function WorkspaceShell({
       "button",
       {
         id: "logout",
+        type: "button",
+        className: "nav-root",
         "aria-label": "Logout",
         title: "Logout",
         onClick: () => {
@@ -2407,7 +2529,8 @@ function WorkspaceShell({
       /* @__PURE__ */ React.createElement("span", { className: "nav-icon", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: "out" })),
       /* @__PURE__ */ React.createElement("span", { className: "sidebar-label" }, "Logout"),
       /* @__PURE__ */ React.createElement("span", { className: "nav-tooltip", "aria-hidden": "true" }, "Logout")
-    ), /* @__PURE__ */ React.createElement(
+    )),
+    /* @__PURE__ */ React.createElement("div", { className: "sidebar-bottom" }, /* @__PURE__ */ React.createElement(
       "div",
       {
         className: "operator",

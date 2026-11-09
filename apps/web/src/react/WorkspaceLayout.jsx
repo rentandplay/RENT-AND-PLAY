@@ -708,15 +708,18 @@ export function WorkspaceShell({
                 </section>
               );
             })}
-          </nav>
+            <div className="nav-divider" aria-hidden="true" />
 
-          <div className="sidebar-bottom">
             <button
               data-page="Settings"
-              className={page === 'Settings' ? 'active' : ''}
+              className={`nav-root${page === 'Settings' ? ' active' : ''}`}
               aria-label="Settings"
               title="Settings"
               aria-current={page === 'Settings' ? 'page' : undefined}
+              onPointerEnter={() => queuePagePrefetch('Settings')}
+              onPointerLeave={cancelPagePrefetch}
+              onFocus={() => queuePagePrefetch('Settings')}
+              onBlur={cancelPagePrefetch}
               onClick={e => {
                 e.preventDefault();
                 setMobileDrawerOpen(false);
@@ -731,6 +734,8 @@ export function WorkspaceShell({
             </button>
             <button
               id="logout"
+              type="button"
+              className="nav-root"
               aria-label="Logout"
               title="Logout"
               onClick={() => {
@@ -744,6 +749,9 @@ export function WorkspaceShell({
               <span className="sidebar-label">Logout</span>
               <span className="nav-tooltip" aria-hidden="true">Logout</span>
             </button>
+          </nav>
+
+          <div className="sidebar-bottom">
             <div
               className="operator"
               data-page="Profile"

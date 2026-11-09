@@ -25,10 +25,10 @@ test('display models share collection reads, and saved equipment invalidates all
   const fixture = countedDatabase({ item_categories: { sports: { name: 'Sports equipment', category_code: 'CAT-001' } }, users: { admin: { full_name: 'Admin', account_code: 'USER-001', role: 'ADMIN', is_active: true } } });
   const services = createFirebaseServices({ db: fixture.db });
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 20); // Cached displays, bounded availability queries, daily summary, financial_daily and deadline reads.
+  assert.equal(fixture.reads.length, 21); // Cached displays, bounded availability queries, daily summary, financial_daily and deadline reads.
   for (const name of ['items', 'item_categories', 'item_rates', 'rentals', 'customers', 'verification_requests', 'terminals']) assert.equal(fixture.reads.filter(read => read.label === name).length, 1);
   await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
-  assert.equal(fixture.reads.length, 20);
+  assert.equal(fixture.reads.length, 21);
   const created = await services.createItem('admin', { categoryId: 'sports', name: 'Basketball', condition: 'GOOD', rateType: 'HOURLY', rentalRate: 50, deposit: 100, latePenalty: 10 });
   const [dashboard, workspace, inventory] = await Promise.all([services.dashboard(), services.workspace('ADMIN'), services.inventoryList()]);
   assert.equal(dashboard.items[0].id, created.id); assert.equal(workspace.items[0].id, created.id); assert.equal(inventory.items[0].id, created.id);

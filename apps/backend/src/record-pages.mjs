@@ -55,5 +55,27 @@ export async function decoratedRecordPage(db,kind,options={}) {
   const items=[...new Set(page.records.map(row=>row.item_id).filter(Boolean))];
   const names=new Map(await Promise.all(items.map(async id=>{const doc=await db.collection('items').doc(id).get();return [id,doc.exists?doc.data():{}];})));
   page.records.forEach(row=>{const item=names.get(row.item_id)||{};row.item_name ||= item.name || 'Equipment history';row.item_code ||= item.item_code || '';});
+  if (kind === 'rentals' && options.includeVerification === 'true') {
+    const customerIds = [...new Set(page.records.map(row => row.customer_id).filter(Boolean))];
+    const customers = new Map(await Promise.all(customerIds.map(async id => {
+      const doc = await db.collection('customers').doc(String(id)).get();
+      return [id, doc.exists ? doc.data() : {}];
+    })));
+    const outcomes = new Map(), ids = page.records.map(row => row.id);
+    for (let start = 0; start < ids.length; start += 10) {
+      const attempts = await db.collection('verification_requests').where('rental_id', 'in', ids.slice(start, start + 10)).get();
+      for (const doc of attempts.docs) {
+        const request = doc.data(), statuses = outcomes.get(String(request.rental_id)) || new Set();
+        statuses.add(request.status); outcomes.set(String(request.rental_id), statuses);
+      }
+    }
+    for (const row of page.records) {
+      const customer = customers.get(row.customer_id) || {};
+      row.customer_name ||= customer.full_name || customer.name || '';
+      row.customer_phone ||= customer.phone || '';
+      row.customer_email ||= customer.email || '';
+      row.verification_outcomes = [...(outcomes.get(String(row.id)) || [])];
+    }
+  }
   return page;
 }

@@ -133,7 +133,7 @@ export function renderActiveSessionsList(sessions = [], { escape: e, formatDate 
   }
   return `<div class="active-sessions-list">${sessions.map(session => {
     const current = session.is_current === true;
-    return `<div class="active-session-row ${current ? 'is-current-session' : ''}" data-session-row="${e(session.id)}">
+    return `<div class="active-session-row ${current ? 'is-current is-current-session' : ''}" data-session-row="${e(session.id)}">
       <div class="active-session-info">
         <div class="active-session-header">
           <strong>${e(session.device_label || 'Web Browser')}</strong>

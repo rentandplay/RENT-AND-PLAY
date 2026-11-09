@@ -39,12 +39,12 @@
 // =============================================================================
 // 2. NETWORK & TERMINAL CONFIGURATION
 // =============================================================================
-const char* WIFI_SSID = "PLDTHOMEFIBR61930";
-const char* WIFI_PASSWORD = "PLDTWIFIwu5ft";
+const char* WIFI_SSID = "rnld_pstr";
+const char* WIFI_PASSWORD = "lalamove";
 
 // Backend API URL (Production cloud URL on Render):
-const char* API_BASE_URL = "https://rent-and-play.onrender.com/api";
-// For local testing on this PC: const char* API_BASE_URL = "http://192.168.1.7:3000/api";
+// const char* API_BASE_URL = "https://rent-and-play.onrender.com/api";
+const char* API_BASE_URL = "http://192.168.1.7:3000/api";
 
 // Terminal credentials provisioned in Supabase:
 const char* TERMINAL_ID = "TERM-01";
@@ -68,6 +68,8 @@ TerminalState currentState = STATE_CONNECTING_WIFI;
 
 // Current pending transaction data
 String currentRequestId = "";
+String lastAlertedRequestId = "";
+bool currentIsTest = false;
 String currentRentalCode = "";
 String currentItemName = "";
 String currentTransactionType = "";
@@ -80,6 +82,7 @@ const unsigned long POLL_INTERVAL_MS = 3000;
 
 // Button state with Hardware Interrupt support (Active LOW)
 volatile bool buttonTriggered = false;
+bool buttonArmed = true;
 unsigned long lastButtonPressTime = 0;
 
 void IRAM_ATTR handleButtonInterrupt() {
@@ -137,24 +140,25 @@ void soundAlert() {
 void soundSuccess() {
   digitalWrite(LED1_PIN, LOW);
   digitalWrite(LED2_PIN, HIGH);
-  // Melodic victory chime synced with Fairy Lights (C4, E4, G4, C5)
-  int melody[] = { 262, 330, 392, 523 };
-  int duration[] = { 150, 150, 150, 350 };
-  for (int i = 0; i < 4; i++) {
+  // Jingle Bells chorus, played by the passive buzzer. The active buzzer's
+  // fixed pitch stays off so it does not mask the melody.
+  const int melody[] = {
+    330, 330, 330, 330, 330, 330, 330, 392, 262, 294, 330,
+    349, 349, 349, 349, 349, 330, 330, 330, 330, 294, 294, 330, 294, 392
+  };
+  const int beats[] = {
+    1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 4,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2
+  };
+  digitalWrite(ACTIVE_BUZZER, LOW);
+  for (size_t i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
+    const int durationMs = beats[i] * 160;
     digitalWrite(FAIRY_LIGHT_PIN, HIGH);
-    digitalWrite(ACTIVE_BUZZER, HIGH);
-    tone(PASSIVE_BUZZER, melody[i], duration[i]);
-    delay(duration[i]);
-    digitalWrite(ACTIVE_BUZZER, LOW);
+    tone(PASSIVE_BUZZER, melody[i], durationMs);
+    delay(durationMs);
     noTone(PASSIVE_BUZZER);
     digitalWrite(FAIRY_LIGHT_PIN, LOW);
-    delay(70);
-  }
-  for (int k = 0; k < 2; k++) {
-    digitalWrite(FAIRY_LIGHT_PIN, HIGH);
-    delay(80);
-    digitalWrite(FAIRY_LIGHT_PIN, LOW);
-    delay(80);
+    delay(25);
   }
   digitalWrite(FAIRY_LIGHT_PIN, LOW);
 }
@@ -247,9 +251,8 @@ void showConnectingScreen() {
   display.setCursor(0, 0);
   display.println("RENT & PLAY TERMINAL");
   display.println("--------------------");
-  display.println("Connecting to Wi-Fi:");
-  display.println(WIFI_SSID);
-  display.println("\nPlease wait...");
+  display.println("Connecting...");
+  display.println("Please wait.");
   display.display();
 }
 
@@ -259,13 +262,12 @@ void showIdleScreen() {
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
   display.println("== RENT & PLAY ==");
-  display.println("Counter Kiosk Station");
+  display.println("Counter Terminal");
   display.println("--------------------");
   display.print("Terminal: ");
   display.println(TERMINAL_ID);
-  display.print("Wi-Fi IP: ");
-  display.println(WiFi.localIP());
-  display.println("Status: READY / IDLE");
+  display.println("Ready for requests");
+  display.println("Start in the app.");
   display.display();
 }
 
@@ -274,32 +276,31 @@ void showPendingScreen(const String& code, const String& type, const String& mod
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  if (code == "R-9999" || pin == "TEST" || itemName.indexOf("Test") >= 0) {
-    display.println("== HARDWARE TEST ==");
+  if (currentIsTest) {
+    display.println("== TERMINAL CHECK ==");
     display.println("--------------------");
-    display.println("LEDs: OK | FAIRY: OK");
-    display.println("* Twinkle Twinkle OK");
-    display.print("PIN: ");
-    display.println(pin);
-    display.println("[PRESS GPIO35 TO OK]");
+    display.println("Check lights & sound.");
+    display.println("Press button when");
+    display.println("you hear and see them.");
     display.display();
     return;
   }
   if (mode == "SHOP_DISPATCH") {
-    display.println("! RESORT DISPATCH !");
+    display.println("READY FOR DELIVERY");
   } else if (type == "RETURN") {
-    display.println("! RETURN INTAKE !");
+    display.println("CONFIRM RETURN");
   } else {
-    display.println("! COUNTER HANDOVER !");
+    display.println("CONFIRM HANDOVER");
   }
   display.println("--------------------");
   String cleanItem = itemName.length() > 20 ? itemName.substring(0, 20) : itemName;
   display.println(cleanItem.length() > 0 ? cleanItem : "Equipment Unit");
-  display.print("ID: ");
+  display.print("Ref: ");
   display.println(code);
-  display.print("PIN: ");
+  display.print("Code: ");
   display.println(pin);
-  display.println("[PRESS GPIO35 BUTTON]");
+  display.println("Match code in app.");
+  display.println("Then press button.");
   display.display();
 }
 
@@ -310,8 +311,8 @@ void showConfirmingScreen() {
   display.setCursor(0, 10);
   display.println("   CONFIRMING...    ");
   display.println("--------------------");
-  display.println("Sending confirmation");
-  display.println("to cloud database...");
+  display.println("Saving confirmation.");
+  display.println("Please wait...");
   display.display();
 }
 
@@ -320,13 +321,11 @@ void showSuccessScreen() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 5);
-  if (currentRentalCode == "R-9999" || currentVerificationCode == "TEST") {
-    display.println("  HARDWARE PASSED!  ");
+  if (currentIsTest) {
+    display.println("  CHECK CONFIRMED   ");
     display.println("====================");
-    display.println("OLED, LEDs & Fairy:OK");
-    display.println("Music & Buzzer: OK");
-    display.println("Button GPIO35: OK");
-    display.println("\nStatus: ALL VERIFIED");
+    display.println("Button received.");
+    display.println("Check complete.");
     display.display();
     return;
   }
@@ -346,15 +345,15 @@ void showSuccessScreen() {
   display.display();
 }
 
-void showErrorScreen(const String& errMessage) {
+void showErrorScreen(const String& errMessage, int code = 0) {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("   ! ERROR OCCURRED !");
+  display.println("CONNECTION / REQUEST");
   display.println("--------------------");
   display.println(errMessage);
-  display.println("\nRetrying idle state...");
+  if (code != 0) { display.print("Code: "); display.println(code); } else { display.println("Check status in app."); }
   display.display();
 }
 
@@ -391,11 +390,17 @@ void pollPendingRequests() {
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payload);
 
-    if (!error) {
+    if (!error && doc["requests"].is<JsonArray>()) {
       JsonArray requests = doc["requests"].as<JsonArray>();
       if (requests.size() > 0) {
         JsonObject req = requests[0];
         String incomingId = req["id"].as<String>();
+        if (incomingId.isEmpty() || !req["verification_code"].is<const char*>()) {
+          currentState = STATE_ERROR;
+          showErrorScreen("Please wait. Retrying.");
+          http.end();
+          return;
+        }
         bool isNewRequest = (incomingId != currentRequestId) || (currentState != STATE_PENDING_CONFIRMATION);
 
         currentRequestId = incomingId;
@@ -405,18 +410,23 @@ void pollPendingRequests() {
         currentTerminalMode = req["terminal_mode"] | (currentTransactionType == "RETURN" ? "RETURN" : "HANDOVER");
         currentVerificationCode = req["verification_code"] | "";
         currentInspectionRevision = req["inspection_revision"] | 0;
+        currentIsTest = req["is_test"] | false;
 
         currentState = STATE_PENDING_CONFIRMATION;
         digitalWrite(LED1_PIN, HIGH);
 
         if (isNewRequest) {
+          // Require a new press for this request, never an earlier/held press.
+          buttonTriggered = false;
+          buttonArmed = digitalRead(BUTTON_PIN) == HIGH;
           Serial.printf("[POLL] New pending request: %s (%s) mode=%s\n", currentRentalCode.c_str(), currentRequestId.c_str(), currentTerminalMode.c_str());
-          bool isTest = (currentRentalCode == "R-9999" || currentVerificationCode == "TEST" || currentItemName.indexOf("Test") >= 0);
           showPendingScreen(currentRentalCode, currentTransactionType, currentTerminalMode, currentItemName, currentVerificationCode);
-          if (isTest) {
-            soundHardwareTest();
-          } else {
-            soundAlert();
+          // Reconnects and failed polls may redraw the same request. Alert only
+          // once per request; a refresh alone must never trigger a sound.
+          if (incomingId != lastAlertedRequestId) {
+            lastAlertedRequestId = incomingId;
+            if (currentIsTest) soundHardwareTest();
+            else soundAlert();
           }
         }
       } else {
@@ -429,9 +439,18 @@ void pollPendingRequests() {
           showIdleScreen();
         }
       }
+    } else {
+      currentState = STATE_ERROR;
+      buttonTriggered = false;
+      digitalWrite(LED2_PIN, LOW);
+      showErrorScreen("Please wait. Retrying.");
     }
   } else {
     Serial.printf("[HTTP] Poll failed, code: %d\n", httpCode);
+    currentState = STATE_ERROR;
+    buttonTriggered = false;
+    digitalWrite(LED2_PIN, LOW);
+    showErrorScreen(httpCode == 401 || httpCode == 403 ? "Ask staff for help." : "Please wait. Retrying.", httpCode);
   }
   http.end();
 }
@@ -469,13 +488,19 @@ void postConfirmation() {
   serializeJson(bodyDoc, jsonBody);
 
   int httpCode = http.POST(jsonBody);
+  JsonDocument confirmation;
+  bool accepted = false;
   if (httpCode == HTTP_CODE_OK) {
+    DeserializationError error = deserializeJson(confirmation, http.getString());
+    accepted = !error && confirmation["status"] == "CONFIRMED" &&
+        confirmation["id"].as<String>() == currentRequestId;
+  }
+  if (accepted) {
     Serial.println("[HTTP] Confirmation succeeded!");
     currentState = STATE_SUCCESS;
     currentRequestId = "";
-    soundSuccess();
     showSuccessScreen();
-    delay(2500);
+    soundSuccess();
     digitalWrite(LED2_PIN, LOW);
     digitalWrite(FAIRY_LIGHT_PIN, LOW);
     currentState = STATE_IDLE;
@@ -487,10 +512,9 @@ void postConfirmation() {
     currentState = STATE_ERROR;
     currentRequestId = "";
     soundError();
-    showErrorScreen("Failed: HTTP " + String(httpCode));
+    showErrorScreen("Could not verify.");
     delay(2500);
-    currentState = STATE_IDLE;
-    showIdleScreen();
+    currentState = STATE_ERROR;
   }
   http.end();
 }
@@ -503,7 +527,7 @@ void setup() {
   delay(500);
   Serial.println("\n[BOOT] Rent & Play ESP32 Terminal Initializing...");
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, INPUT); // GPIO35 requires the external pull-up described above.
   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonInterrupt, FALLING);
   pinMode(ACTIVE_BUZZER, OUTPUT);
   pinMode(PASSIVE_BUZZER, OUTPUT);
@@ -522,6 +546,7 @@ void setup() {
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDRESS)) {
     Serial.println("[ERROR] SSD1306 OLED allocation failed. Check wiring!");
   } else {
+    display.setTextWrap(false); // Keep long item/reference text on its own row.
     display.clearDisplay();
     display.display();
   }
@@ -542,59 +567,61 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\n[WIFI] Connected! IP address: ");
     Serial.println(WiFi.localIP());
-    currentState = STATE_IDLE;
-    showIdleScreen();
     pollPendingRequests();
   } else {
     Serial.println("\n[WIFI] Failed to connect. Check SSID/Password.");
-    showErrorScreen("Wi-Fi Connection Failed!");
+    showErrorScreen("Check Wi-Fi network.");
   }
 }
 
 void loop() {
   // 1. Maintain Wi-Fi connection
   if (WiFi.status() != WL_CONNECTED) {
+    currentState = STATE_CONNECTING_WIFI;
+    buttonTriggered = false;
+    buttonArmed = false;
     showConnectingScreen();
     WiFi.reconnect();
     delay(1000);
     return;
   }
 
-  // 2. Poll backend: every 3s in IDLE; every 10s in PENDING to avoid network delays during button click
+  // 2. Handle an existing request's button before starting a network check.
   unsigned long now = millis();
-  // Poll every 3s in both IDLE and PENDING to keep terminal heartbeat fresh on web
-  unsigned long interval = POLL_INTERVAL_MS;
-  if (currentState == STATE_IDLE || currentState == STATE_PENDING_CONFIRMATION) {
-    if (now - lastPollTime >= interval) {
-      lastPollTime = now;
-      pollPendingRequests();
-    }
+  bool pinLow = digitalRead(BUTTON_PIN) == LOW;
+  // Interrupt noise by itself is not a physical press. Require the input to
+  // remain low through debounce before acting (especially on external-pull-up GPIO35).
+  if (buttonArmed && pinLow) {
+    delay(30);
+    pinLow = digitalRead(BUTTON_PIN) == LOW;
   }
-
-  // 3. Handle Physical Button (GPIO 35) via Hardware Interrupt OR direct pin check
-  bool isPressed = buttonTriggered || (digitalRead(BUTTON_PIN) == LOW);
+  bool isPressed = buttonArmed && pinLow;
   buttonTriggered = false; // Reset interrupt latch
+  if (!pinLow && !isPressed) buttonArmed = true;
 
   if (isPressed && (now - lastButtonPressTime > 250)) {
     lastButtonPressTime = now;
+    buttonArmed = false;
     Serial.println("[BUTTON] Physical click detected on GPIO 35!");
 
-    // Immediate audible feedback on click
-    digitalWrite(ACTIVE_BUZZER, HIGH);
-    tone(PASSIVE_BUZZER, 1200, 80);
-    delay(80);
-    digitalWrite(ACTIVE_BUZZER, LOW);
-    noTone(PASSIVE_BUZZER);
-
     if (currentState == STATE_PENDING_CONFIRMATION && currentRequestId.length() > 0) {
-      Serial.println("[BUTTON] Confirming pending verification request on cloud...");
+      Serial.println("[BUTTON] Confirming pending verification request...");
       digitalWrite(LED1_PIN, LOW);
-      digitalWrite(LED2_PIN, HIGH);
+      digitalWrite(LED2_PIN, LOW); // Green indicates a confirmed response, not a button press.
       digitalWrite(FAIRY_LIGHT_PIN, HIGH);
       postConfirmation();
     } else if (currentState == STATE_IDLE) {
       Serial.println("[BUTTON] Terminal is idle, manual polling triggered.");
       pollPendingRequests();
+    }
+  }
+
+  // 3. Refresh requests, including recovery from a lost connection or failed response.
+  if (currentState == STATE_IDLE || currentState == STATE_PENDING_CONFIRMATION ||
+      currentState == STATE_ERROR || currentState == STATE_CONNECTING_WIFI) {
+    if (millis() - lastPollTime >= POLL_INTERVAL_MS) {
+      pollPendingRequests();
+      lastPollTime = millis();
     }
   }
 

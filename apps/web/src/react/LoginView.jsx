@@ -287,7 +287,7 @@ export function LoginView({
       control.disabled = true;
     });
     button.setAttribute('aria-busy', 'true');
-    button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span> Logging in…';
+    button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span> Signing in…';
     setErrorMsg('');
     try {
       const result = await api('/auth/login', { method: 'POST', body: JSON.stringify(body) });

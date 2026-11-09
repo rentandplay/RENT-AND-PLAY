@@ -74,12 +74,12 @@
 .maintenance-inspection-result { padding: 18px; border: 1px solid color-mix(in srgb,#4eae84 40%,transparent); border-radius: 12px; background: color-mix(in srgb,#4eae84 7%,transparent); }
 .maintenance-inspection-result h3 { font-size: 13px; margin: 0 0 10px; }
 .maintenance-inspection-result p, .maintenance-inspection-result small { font-size: 12px; line-height: 1.7; }
-.maintenance-activity { display: grid; gap: 14px; list-style: none; margin: 0; padding: 0; }
-.maintenance-activity li { border-left: 2px solid var(--ui-border); padding-left: 15px; }
-.maintenance-activity li > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
-.maintenance-activity strong { font-size: 12px; }
+.maintenance-activity { display: flex; flex-direction: column; gap: 10px; list-style: none; margin: 0; padding: 0; border: none; }
+.maintenance-activity li { border: 1px solid var(--ui-border); border-radius: 10px; padding: 12px 16px; background: var(--ui-soft); }
+.maintenance-activity li > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; }
+.maintenance-activity strong { font-size: 13px; font-weight: 650; color: var(--ui-text); }
 .maintenance-activity small { font-size: 12px; color: var(--ui-muted); }
-.maintenance-activity p { margin: 8px 0 0; color: var(--ui-muted); }
+.maintenance-activity p { margin: 6px 0 0; color: var(--ui-muted); line-height: 1.5; }
 .maintenance-photos, .maintenance-related, .maintenance-detail-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .maintenance-detail-actions { border-top: 1px solid var(--ui-border); padding-top: 20px; }
 .maintenance-retire { margin-left: auto; color: #c75b47 !important; }
@@ -448,7 +448,8 @@ nav button.active:before {
 
 .sidebar-bottom {
   margin-top: auto;
-  padding-top: 30px
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 
 .sidebar-bottom>button {
@@ -487,12 +488,14 @@ nav button.active:before {
 }
 
 .operator {
-  border-top: 1px solid var(--line);
-  padding: 19px 5px 0;
+  border-top: none;
+  padding: 6px 6px;
   display: flex;
   gap: 10px;
   align-items: center;
-  margin-top: 15px
+  margin-top: 0;
+  border-radius: 8px;
+  cursor: pointer;
 }
 
 .operator strong {
@@ -3742,9 +3745,10 @@ dd {
   display: grid;
   grid-template-columns: repeat(2, 32px);
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 4px;
   width: max-content;
-  margin-left: auto
+  margin-inline: auto;
 }
 
 .inv-quick-action {
@@ -7399,9 +7403,26 @@ html { scrollbar-gutter: stable; }
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
+  -ms-overflow-style: none;
 }
-.sidebar > nav::-webkit-scrollbar { display: none; }
-.sidebar-bottom { flex: 0 0 auto; margin-top: 0; }
+.sidebar > nav::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.sidebar .nav-divider {
+  height: 1px;
+  background: var(--ui-border, var(--line, #e5e9ef));
+  margin: 6px 6px;
+  opacity: 0.7;
+}
+[data-theme="dark"] .sidebar .nav-divider {
+  background: #314056;
+}
+.sidebar-collapsed .nav-divider {
+  margin: 6px 12px;
+}
+.sidebar-bottom { flex: 0 0 auto; margin-top: 0; padding-top: 10px; border-top: 1px solid var(--ui-border, var(--line)); }
 @media (max-width: 1180px) {
   .settings-business-container { grid-template-columns: 180px minmax(0, 1fr); gap: 22px; }
   .settings-workspace .settings-summary-groups { grid-template-columns: minmax(0, 1fr); gap: 24px; }
@@ -14628,7 +14649,8 @@ details[open] .chevron-arrow {
   background: #f8fafc;
 }
 
-.active-session-row.is-current {
+.active-session-row.is-current,
+.active-session-row.is-current-session {
   border-color: #a7f3d0;
   background: #ecfdf5;
 }
@@ -14640,7 +14662,15 @@ details[open] .chevron-arrow {
   gap: 4px;
 }
 
+.active-session-header {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .active-session-info strong,
+.active-session-header strong,
 .security-alert-head strong {
   display: inline-flex;
   align-items: center;
@@ -14657,17 +14687,48 @@ details[open] .chevron-arrow {
   margin: 0;
 }
 
+.session-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 2.5px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #e2e8f0;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  vertical-align: middle;
+}
+
 .current-session-badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 2.5px 10px;
   border-radius: 999px;
   background: #059669;
   color: #ffffff;
-  font-size: 12px;
+  border: 1px solid #047857;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  box-shadow: 0 1px 2px rgba(5, 150, 105, 0.25);
+  vertical-align: middle;
+}
+
+.current-session-badge::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #86efac;
 }
 
 .security-alert-item.severity-critical,
@@ -14872,14 +14933,22 @@ details[open] .chevron-arrow {
   border-color: #334155;
 }
 
-[data-theme="dark"] .active-session-row.is-current {
+[data-theme="dark"] .active-session-row.is-current,
+[data-theme="dark"] .active-session-row.is-current-session {
   background: rgba(5, 150, 105, 0.15);
   border-color: #059669;
 }
 
 [data-theme="dark"] .active-session-info strong,
+[data-theme="dark"] .active-session-header strong,
 [data-theme="dark"] .security-alert-head strong {
   color: #f8fafc;
+}
+
+[data-theme="dark"] .session-badge {
+  background: #1e293b;
+  color: #94a3b8;
+  border-color: #334155;
 }
 
 
@@ -15393,7 +15462,7 @@ details[open] .chevron-arrow {
 .ana-chart-legend button[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 /* Inspect values in place; keep the chart footer free of slider controls. */
 .ana-plot { position: relative; min-width: 0; border-radius: 10px; }
-.ana-plot > svg { width: 100%; height: auto; max-height: none; }
+.ana-plot > svg { width: 100%; height: clamp(220px, 24vw, 320px); max-height: 320px; }
 .ana-interactive:has([data-ana-source]) .ana-plot { max-width: 1100px; margin-inline: auto; }
 .analytics-workspace .ana-plot [data-ana-point]:focus { outline: none; }
 .analytics-workspace .ana-plot:focus-visible { outline: 2px solid var(--ana-accent); outline-offset: 4px; }
@@ -15472,42 +15541,147 @@ details[open] .chevron-arrow {
    Smooth Transitions & Micro-Interactions (Modern Dynamic Workspace)
    ========================================================================== */
 
-/* 1. Page and Module View Entrance */
-@keyframes smoothViewFadeIn {
+/* 1. Universal Page & Module View Entrance (Smooth Staggered Choreography) */
+@keyframes pageRise {
   from {
-    opacity: 0.88;
-    transform: translateY(3px);
+    opacity: 0;
+    transform: translateY(14px) scale(0.992);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
-.workspace-module-container > *,
-.dashboard-grid,
-.inv-collection,
-.inv-loading-stats,
-.settings-card,
+@keyframes pageRowIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Page Root Panels & Containers */
+.workspace-module-container > :is(.admin-module, .finance-workspace, .inventory-module, .customers-page, .maintenance-workspace, .rates-module, .verification-workspace, .analytics-workspace, .settings-workspace),
 .rates-overview,
-.transaction-stats,
-.verification-layout,
-.analytics-workspace {
-  animation: smoothViewFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: opacity, transform;
+.inv-collection,
+.finance-records,
+.settings-card {
+  animation: pageRise 460ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) backwards;
 }
 
-.dashboard-kpis,
-.module-stats,
-.rates-overview {
-  animation-duration: 0.14s;
+/* Top Metric / Stat KPI Cards (Staggered Wave across all pages) */
+:is(
+  .transaction-stats,
+  .finance-summary-grid,
+  .customer-metrics,
+  .maintenance-metrics,
+  .rates-overview,
+  .inv-loading-stats,
+  .inv-stats,
+  .analytics-workspace .ana-kpis,
+  .terminal-hardware-grid
+) > :is(article, .finance-metric, .customer-metric, .ana-kpi, .hardware-spec-chip, .inv-stat) {
+  animation: pageRise 440ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) backwards;
 }
 
-.dashboard-grid,
-.admin-module,
-.inv-collection {
-  animation-duration: 0.16s;
+:is(
+  .transaction-stats,
+  .finance-summary-grid,
+  .customer-metrics,
+  .maintenance-metrics,
+  .rates-overview,
+  .inv-loading-stats,
+  .inv-stats,
+  .analytics-workspace .ana-kpis,
+  .terminal-hardware-grid
+) > :is(article, .finance-metric, .customer-metric, .ana-kpi, .hardware-spec-chip, .inv-stat):nth-child(1) {
+  animation-delay: 60ms;
 }
+
+:is(
+  .transaction-stats,
+  .finance-summary-grid,
+  .customer-metrics,
+  .maintenance-metrics,
+  .rates-overview,
+  .inv-loading-stats,
+  .inv-stats,
+  .analytics-workspace .ana-kpis,
+  .terminal-hardware-grid
+) > :is(article, .finance-metric, .customer-metric, .ana-kpi, .hardware-spec-chip, .inv-stat):nth-child(2) {
+  animation-delay: 120ms;
+}
+
+:is(
+  .transaction-stats,
+  .finance-summary-grid,
+  .customer-metrics,
+  .maintenance-metrics,
+  .rates-overview,
+  .inv-loading-stats,
+  .inv-stats,
+  .analytics-workspace .ana-kpis,
+  .terminal-hardware-grid
+) > :is(article, .finance-metric, .customer-metric, .ana-kpi, .hardware-spec-chip, .inv-stat):nth-child(3) {
+  animation-delay: 180ms;
+}
+
+:is(
+  .transaction-stats,
+  .finance-summary-grid,
+  .customer-metrics,
+  .maintenance-metrics,
+  .rates-overview,
+  .inv-loading-stats,
+  .inv-stats,
+  .analytics-workspace .ana-kpis,
+  .terminal-hardware-grid
+) > :is(article, .finance-metric, .customer-metric, .ana-kpi, .hardware-spec-chip, .inv-stat):nth-child(4) {
+  animation-delay: 240ms;
+}
+
+/* Secondary Content Panels & Chart Sections */
+.finance-overview > .panel,
+.verification-queue-panel,
+.verification-history-panel,
+.terminal-station-card,
+.analytics-workspace .ana-panel,
+.analytics-workspace .ana-summary,
+.maintenance-workspace > .panel:not(.maintenance-metrics),
+.settings-workspace .settings-card:nth-of-type(2),
+.transaction-focus,
+.return-queue-panel,
+.history-insights {
+  animation: pageRise 440ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) backwards;
+  animation-delay: 260ms;
+}
+
+/* Main Tables & Listings */
+.admin-table,
+.finance-table,
+.inv-collection .admin-table,
+.customer-view-body,
+.maintenance-records {
+  animation: pageRise 460ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) backwards;
+  animation-delay: 280ms;
+}
+
+/* Table Rows Cascading Slide-In (Like Dashboard rental rows) */
+:is(.admin-table, .finance-table) tbody tr {
+  animation: pageRowIn 380ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) backwards;
+}
+:is(.admin-table, .finance-table) tbody tr:nth-child(1) { animation-delay: 300ms; }
+:is(.admin-table, .finance-table) tbody tr:nth-child(2) { animation-delay: 340ms; }
+:is(.admin-table, .finance-table) tbody tr:nth-child(3) { animation-delay: 380ms; }
+:is(.admin-table, .finance-table) tbody tr:nth-child(4) { animation-delay: 420ms; }
+:is(.admin-table, .finance-table) tbody tr:nth-child(5) { animation-delay: 460ms; }
+:is(.admin-table, .finance-table) tbody tr:nth-child(6) { animation-delay: 500ms; }
+:is(.admin-table, .finance-table) tbody tr:nth-child(7) { animation-delay: 540ms; }
+:is(.admin-table, .finance-table) tbody tr:nth-child(8) { animation-delay: 580ms; }
 
 /* 2. Stat and KPI Cards (Tactile Hover & Elevation) */
 .stat,
@@ -15863,9 +16037,9 @@ textarea,
 .rental-task-progress ol { display: flex; gap: 8px; padding: 0; margin: 0; list-style: none; }
 .rental-task-progress li { flex: 1; display: flex; flex-direction: column; gap: 7px; align-items: flex-start; color: var(--ui-muted, #6b7280); font-size: 11px; line-height: 1.4; border-top: 3px solid var(--ui-border, #e7e0d8); padding-top: 10px; }
 .rental-task-progress li > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; background: var(--ui-surface, white); border: 1px solid var(--ui-border, #e7e0d8); }
-.rental-task-progress li.is-current { color: var(--ui-accent, #b94d12); border-color: currentColor; }
-.rental-task-progress li.is-current > span { background: #b94d12; border-color: #b94d12; color: white; }
-.rental-task-progress li.is-done { color: #37775b; border-color: currentColor; }
+.rental-task-progress li.is-current { color: var(--ui-accent, #ea580c); border-color: currentColor; }
+.rental-task-progress li.is-current > span { background: #ea580c; border-color: #ea580c; color: white; }
+.rental-task-progress li.is-done { color: #16a34a; border-color: currentColor; }
 .rental-task-progress p { font-size: 12px; line-height: 1.5; margin: 12px 0 0; color: var(--ui-muted, #6b7280); }
 .transaction-record-modal > .rental-task-progress { margin: 16px 20px; }
 .rental-release-footer .form-actions { min-width: 0; flex-shrink: 1; flex-wrap: wrap; justify-content: flex-end; }
@@ -15905,9 +16079,9 @@ textarea,
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   grid-template-areas:
-    "rentals collections"
-    "revenue categories"
-    "analytics terminal";
+    "rentals terminal"
+    "revenue collections"
+    "analytics categories";
   gap: 22px;
   align-items: stretch;
 }
@@ -16275,11 +16449,11 @@ textarea,
     grid-template-columns: 1fr;
     grid-template-areas:
       "rentals"
-      "collections"
+      "terminal"
       "revenue"
-      "categories"
+      "collections"
       "analytics"
-      "terminal";
+      "categories";
   }
 }
 @media (max-width: 760px) {
@@ -16343,11 +16517,11 @@ textarea,
 .dashboard-workspace .stats > .stat:nth-child(3) { animation-delay: 280ms; }
 .dashboard-workspace .stats > .stat:nth-child(4) { animation-delay: 340ms; }
 .dashboard-workspace .rental-panel { animation-delay: 360ms; }
-.dashboard-workspace .collections-panel { animation-delay: 420ms; }
+.dashboard-workspace .terminal-panel { animation-delay: 420ms; }
 .dashboard-workspace .revenue-panel { animation-delay: 480ms; }
-.dashboard-workspace .category-panel { animation-delay: 510ms; }
+.dashboard-workspace .collections-panel { animation-delay: 510ms; }
 .dashboard-workspace .analytics-pulse-panel { animation-delay: 540ms; }
-.dashboard-workspace .terminal-panel { animation-delay: 570ms; }
+.dashboard-workspace .category-panel { animation-delay: 570ms; }
 .dashboard-workspace .terminal-panel { animation-delay: 540ms; }
 .dashboard-workspace .category-panel { animation-delay: 600ms; }
 .dashboard-workspace .rental-panel tbody tr.record-link-row { animation: dashRowIn 460ms var(--ease-out) backwards; animation-delay: 520ms; }
@@ -16618,3 +16792,488 @@ textarea,
   .dashboard-workspace .stat:hover,
   .dashboard-workspace .command-bar-btn:hover { transform: none; }
 }
+
+
+/* ==========================================================================
+   Decision Intelligence & Multi-Model Forecast Benchmarking UI
+   ========================================================================== */
+
+/* Top-level Decision Intelligence tabs */
+.ana-tab-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.ana-tab[aria-selected="true"] .ana-tab-step {
+  background: #ffedd5;
+  color: #c2410c;
+}
+.ana-tab-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: #f1f5f9;
+  color: #64748b;
+  margin-top: 6px;
+  width: fit-content;
+}
+.ana-tab[aria-selected="true"] .ana-tab-pill {
+  background: #fff7ed;
+  color: #ea580c;
+  border: 1px solid #fed7aa;
+}
+
+/* KPI Sparklines */
+.ana-kpi-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ana-sparkline {
+  width: 78px;
+  height: 26px;
+  flex-shrink: 0;
+  overflow: visible;
+  opacity: 0.92;
+}
+
+/* Forecast Model Switcher & Controls */
+.ana-forecast-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.ana-model-switcher {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 3px;
+  border-radius: 10px;
+}
+.ana-model-switcher button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 7px;
+}
+.ana-best-fit-dot {
+  color: #d97706;
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* Forecast Model Benchmarking Panel & Leaderboard */
+.ana-benchmark-panel {
+  border: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+.ana-benchmark-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ana-confidence-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+.ana-confidence-pill.high {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+.ana-confidence-pill.moderate {
+  background: #fffbeb;
+  color: #b45309;
+  border-color: #fde68a;
+}
+.ana-confidence-pill.low {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+.ana-benchmark-chart-wrap {
+  margin: 14px 0 18px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+.ana-rank-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+.ana-rank-badge.is-winner {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+.ana-table tr.ana-benchmark-winner td {
+  background: rgba(16, 185, 129, 0.045);
+}
+
+/* Dashboard Revenue Trajectory Summary Pills & Pulse Forecast Block */
+.revenue-summary-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.revenue-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 11.5px;
+}
+.revenue-pill small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.revenue-pill strong {
+  color: #0f172a;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.pulse-model-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+.pulse-forecast-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0;
+}
+.pulse-forecast-delta {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #0f766e;
+}
+
+/* Dark theme overrides for Decision Intelligence UI */
+[data-theme="dark"] .ana-tab-step,
+[data-theme="dark"] .ana-tab-pill {
+  background: #1e293b;
+  color: #94a3b8;
+  border-color: #334155;
+}
+[data-theme="dark"] .ana-tab[aria-selected="true"] .ana-tab-step,
+[data-theme="dark"] .ana-tab[aria-selected="true"] .ana-tab-pill {
+  background: #431407;
+  color: #fdba74;
+  border-color: #7c2d12;
+}
+[data-theme="dark"] .ana-model-switcher,
+[data-theme="dark"] .ana-benchmark-panel,
+[data-theme="dark"] .ana-benchmark-chart-wrap,
+[data-theme="dark"] .revenue-pill {
+  background: #141f2e;
+  border-color: #2b394b;
+}
+[data-theme="dark"] .revenue-pill small {
+  color: #94a3b8;
+}
+[data-theme="dark"] .revenue-pill strong {
+  color: #f1f5f9;
+}
+[data-theme="dark"] .ana-rank-badge {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+[data-theme="dark"] .ana-rank-badge.is-winner,
+[data-theme="dark"] .ana-confidence-pill.high {
+  background: #064e3b;
+  color: #6ee7b7;
+  border-color: #065f46;
+}
+[data-theme="dark"] .ana-confidence-pill.moderate {
+  background: #451a03;
+  color: #fcd34d;
+  border-color: #78350f;
+}
+[data-theme="dark"] .ana-confidence-pill.low {
+  background: #450a0a;
+  color: #fca5a5;
+  border-color: #7f1d1d;
+}
+[data-theme="dark"] .ana-table tr.ana-benchmark-winner td {
+  background: rgba(16, 185, 129, 0.1);
+}
+[data-theme="dark"] .pulse-model-badge {
+  background: #1e3a8a;
+  color: #93c5fd;
+  border-color: #1d4ed8;
+}
+[data-theme="dark"] .pulse-forecast-delta {
+  color: #5eead4;
+}
+
+
+/* Analytics: compact charts, clear controls and progressive model detail. */
+.analytics-workspace .ana-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 12px; border-bottom: 0; }
+.analytics-workspace .ana-tabs button { border: 1px solid var(--ui-border); border-radius: 12px; padding: 16px; background: var(--ui-surface); }
+.analytics-workspace .ana-tabs button[aria-selected="true"] { border-color: var(--ana-accent); background: var(--ui-surface); box-shadow: inset 0 -3px var(--ana-accent); }
+.analytics-workspace .ana-tab-name { font-size: 15px; }
+.analytics-workspace .ana-tab-pill { margin: 0 0 5px; padding: 0; border: 0; background: none; font-size: 10px; letter-spacing: .06em; }
+.analytics-workspace .ana-tab-body small { font-size: 12px; line-height: 1.5; }
+.analytics-workspace .ana-tab-arrow { display: none; }
+.analytics-workspace .ana-summary { padding: 22px 24px; }
+.analytics-workspace .ana-summary p { font-size: 13px; margin-bottom: 0; }
+.analytics-workspace .ana-panel-head h3 { font-size: 15px; }
+.analytics-workspace .ana-panel-head p, .analytics-workspace .ana-note { font-size: 12px; line-height: 1.65; }
+.analytics-workspace .ana-kpi > small { font-size: 12px; }
+.analytics-workspace .ana-plot > svg { height: clamp(220px, 24vw, 320px); max-height: 320px; }
+.analytics-workspace .ana-plot:not([tabindex]) > svg { height: 240px; }
+.analytics-workspace .ana-interactive:has([data-ana-source]) .ana-plot { max-width: none; }
+.ana-forecast-grid { display: grid; grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
+.ana-forecast-detail-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.ana-forecast-detail-grid > .panel { margin: 0; }
+.ana-forecast-toolbar { display: flex; gap: 16px; flex-wrap: wrap; padding: 14px 0 18px; border-top: 1px solid var(--ui-border); }
+.ana-control-group { display: grid; gap: 8px; min-width: 0; }
+.ana-control-group > span { color: var(--ui-muted); font-size: 11px; font-weight: 650; }
+.ana-control-group .ana-segment { display: flex; flex-wrap: wrap; width: fit-content; }
+.ana-model-switcher button { min-height: 32px; }
+.ana-forecast-evidence .ana-facts { margin-top: 16px; }
+.ana-forecast-evidence .ana-facts > div { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); padding: 12px 0; }
+.ana-forecast-evidence .ana-facts dd { font-weight: 600; }
+.ana-forecast-evidence > button { margin-top: 8px; white-space: normal; }
+.ana-forecast-mix .admin-table td { padding: 10px 8px; }
+.ana-forecast-mix .admin-table small { margin-top: 3px; }
+.ana-forecast-detail-grid .ana-disclosure-content { padding: 0 18px 16px; }
+.ana-benchmark-content .ana-note { margin-top: 16px; max-width: 115ch; }
+.ana-model-method { border-top: 1px solid var(--ui-border); padding: 12px 0; font-size: 12px; }
+.ana-model-method summary { cursor: pointer; font-weight: 650; line-height: 1.5; }
+.ana-model-method code { display: block; padding-top: 10px; white-space: normal; }
+.ana-model-method p { color: var(--ui-muted); line-height: 1.7; }
+.analytics-workspace .ana-priority-summary { display: flex; gap: 12px; flex-wrap: wrap; }
+.analytics-workspace .ana-priority-summary > span { background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 10px; padding: 12px 16px; flex: 1; }
+.analytics-workspace .ana-priority-summary b { font-size: 20px; }
+.analytics-workspace .ana-action-card { padding: 20px; }
+.analytics-workspace .ana-action-card h3 { line-height: 1.5; margin: 14px 0; }
+.analytics-workspace .ana-evidence p, .analytics-workspace .ana-next-step p { font-size: 13px; line-height: 1.7; }
+.analytics-workspace .ana-action-card.is-high { border-top: 3px solid #d85b49; }
+
+/* Analytics pulse: actual history on the left, current operations on the right. */
+.dashboard-workspace .analytics-pulse-panel { align-self: start; }
+.pulse-overview { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.pulse-outlook { min-width: 0; padding-right: 24px; border-right: 1px solid var(--ui-border); }
+.pulse-outlook-heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.pulse-outlook-heading > div { display: grid; gap: 6px; }
+.pulse-caption { color: var(--ui-muted); font-size: 11px; letter-spacing: .045em; text-transform: uppercase; font-weight: 650; }
+.pulse-outlook-heading strong { font-size: 28px; line-height: 1.2; color: var(--ui-text); letter-spacing: -.7px; font-variant-numeric: tabular-nums; }
+.pulse-estimate-note { margin: 6px 0 0; font-size: 12px; color: var(--ui-muted); }
+.pulse-history-chart { margin: 8px 0 0; }
+.pulse-history-chart > svg { width: 100%; height: 180px; display: block; overflow: visible; }
+.pulse-history-chart text { fill: var(--ui-muted); font-family: inherit; font-size: 11px; }
+.pulse-grid-line { stroke: var(--ui-border); stroke-width: 1; }
+.pulse-history-line { stroke: #709aca; stroke-width: 2.5; fill: none; stroke-linejoin: round; }
+.pulse-history-area { fill: #709aca; opacity: .1; }
+.pulse-history-point { fill: #709aca; }
+.pulse-estimate-line { stroke: var(--dash-accent, #ee8534); stroke-width: 2.5; stroke-dasharray: 5 4; }
+.pulse-estimate-point { fill: var(--dash-accent, #ee8534); }
+.pulse-history-chart circle:focus-visible { outline: none; stroke: var(--ui-text); stroke-width: 2; r: 5; }
+.pulse-history-chart figcaption { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ui-muted); font-size: 11px; }
+.pulse-history-chart figcaption > span { display: inline-flex; align-items: center; gap: 5px; }
+.pulse-history-chart figcaption i { display: inline-block; width: 12px; height: 2px; background: #709aca; }
+.pulse-history-chart figcaption i.is-estimate { background: var(--dash-accent, #ee8534); }
+.pulse-history-footnote { color: var(--ui-muted); font-size: 11px; line-height: 1.6; margin: 12px 0 0; }
+.pulse-no-history { display: grid; justify-items: center; align-content: center; gap: 8px; min-height: 180px; color: var(--ui-muted); font-size: 12px; }
+.pulse-no-history > svg { width: 24px; height: 24px; }
+.pulse-operations { min-width: 0; }
+.pulse-live-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 2px 0 14px; }
+.pulse-live-heading > span:last-child { color: var(--ui-muted); font-size: 11px; }
+.pulse-live-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pulse-live-grid > div { padding: 16px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-soft); min-width: 0; }
+.pulse-live-grid h4 { font-size: 12px; line-height: 1.5; margin: 0 0 10px; color: var(--ui-text); }
+.pulse-fleet-body { display: flex; gap: 12px; align-items: center; }
+.pulse-fleet-donut { position: relative; width: 82px; flex-shrink: 0; }
+.pulse-fleet-donut svg { display: block; width: 100%; height: auto; }
+.pulse-fleet-donut circle { stroke: var(--ui-border); stroke-width: 7; fill: none; }
+.pulse-fleet-donut circle.pulse-fleet-arc { stroke: var(--dash-accent, #ee8534); }
+.pulse-fleet-donut > strong { position: absolute; inset: 0; display: grid; place-items: center; font-size: 18px; color: var(--ui-text); }
+.pulse-fleet-body p { display: grid; gap: 5px; margin: 0; }
+.pulse-fleet-body p > strong { font-size: 20px; color: var(--ui-text); }
+.pulse-fleet-body small { font-size: 12px; color: var(--ui-muted); font-weight: 500; }
+.pulse-fleet-body p > span, .pulse-fleet-card > small { font-size: 11px; color: var(--ui-muted); line-height: 1.5; }
+.pulse-fleet-card > small { display: block; margin-top: 10px; }
+.pulse-channel-total { font-size: 24px; color: var(--ui-text); }
+.pulse-channel-total small { display: inline; color: var(--ui-muted); font-size: 11px; font-weight: 400; }
+.dashboard-workspace .pulse-channels-card .pulse-channel-bar { height: 8px; gap: 0; margin: 14px 0 12px; }
+.pulse-channel-unknown { background: #a293d4; }
+.pulse-channels-card dl { display: grid; gap: 8px; margin: 0; font-size: 11px; }
+.pulse-channels-card dl > div { display: flex; justify-content: space-between; gap: 8px; }
+.pulse-channels-card dt { display: flex; align-items: center; gap: 6px; color: var(--ui-muted); }
+.pulse-channels-card dd { margin: 0; color: var(--ui-text); font-weight: 650; }
+.pulse-action-strip { display: flex; gap: 12px; align-items: center; margin-top: 14px; padding: 14px; border: 1px solid var(--ui-border); border-radius: 12px; }
+.pulse-action-strip.has-alert { border-color: #d85b4940; background: #d85b4908; }
+.pulse-action-icon { background: var(--ui-soft); color: var(--dash-accent); display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0; }
+.pulse-action-icon svg { width: 16px; height: 16px; }
+.pulse-action-strip > div:nth-child(2) { display: grid; gap: 5px; flex: 1; min-width: 0; }
+.pulse-action-strip strong { font-size: 12px; line-height: 1.5; color: var(--ui-text); }
+.pulse-action-strip button { flex-shrink: 0; display: inline-flex; gap: 6px; align-items: center; padding: 8px 10px; font-size: 12px; }
+.pulse-action-strip button svg { width: 12px; height: 12px; }
+@media (max-width: 1250px) {
+  .ana-forecast-grid { grid-template-columns: minmax(0, 1.7fr) minmax(260px, 1fr); }
+  .pulse-overview { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 16px; }
+  .pulse-outlook { padding-right: 16px; }
+  .pulse-fleet-body { gap: 6px; flex-wrap: wrap; }
+  .pulse-live-grid > div { padding: 12px; }
+}
+@media (max-width: 900px) {
+  .ana-forecast-grid, .ana-forecast-detail-grid { grid-template-columns: 1fr; }
+  .pulse-overview { grid-template-columns: 1fr; }
+  .pulse-outlook { border-right: 0; border-bottom: 1px solid var(--ui-border); padding: 0 0 18px; }
+  .pulse-fleet-body { flex-wrap: nowrap; gap: 12px; }
+  .analytics-workspace .ana-tabs button { padding: 12px; gap: 8px; }
+  .analytics-workspace .ana-tab-body small { display: none; }
+}
+@media (max-width: 560px) {
+  .analytics-workspace .ana-tabs { gap: 6px; }
+  .analytics-workspace .ana-tabs button { padding: 10px 6px; }
+  .analytics-workspace .ana-tab-number, .analytics-workspace .ana-tab-pill { display: none; }
+  .analytics-workspace .ana-tab-name { font-size: 12px; }
+  .analytics-workspace .ana-summary, .analytics-workspace .ana-panel { padding: 16px; }
+  .analytics-workspace .ana-plot > svg { height: 220px; }
+  .ana-control-group .ana-segment { gap: 2px; }
+  .ana-model-switcher button { font-size: 11px; padding: 6px 8px; }
+  .dashboard-workspace .analytics-pulse-panel { padding: 18px 16px; }
+  .pulse-live-grid { grid-template-columns: 1fr; }
+  .pulse-action-strip { flex-wrap: wrap; }
+  .pulse-action-strip button { margin-left: 46px; }
+  .pulse-history-chart > svg { height: auto; }
+}
+
+.analytics-workspace .admin-table tr.ana-benchmark-winner td { background: color-mix(in srgb, #358d80 7%, var(--ui-surface)); }
+
+@media (max-width: 560px) {
+  .analytics-workspace .ana-tabs { overflow: visible; }
+  .analytics-workspace .ana-tab-body { min-width: 0; width: 100%; }
+  .analytics-workspace .ana-tab-name { font-size: 11px; white-space: normal; }
+  .analytics-workspace .ana-axis-label { font-size: 22px; }
+  .analytics-workspace .ana-bar-value { font-size: 20px; }
+  .pulse-history-chart text { font-size: 17px; }
+  .pulse-history-chart .pulse-last-complete-label { display: none; }
+}
+
+/* Keep planning tables inside their columns and show changed data immediately. */
+.ana-forecast-detail-grid .admin-table { min-width: 0; width: 100%; }
+.ana-forecast-detail-grid .admin-table th { white-space: normal; font-size: 10px; line-height: 1.5; padding: 10px 8px; }
+.ana-forecast-detail-grid .admin-table td { padding: 12px 8px; }
+.ana-forecast-detail-grid .admin-table td small { font-size: 10px; }
+
+
+.ana-demo-banner, .pulse-demo-note { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 14px 18px; border: 1px solid color-mix(in srgb, #709aca 40%, var(--ui-border)); background: color-mix(in srgb, #709aca 9%, var(--ui-surface)); border-radius: 12px; color: var(--ui-text); }
+.ana-demo-banner strong, .pulse-demo-note strong { font-size: 12px; }
+.ana-demo-banner p, .pulse-demo-note span { margin: 5px 0 0; font-size: 12px; line-height: 1.6; color: var(--ui-muted); }
+.ana-demo-banner > div { min-width: 0; }
+.ana-demo-banner button { white-space: nowrap; flex-shrink: 0; }
+.pulse-demo-note { justify-content: flex-start; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 20px; }
+.pulse-demo-note span { margin: 0; }
+@media(max-width:560px) { .ana-demo-banner { align-items: flex-start; flex-direction: column; gap: 10px; } }
+
+/* Motion and surfaces inspired by contemporary area and time-series charts. */
+.ana-modern-chart { --ana-chart-motion: 850ms; }
+.ana-modern-chart .ana-chart-tools { margin-bottom: 12px; min-height: 34px; }
+.ana-chart-hint { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; }
+.ana-chart-hint > i { width: 6px; height: 6px; border: 1px solid var(--ui-muted); border-radius: 50%; }
+.ana-chart-tool-actions { display: flex; align-items: center; gap: 8px; }
+.ana-chart-replay { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); color: var(--ui-muted); font-size: 11px; font-weight: 600; }
+.ana-chart .ana-chart-replay svg { width: 13px; height: 13px; max-height: none; overflow: visible; }
+.ana-chart-replay:hover { color: var(--ana-accent); border-color: var(--ana-accent); }
+.ana-chart-replay:disabled { opacity: .4; cursor: default; }
+.ana-modern-chart .ana-chart-tools select { padding: 7px 10px; font-size: 11px; border-radius: 8px; }
+.ana-modern-chart .ana-plot { border-radius: 10px; background: linear-gradient(180deg,color-mix(in srgb,var(--ui-soft) 50%,transparent),transparent 65%); }
+.ana-modern-chart .ana-axis-label { font-size: 11px; font-weight: 500; }
+.ana-modern-chart .ana-gridline { stroke: color-mix(in srgb,var(--ui-border) 75%,transparent); stroke-dasharray: 3 5; }
+.ana-region-label { fill: var(--ui-muted); font-family: inherit; font-size: 9px; font-weight: 700; letter-spacing: 1.1px; }
+.ana-region-label.is-forecast { fill: var(--ana-accent); }
+.ana-modern-chart .ana-forecast-divider { stroke: color-mix(in srgb,var(--ana-accent) 45%,var(--ui-border)); stroke-dasharray: 3 5; }
+.ana-variation-band { opacity: .11; }
+.ana-modern-chart .ana-chart-point { stroke: var(--ui-surface); stroke-width: 1.6; opacity: .7; }
+.ana-modern-chart .ana-chart-point.is-last { opacity: 1; stroke-width: 2.5; }
+.ana-cursor-dot { stroke: var(--ui-surface); stroke-width: 2.5; pointer-events: none; filter: drop-shadow(0 2px 4px #142b4a26); }
+.ana-cursor-dot[hidden] { display: none; }
+.ana-modern-chart .ana-chart-legend { padding-top: 10px; gap: 8px 20px; }
+.ana-modern-chart .ana-chart-legend button { color: var(--ui-muted); font-size: 11px; }
+.ana-modern-chart .ana-chart-legend button i { width: 18px; height: 3px; border-radius: 3px; }
+.ana-modern-chart .ana-tooltip { border-radius: 12px; border-color: color-mix(in srgb,var(--ui-border) 70%,var(--ui-text)); box-shadow: 0 10px 32px #162b4a24; background: color-mix(in srgb,var(--ui-surface) 95%,transparent); backdrop-filter: blur(12px); }
+.ana-modern-chart .ana-crosshair { stroke: var(--ui-muted); stroke-dasharray: 3 4; opacity: .6; }
+.ana-model-behavior { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 18px; color: var(--ui-muted); font-size: 11px; line-height: 1.6; }
+.ana-model-behavior > span { display: inline-flex; padding: 3px 8px; border-radius: 6px; background: color-mix(in srgb,var(--ana-accent) 10%,var(--ui-surface)); color: var(--ana-accent); font-weight: 650; }
+.ana-modern-chart.ana-motion-enter .ana-series-ink { animation: anaModernDraw var(--ana-chart-motion) cubic-bezier(.22,.7,.2,1) both; animation-delay: var(--ana-series-delay,0ms); }
+.ana-modern-chart.ana-motion-enter .ana-animated-bar { transform-box: fill-box; transform-origin: center bottom; animation: anaModernBar 650ms cubic-bezier(.16,1,.3,1) both; animation-delay: var(--ana-bar-delay,0ms); }
+.ana-modern-chart.ana-motion-enter .ana-bar-value { animation: anaModernLabel 500ms ease both; animation-delay: calc(var(--ana-bar-delay,0ms) + 170ms); }
+.ana-motion-morph .ana-chart-point { opacity: 0; }
+.ana-modern-bars .ana-bar-column.is-inspected .ana-animated-bar { filter: brightness(1.12); }
+.ana-modern-bars .ana-bar-column:focus { outline: none; }
+.ana-modern-bars .ana-bar-column:focus-visible .ana-animated-bar { stroke: var(--ui-text); stroke-width: 1.5; }
+@keyframes anaModernDraw { from { clip-path: inset(0 100% 0 0); opacity: .4; } to { clip-path: inset(0 0 0 0); opacity: 1; } }
+@keyframes anaModernBar { from { transform: scaleY(.02); } to { transform: scaleY(1); } }
+@keyframes anaModernLabel { from { opacity: 0; } to { opacity: 1; } }
+@media(prefers-reduced-motion:reduce) {
+  .ana-modern-chart *, .ana-modern-chart.ana-motion-enter .ana-series-ink, .ana-modern-chart.ana-motion-enter .ana-animated-bar { animation: none !important; transition: none !important; }
+}
+@media(max-width:560px) {
+  .analytics-workspace .ana-modern-chart .ana-axis-label { font-size: 10px; }
+  .analytics-workspace .ana-modern-chart .ana-bar-value { font-size: 11px; }
+  .ana-chart-hint { font-size: 10px; }
+  .ana-region-label { font-size: 8px; letter-spacing: .5px; }
+  .ana-chart-replay { padding: 6px 8px; }
+}
+
+.ana-modern-chart svg rect[rx], .ana-modern-chart svg .ana-chart-point { animation: none; }
+.ana-modern-chart.ana-motion-enter svg .ana-animated-bar { animation: anaModernBar 650ms cubic-bezier(.16,1,.3,1) both; animation-delay: var(--ana-bar-delay,0ms); }
+@media(prefers-reduced-motion:reduce) { .ana-modern-chart.ana-motion-enter svg .ana-animated-bar { animation: none !important; } }
+
+.analytics-workspace .ana-modern-chart .ana-chart-replay > svg { width: 13px; height: 13px; min-height: 0; max-height: 13px; flex-shrink: 0; }
+.analytics-workspace .ana-modern-chart .ana-chart-replay { min-height: 32px; height: 32px; }

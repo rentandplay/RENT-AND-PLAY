@@ -35,7 +35,7 @@ export function formatExcelCsvCell(value) {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? `"${value}"` : '""';
   }
-  const text = String(value);
+  const text = String(value).replaceAll('\u0000', '');
   const isPhoneWithLeadingZero = /^0\d{9,10}$/.test(text);
   const safe = isPhoneWithLeadingZero || /^[\s]*[=+@-]/.test(text) || /^[\t\r\n]/.test(text) ? `'${text}` : text;
   return `"${safe.replaceAll('"', '""')}"`;

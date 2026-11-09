@@ -1,7 +1,8 @@
+import { collectCsvRecords, serializeCsv, downloadCsv } from './csv-export.js';
 import { bindRecordLinks, recordAttrs } from './record-links.js';
 import { recordCode } from './record-codes.js';
 import { bindAccountValidation, nameError, emailError, phoneError, passwordError, passwordMatchError } from './account-validation.js';
-import { formatPhilippineDateTime, formatExcelCsvCell } from './date-time.js';
+import { formatPhilippineDateTime } from './date-time.js';
 
 const customerDate = value => {
   if (!value) return null;
@@ -18,7 +19,7 @@ export function customerActivity(customers = [], transactions = [], now = new Da
     byCustomer.get(key).push(row);
   }
   return customers.map(customer => {
-    const history = (byCustomer.get(String(customer.id)) || []).slice().sort((a, b) =>
+    const history = [...new Map([...(byCustomer.get(String(customer.id)) || []), ...(customer.auth_uid ? byCustomer.get(String(customer.auth_uid)) || [] : [])].map(row => [row.id || row.rental_code || row, row])).values()].sort((a, b) =>
       (customerDate(b.confirmed_rental_at || b.created_at)?.getTime() || 0) - (customerDate(a.confirmed_rental_at || a.created_at)?.getTime() || 0));
     const returned = row => row.status === 'COMPLETED' || Boolean(row.confirmed_return_at);
     const confirmed = history.filter(row => row.confirmed_rental_at || row.status === 'ACTIVE' || returned(row));
@@ -53,17 +54,16 @@ export function nextCustomerCode(customers = []) {
 }
 
 export function customersCsv(rows) {
-  const cell = formatExcelCsvCell;
-  const headings = ['Customer code', 'Full name', 'Email', 'Phone', 'Address', 'Status', 'Confirmed rentals', 'Completed rentals', 'Equipment out', 'Overdue rentals', 'Latest activity'];
-  return '\uFEFF' + [headings, ...rows.map(({ customer: c, total, returned, active, overdue, lastActivity }) =>
-    [c.customer_code, c.full_name, c.email, c.phone, c.address, c.is_active === false ? 'Archived' : 'Active', total, returned, active, overdue, formatPhilippineDateTime(lastActivity)])]
-    .map(row => row.map(cell).join(',')).join('\r\n');
+  const headings = ['Customer code', 'Full name', 'Email', 'Phone', 'Address', 'Status', 'Confirmed rentals', 'Completed rentals', 'Equipment out', 'Overdue rentals', 'Latest activity (Asia/Manila)', 'Customer created (Asia/Manila)'];
+  return serializeCsv([headings, ...rows.map(({ customer: c, total, returned, active, overdue, lastActivity }) =>
+    [c.customer_code, c.full_name, c.email, c.phone, c.address, c.is_active === false ? 'Archived' : 'Active', total, returned, active, overdue, formatPhilippineDateTime(lastActivity), formatPhilippineDateTime(c.created_at)])]);
 }
 
 
 export function createCustomerUI(h) {
   const { api, escape: e, showModal, modal, toast, formatDate, icon, model, refresh, transactionDetails, confirmAction, confirmSubmit } = h;
   const state = { status: 'all', activity: 'all', sort: 'name' };
+  let exportingCsv = false;
   let currentSearch = '', redraw = () => {}, helpers, detailVersion=0;
   const historyPages=new Map();
   const rows = () => customerActivity(model()?.customers, model()?.transactions);
@@ -97,7 +97,7 @@ export function createCustomerUI(h) {
       const archived = c.is_active === false;
       return `<tr ${recordAttrs('customer', c.id, c.full_name || 'customer')}><td><button type="button" class="customer-identity" data-customer-detail="${e(c.id)}" aria-label="View ${e(c.full_name)}">${avatar(c)}<span><strong>${e(c.full_name)}</strong><small>${e(c.customer_code)}${row.total > 1 ? '<span class="customer-returning">Returning</span>' : ''}</small></span></button></td><td><div class="customer-contact">${c.email ? `<span>${e(c.email)}</span>` : '<span class="customer-muted">No email added</span>'}<small>${e(c.phone || 'No phone added')}</small></div></td><td><strong>${row.total} rental${row.total === 1 ? '' : 's'}</strong><small class="${row.overdue ? 'customer-overdue-text' : row.active ? 'customer-out-text' : ''}">${row.overdue ? `${row.overdue} overdue · ${row.active} out` : row.active ? `${row.active} equipment out` : row.total || row.history.length ? 'No equipment out' : 'No rentals yet'}</small></td><td><strong>${row.lastActivity ? e(shortDate(row.lastActivity)) : '—'}</strong><small>${row.history[0] ? e(row.history[0].item_name || 'Equipment rental') : row.total ? 'View profile for rental history' : 'Ready for their first rental'}</small></td><td>${badge(c)}</td><td><div class="customer-row-actions"><button type="button" class="customer-view" data-customer-detail="${e(c.id)}" aria-label="View details for ${e(c.full_name)}">View ${icon('arrow')}</button>${archived ? `<button type="button" class="customer-restore" data-customer-restore="${e(c.id)}" aria-label="Restore ${e(c.full_name)}">Restore</button><button type="button" class="customer-delete" data-customer-delete="${e(c.id)}" aria-label="Permanently delete ${e(c.full_name)}">Delete</button>` : `<button type="button" class="customer-edit" data-customer-edit="${e(c.id)}" aria-label="Edit ${e(c.full_name)}">Edit</button>`}</div></td></tr>`;
     }).join('')) : `<div class="customer-empty"><span>${icon(all.length ? 'search' : 'users')}</span><h3>${all.length ? 'No customers match this view' : 'Your next great rental starts here'}</h3><p>${all.length ? 'Try another search or clear the filters to see your customers.' : 'Add your first customer to keep contact details and rental history in one place.'}</p><button type="button" class="${all.length ? 'secondary' : 'primary'}" ${all.length ? 'data-customer-clear' : 'data-customer-add'}>${all.length ? 'Clear filters' : '+ Add your first customer'}</button></div>`;
-    return `<div class="customers-page"><section class="customer-metrics" aria-label="Customer overview">${metric(paginated ? 'Customers on this page' : 'Total customers', counts.all, paginated ? 'Loaded directory records' : 'Everyone in your directory', 'users', 'blue')}${metric('Active customers', counts.active, paginated ? 'Active profiles on this page' : 'Ready for their next rental', 'users', 'green')}${metric('With equipment out', out, paginated ? 'Customers on this page with active rentals' : 'Customers with active rentals', 'box', 'amber')}${metric('Overdue customers', late, paginated ? 'Customers on this page needing a follow-up' : 'Customers needing a follow-up', 'clock', 'rose')}</section>${late ? `<aside class="customer-attention"><span>${icon('bell')}</span><div><strong>${late} customer${late === 1 ? ' has' : 's have'} overdue equipment</strong><p>Open their profile to check due dates and contact details.</p></div><button type="button" class="text-button" id="customer-show-overdue">View overdue ${icon('arrow')}</button></aside>` : ''}<section class="panel admin-module customer-directory"><div class="customer-directory-heading"><div><h3>Customer directory <span>${counts.all}</span></h3><p>The people behind every rental.</p></div><div class="customer-directory-toolbar"><label class="module-search">${icon('search')}<input id="module-search" value="${e(search)}" placeholder="Search name, code, or contact…" aria-label="Search customers"/></label><div class="customer-heading-actions"><button type="button" class="secondary" id="customer-export" ${records.length ? '' : 'disabled'}>${icon('download')} Export CSV</button><button type="button" class="primary" id="customer-add"><span aria-hidden="true">+</span> Add customer</button></div></div></div><div class="customer-filter-bar"><div class="customer-filters" role="group" aria-label="Customer status">${tabs}</div><div class="customer-selects"><label><span>Activity</span><select id="customer-activity" aria-label="Filter by rental activity">${option('all', 'All activity', state.activity)}${option('out', 'Equipment out', state.activity)}${option('overdue', 'Overdue', state.activity)}${option('new', 'No rental history', state.activity)}</select></label><label><span>Sort</span><select id="customer-sort" aria-label="Sort customers">${option('name', 'Name A–Z', state.sort)}${option('newest', 'Newest first', state.sort)}${option('rentals', 'Most rentals', state.sort)}</select></label></div></div>${isFiltered ? `<div class="customer-filter-summary"><span>${records.length} matching customer${records.length === 1 ? '' : 's'}</span><button type="button" class="text-button" data-customer-clear>Clear filters</button></div>` : ''}${body}${records.length ? view.footer : ''}</section><p class="customer-page-note">${icon('users')} Customer profiles keep their rental history together, even after archiving.</p></div>`;
+    return `<div class="customers-page"><section class="customer-metrics" aria-label="Customer overview">${metric(paginated ? 'Customers on this page' : 'Total customers', counts.all, paginated ? 'Loaded directory records' : 'Everyone in your directory', 'users', 'blue')}${metric('Active customers', counts.active, paginated ? 'Active profiles on this page' : 'Ready for their next rental', 'users', 'green')}${metric('With equipment out', out, paginated ? 'Customers on this page with active rentals' : 'Customers with active rentals', 'box', 'amber')}${metric('Overdue customers', late, paginated ? 'Customers on this page needing a follow-up' : 'Customers needing a follow-up', 'clock', 'rose')}</section>${late ? `<aside class="customer-attention"><span>${icon('bell')}</span><div><strong>${late} customer${late === 1 ? ' has' : 's have'} overdue equipment</strong><p>Open their profile to check due dates and contact details.</p></div><button type="button" class="text-button" id="customer-show-overdue">View overdue ${icon('arrow')}</button></aside>` : ''}<section class="panel admin-module customer-directory"><div class="customer-directory-heading"><div><h3>Customer directory <span>${counts.all}</span></h3><p>The people behind every rental.</p></div><div class="customer-directory-toolbar"><label class="module-search">${icon('search')}<input id="module-search" value="${e(search)}" placeholder="Search name, code, or contact…" aria-label="Search customers"/></label><div class="customer-heading-actions"><button type="button" class="secondary" id="customer-export" ${records.length || model()?.page_meta ? '' : 'disabled'} title="Export all matching customers across all pages">${icon('download')} Export CSV</button><button type="button" class="primary" id="customer-add"><span aria-hidden="true">+</span> Add customer</button></div></div></div><div class="customer-filter-bar"><div class="customer-filters" role="group" aria-label="Customer status">${tabs}</div><div class="customer-selects"><label><span>Activity</span><select id="customer-activity" aria-label="Filter by rental activity">${option('all', 'All activity', state.activity)}${option('out', 'Equipment out', state.activity)}${option('overdue', 'Overdue', state.activity)}${option('new', 'No rental history', state.activity)}</select></label><label><span>Sort</span><select id="customer-sort" aria-label="Sort customers">${option('name', 'Name A–Z', state.sort)}${option('newest', 'Newest first', state.sort)}${option('rentals', 'Most rentals', state.sort)}</select></label></div></div>${isFiltered ? `<div class="customer-filter-summary"><span>${records.length} matching customer${records.length === 1 ? '' : 's'}</span><button type="button" class="text-button" data-customer-clear>Clear filters</button></div>` : ''}${body}${records.length ? view.footer : ''}</section><p class="customer-page-note">${icon('users')} Customer profiles keep their rental history together, even after archiving.</p></div>`;
   }
 
   function form(customer = {}) {
@@ -287,12 +287,24 @@ export function createCustomerUI(h) {
     document.querySelector('#customer-sort')?.addEventListener('change', event => { state.sort = event.target.value; update(); });
     document.querySelectorAll('[data-customer-clear]').forEach(button => button.onclick = () => { Object.assign(state, { status: 'all', activity: 'all', sort: 'name' }); clearSearch(); update(); });
     document.querySelector('#customer-show-overdue')?.addEventListener('click', () => { state.status = 'all'; state.activity = 'overdue'; clearSearch(); update(); document.querySelector('#customer-activity')?.focus(); });
-    document.querySelector('#customer-export')?.addEventListener('click', () => {
-      const records = filtered();
-      if (!records.length) { toast('No customers in this view to export.'); return; }
-      const url = URL.createObjectURL(new Blob([customersCsv(records)], { type: 'text/csv;charset=utf-8' })), link = document.createElement('a');
-      link.href = url; link.download = 'rent-and-play-customers.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast(`${records.length} customer${records.length === 1 ? '' : 's'} exported from this view.`);
+    document.querySelector('#customer-export')?.addEventListener('click', async event => {
+      if (exportingCsv) return;
+      exportingCsv = true;
+      const button = event.currentTarget, label = button.innerHTML;
+      const filters = { ...state, search: currentSearch };
+      const scope = { ...h.exportScope?.(), status: { all: 'ALL', active: 'ACTIVE', archived: 'INACTIVE' }[filters.status] };
+      button.disabled = true;
+      try {
+        const [customers, rentals] = await Promise.all([
+          collectCsvRecords(api, 'customers', scope, count => { button.textContent = `Loading ${count} customers…`; }),
+          collectCsvRecords(api, 'rentals')
+        ]);
+        const records = filterCustomerRows(customerActivity(customers.map(({ rental_summary, ...customer }) => customer), rentals), filters);
+        if (!records.length) { toast('No customers match these filters.'); return; }
+        downloadCsv(customersCsv(records), 'customers');
+        toast(`${records.length} customers exported across all pages.`);
+      } catch (error) { toast(`Export failed. ${error.message}`); }
+      finally { exportingCsv = false; button.disabled = false; button.innerHTML = label; }
     });
   }
 

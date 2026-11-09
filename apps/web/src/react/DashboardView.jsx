@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from './react-shim.js';
+import { AnalyticsPulse } from './AnalyticsPulse.jsx';
 import {
   Icon,
   CategorySymbol,
@@ -213,37 +214,6 @@ export function DashboardView({
   const start = clampedPage * pageSize;
   const rows = allRows.slice(start, start + pageSize);
 
-  // Short analytics metrics
-  const totalActive = Number(s?.active || 0);
-  const totalAvailable = Number(s?.available || 0);
-  const totalUnits = totalActive + totalAvailable || (Array.isArray(data.items) ? data.items.length : 0) || 1;
-  const utilizationRate = Math.min(100, Math.round((totalActive / Math.max(1, totalUnits)) * 100));
-
-  const allRentalsList = Array.isArray(data.rentals) ? data.rentals : [];
-  const resortCount = allRentalsList.filter(
-    r => r.fulfillment_mode === 'DELIVERY' || Boolean(r.delivery_location)
-  ).length;
-  const counterCount = Math.max(0, totalActive - resortCount);
-  const resortShare = totalActive > 0 ? Math.round((resortCount / totalActive) * 100) : 50;
-  const counterShare = totalActive > 0 ? 100 - resortShare : 50;
-
-  const thisWeekRevenue = Array.isArray(data.revenue?.['This week'])
-    ? data.revenue['This week'].reduce((sum, n) => sum + Number(n || 0), 0)
-    : 0;
-  const lastWeekRevenue = Array.isArray(data.revenue?.['Last week'])
-    ? data.revenue['Last week'].reduce((sum, n) => sum + Number(n || 0), 0)
-    : 0;
-  const pulseDelta = lastWeekRevenue > 0
-    ? Math.round(((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue) * 100)
-    : (thisWeekRevenue > 0 ? 100 : 0);
-  const pulseDeltaText = lastWeekRevenue > 0
-    ? `${pulseDelta >= 0 ? '▲' : '▼'} ${Math.abs(pulseDelta)}% vs last wk`
-    : thisWeekRevenue > 0
-      ? '▲ Active momentum'
-      : 'Paced on track';
-
-  const overdueCount = Number(s?.overdue || 0);
-
   const openRental = id => {
     const r = data.rentals.find(item => String(item.id) === String(id));
     if (!r) return;
@@ -363,6 +333,7 @@ export function DashboardView({
   const average = total / (todayIndex >= 0 ? todayIndex + 1 : 7);
   const pct = value => Math.max(0, Math.min(100, ((Number(value) || 0) / scale) * 100));
   const activeDay = hoverDay ?? selectedDay;
+  const peakDayLabel = peak > 0 ? `${days[amounts.indexOf(peak)]} (${money(peak)})` : '—';
 
   const focusBar = index => {
     setSelectedDay(index);
@@ -695,7 +666,169 @@ export function DashboardView({
             </div>
           </section>
 
-          <section className="panel collections-panel" aria-label="Today's collections">
+          <section className="panel terminal-panel">
+            <div className="panel-title">
+              <h3>
+                <Icon name="chip" /> ESP32 terminal
+              </h3>
+            </div>
+            <div className="dashboard-terminal-status" data-online={Boolean(t?.online)}>
+              <span className="dashboard-status-dot" aria-hidden="true" />
+              <div><strong>{t ? (t.online ? 'Connected' : 'Offline') : 'Not configured'}</strong>
+                <span>{t ? `${t.name || 'Counter terminal'} · ${t.terminal_code}` : 'Set up a terminal to confirm counter handovers.'}</span></div>
+            </div>
+            <div className="terminal-meta">
+              <span>Awaiting confirmation</span>
+              <strong>{queue.length}</strong>
+            </div>
+            <p className="terminal-note">
+              Confirm counter handovers, delivery dispatches, and completed inspections.
+            </p>
+            <div className="dashboard-terminal-actions">
+              <button type="button" className="secondary" id="cmd-ping-terminal" disabled={!t || !api || testingTerminal} onClick={async () => {
+                setTestingTerminal(true);
+                try {
+                  await api('/terminals/test-ping', { method: 'POST', body: JSON.stringify({ terminalCode: t.terminal_code }) });
+                  toast?.('Test sent. Check the terminal for a response.');
+                } catch (err) { toast?.(err.message || 'The terminal test could not be sent.'); }
+                finally { setTestingTerminal(false); }
+              }}>{testingTerminal ? 'Sending test…' : 'Test terminal'}</button>
+            </div>
+            <button
+              className="secondary wide"
+              data-page="ESP32 terminal"
+              onClick={() => onNavigate('ESP32 terminal')}
+            >
+              Open terminal <Icon name="arrow" />
+            </button>
+          </section>
+
+<section className="panel revenue-panel">
+            <div className="panel-title">
+              <div>
+                <h3>Rental fees</h3>
+                <p>Recorded charges by confirmation date. Not cash collected.</p>
+              </div>
+              <div className="revenue-actions">
+                <select
+                  id="period"
+                  aria-label="Revenue period"
+                  value={period}
+                  onChange={e => { setSelectedDay(null); onPeriodChange(e.target.value); }}
+                >
+                  <option value="This week">This week</option>
+                  <option value="Last week">Last week</option>
+                </select>
+                <button
+                  className="text-button"
+                  data-page="Reports"
+                  onClick={() => onNavigate('Reports')}
+                >
+                  View analytics →
+                </button>
+              </div>
+            </div>
+            <div className="revenue-total">
+              <CountUp value={total} format={money} />
+              <span>Recorded rental charges</span>
+              {delta !== null ? (
+                <em className={`revenue-delta ${delta >= 0 ? 'up' : 'down'}`}>
+                  {delta >= 0 ? '▲' : '▼'} {Math.abs(delta)}% vs last full week · this week is partial
+                </em>
+              ) : null}
+              <div className="revenue-summary-pills">
+                <span className="revenue-pill" title={todayIndex >= 0 ? 'Average over calendar days so far, including partial today.' : 'Average over the full seven-day week.'}>
+                  <small>Daily avg</small>
+                  <strong>{money(Math.round(average))}</strong>
+                </span>
+                <span className="revenue-pill">
+                  <small>Peak day</small>
+                  <strong>{peakDayLabel}</strong>
+                </span>
+              </div>
+            </div>
+            <div className="chart-legend" aria-hidden="true">
+              <span><i className="swatch current" />{period}</span>
+              {compareKey ? <span><i className="swatch previous" />{compareKey}</span> : null}
+              {average > 0 ? <span><i className="swatch average" />Daily average</span> : null}
+            </div>
+            <div className="chart" ref={chartRef} onMouseLeave={() => setHoverDay(null)}>
+              <div className="axis">
+                {[1, 0.75, 0.5, 0.25, 0].map(x => (
+                  <span key={x}>{money(scale * x)}</span>
+                ))}
+              </div>
+              <div className="bars" role="group" aria-label="Rental fees by day. Use the arrow keys to move between days.">
+                <div className="chart-gridlines" aria-hidden="true">
+                  {[0, 0.25, 0.5, 0.75, 1].map(x => <span key={x} style={{ bottom: `${x * 100}%` }} />)}
+                </div>
+                {average > 0 ? (
+                  <div className="chart-avg-line" style={{ bottom: `${pct(average)}%` }} aria-hidden="true">
+                    <span>Avg {money(Math.round(average))}</span>
+                  </div>
+                ) : null}
+                {amounts.map((amount, i) => {
+                  const columnClass = [
+                    'bar-column',
+                    i === 0 ? 'is-first' : '',
+                    i === 6 ? 'is-last' : '',
+                    i === todayIndex ? 'is-today' : '',
+                    todayIndex >= 0 && i > todayIndex ? 'is-future' : '',
+                    activeDay === i ? 'is-active' : ''
+                  ].filter(Boolean).join(' ');
+                  return (
+                    <div className={columnClass} key={days[i]} style={{ '--i': i }}>
+                      <button
+                        type="button"
+                        className={`bar ${amount === peak && peak > 0 ? 'highlight' : ''}`}
+                        style={{ height: '100%' }}
+                        data-day={i}
+                        aria-label={`${days[i]}: ${money(amount)} in rental fees`}
+                        aria-pressed={selectedDay === i}
+                        onClick={() => setSelectedDay(selectedDay === i ? null : i)}
+                        onMouseEnter={() => setHoverDay(i)}
+                        onFocus={() => setHoverDay(i)}
+                        onBlur={() => setHoverDay(null)}
+                        onKeyDown={event => handleBarKeyDown(event, i)}
+                      >
+                        {compareKey ? <span className="dashboard-bar-ghost" style={{ height: `${pct(compare[i])}%` }} /> : null}
+                        <span className="dashboard-bar-fill" style={{ height: `${Math.max(2, pct(amount))}%` }} />
+                        {activeDay === i ? (
+                          <span className="chart-tooltip" aria-hidden="true" style={{ bottom: `calc(${Math.max(2, pct(amount))}% + 10px)` }}>
+                            <strong>{money(amount)}</strong>
+                            <small>
+                              {DAY_NAMES[i]}{i === todayIndex ? ' · today' : ''}
+                              {compareKey ? ` · last wk ${money(Number(compare[i]) || 0)}` : ''}
+                            </small>
+                          </span>
+                        ) : null}
+                      </button>
+                      <span>{days[i]}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="dashboard-chart-detail" aria-live="polite">
+              <div className="chart-detail-inner" key={activeDay ?? 'none'}>
+                {activeDay === null ? (
+                  <span>Hover a bar, or select one and use the arrow keys, to explore each day.</span>
+                ) : (
+                  <>
+                    <span>{DAY_NAMES[activeDay]}</span>
+                    <strong>{money(amounts[activeDay])}</strong>
+                    <span>in recorded charges</span>
+                    {total > 0 ? <span className="chart-detail-share">{Math.round(((Number(amounts[activeDay]) || 0) / total) * 100)}% of the week</span> : null}
+                  </>
+                )}
+              </div>
+            </div>
+            {amounts.every(v => v === 0) ? (
+              <p className="chart-empty">No confirmed rental fees in this period.</p>
+            ) : null}
+          </section>
+
+<section className="panel collections-panel" aria-label="Today's collections">
             <div className="panel-title">
               <div>
                 <h3>
@@ -778,122 +911,9 @@ export function DashboardView({
             </button>
           </section>
 
-          <section className="panel revenue-panel">
-            <div className="panel-title">
-              <div>
-                <h3>Rental fees</h3>
-                <p>Recorded charges by confirmation date. Not cash collected.</p>
-              </div>
-              <div className="revenue-actions">
-                <select
-                  id="period"
-                  aria-label="Revenue period"
-                  value={period}
-                  onChange={e => { setSelectedDay(null); onPeriodChange(e.target.value); }}
-                >
-                  <option value="This week">This week</option>
-                  <option value="Last week">Last week</option>
-                </select>
-                <button
-                  className="text-button"
-                  data-page="Reports"
-                  onClick={() => onNavigate('Reports')}
-                >
-                  View analytics →
-                </button>
-              </div>
-            </div>
-            <div className="revenue-total">
-              <CountUp value={total} format={money} />
-              <span>Recorded rental charges</span>
-              {delta !== null ? (
-                <em className={`revenue-delta ${delta >= 0 ? 'up' : 'down'}`}>
-                  {delta >= 0 ? '▲' : '▼'} {Math.abs(delta)}% vs last week
-                </em>
-              ) : null}
-            </div>
-            <div className="chart-legend" aria-hidden="true">
-              <span><i className="swatch current" />{period}</span>
-              {compareKey ? <span><i className="swatch previous" />{compareKey}</span> : null}
-              {average > 0 ? <span><i className="swatch average" />Daily average</span> : null}
-            </div>
-            <div className="chart" ref={chartRef} onMouseLeave={() => setHoverDay(null)}>
-              <div className="axis">
-                {[1, 0.75, 0.5, 0.25, 0].map(x => (
-                  <span key={x}>{money(scale * x)}</span>
-                ))}
-              </div>
-              <div className="bars" role="group" aria-label="Rental fees by day. Use the arrow keys to move between days.">
-                <div className="chart-gridlines" aria-hidden="true">
-                  {[0, 0.25, 0.5, 0.75, 1].map(x => <span key={x} style={{ bottom: `${x * 100}%` }} />)}
-                </div>
-                {average > 0 ? (
-                  <div className="chart-avg-line" style={{ bottom: `${pct(average)}%` }} aria-hidden="true">
-                    <span>Avg {money(Math.round(average))}</span>
-                  </div>
-                ) : null}
-                {amounts.map((amount, i) => {
-                  const columnClass = [
-                    'bar-column',
-                    i === 0 ? 'is-first' : '',
-                    i === 6 ? 'is-last' : '',
-                    i === todayIndex ? 'is-today' : '',
-                    todayIndex >= 0 && i > todayIndex ? 'is-future' : '',
-                    activeDay === i ? 'is-active' : ''
-                  ].filter(Boolean).join(' ');
-                  return (
-                    <div className={columnClass} key={days[i]} style={{ '--i': i }}>
-                      <button
-                        type="button"
-                        className={`bar ${amount === peak && peak > 0 ? 'highlight' : ''}`}
-                        style={{ height: '100%' }}
-                        data-day={i}
-                        aria-label={`${days[i]}: ${money(amount)} in rental fees`}
-                        aria-pressed={selectedDay === i}
-                        onClick={() => setSelectedDay(selectedDay === i ? null : i)}
-                        onMouseEnter={() => setHoverDay(i)}
-                        onFocus={() => setHoverDay(i)}
-                        onBlur={() => setHoverDay(null)}
-                        onKeyDown={event => handleBarKeyDown(event, i)}
-                      >
-                        {compareKey ? <span className="dashboard-bar-ghost" style={{ height: `${pct(compare[i])}%` }} /> : null}
-                        <span className="dashboard-bar-fill" style={{ height: `${Math.max(2, pct(amount))}%` }} />
-                        {activeDay === i ? (
-                          <span className="chart-tooltip" aria-hidden="true" style={{ bottom: `calc(${Math.max(2, pct(amount))}% + 10px)` }}>
-                            <strong>{money(amount)}</strong>
-                            <small>
-                              {DAY_NAMES[i]}{i === todayIndex ? ' ? today' : ''}
-                              {compareKey ? ` ? last wk ${money(Number(compare[i]) || 0)}` : ''}
-                            </small>
-                          </span>
-                        ) : null}
-                      </button>
-                      <span>{days[i]}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="dashboard-chart-detail" aria-live="polite">
-              <div className="chart-detail-inner" key={activeDay ?? 'none'}>
-                {activeDay === null ? (
-                  <span>Hover a bar, or select one and use the arrow keys, to explore each day.</span>
-                ) : (
-                  <>
-                    <span>{DAY_NAMES[activeDay]}</span>
-                    <strong>{money(amounts[activeDay])}</strong>
-                    <span>in recorded charges</span>
-                    {total > 0 ? <span className="chart-detail-share">{Math.round(((Number(amounts[activeDay]) || 0) / total) * 100)}% of the week</span> : null}
-                  </>
-                )}
-              </div>
-            </div>
-            {amounts.every(v => v === 0) ? (
-              <p className="chart-empty">No confirmed rental fees in this period.</p>
-            ) : null}
-          </section>
+<AnalyticsPulse data={data} onNavigate={onNavigate} />
 
-          <section className="panel category-panel">
+<section className="panel category-panel">
             <div className="panel-title">
               <div>
                 <h3>
@@ -943,152 +963,6 @@ export function DashboardView({
             View all inventory <Icon name="arrow" />
           </button>
         </section>
-      <section className="panel analytics-pulse-panel" aria-label="Operations and fleet analytics">
-            <div className="panel-title">
-              <div>
-                <h3>
-                  <Icon name="chart" /> Analytics pulse
-                </h3>
-                <p>Fleet utilization &amp; performance metrics</p>
-              </div>
-              <button
-                type="button"
-                className="text-button"
-                data-page="Reports"
-                onClick={() => onNavigate('Reports')}
-              >
-                Full report <Icon name="arrow" />
-              </button>
-            </div>
-
-            <div className="analytics-pulse-metrics">
-              <div className="pulse-metric-block">
-                <div className="pulse-metric-head">
-                  <span>Fleet utilization</span>
-                  <strong className="pulse-metric-val">
-                    <CountUp value={utilizationRate} />%
-                  </strong>
-                </div>
-                <div
-                  className="pulse-progress-bar"
-                  role="progressbar"
-                  aria-label="Fleet utilization rate"
-                  aria-valuenow={utilizationRate}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                >
-                  <span
-                    className="pulse-progress-fill"
-                    style={{ width: `${Math.min(100, Math.max(utilizationRate, totalActive > 0 ? 8 : 0))}%` }}
-                  />
-                </div>
-                <small className="pulse-metric-sub">
-                  <strong>{totalActive}</strong> of <strong>{totalUnits}</strong> units currently rented
-                </small>
-              </div>
-
-              <div className="pulse-metric-block">
-                <div className="pulse-metric-head">
-                  <span>Fulfillment channels</span>
-                  <strong className="pulse-metric-val">
-                    {resortCount > 0 && counterCount > 0
-                      ? `${resortShare}% Resort`
-                      : resortCount > 0
-                        ? '100% Resort'
-                        : `${counterShare}% Counter`}
-                  </strong>
-                </div>
-                <div className="pulse-channel-bar" aria-hidden="true">
-                  <span
-                    className="pulse-channel-resort"
-                    style={{ width: `${resortShare}%` }}
-                    title={`Resort delivery: ${resortCount}`}
-                  />
-                  <span
-                    className="pulse-channel-counter"
-                    style={{ width: `${counterShare}%` }}
-                    title={`Counter handover: ${counterCount}`}
-                  />
-                </div>
-                <small className="pulse-metric-sub">
-                  <span className="pulse-dot resort" aria-hidden="true" /> {resortCount} Resort delivery &middot;{' '}
-                  <span className="pulse-dot counter" aria-hidden="true" /> {counterCount} Shop counter
-                </small>
-              </div>
-
-              <div className="pulse-metric-block">
-                <div className="pulse-metric-head">
-                  <span>Weekly velocity</span>
-                  <strong className="pulse-metric-val">
-                    <CountUp value={thisWeekRevenue} format={money} />
-                  </strong>
-                </div>
-                <small className="pulse-metric-sub">
-                  Avg <strong>{money(Math.round(thisWeekRevenue / 7))}</strong>/day &middot; {pulseDeltaText}
-                </small>
-              </div>
-
-              <div className="pulse-metric-block">
-                <div className="pulse-metric-head">
-                  <span>Return punctuality</span>
-                  <span className={`pulse-health-pill ${overdueCount > 0 ? 'alert' : 'ok'}`}>
-                    {overdueCount > 0 ? `${overdueCount} Overdue` : '100% On-time'}
-                  </span>
-                </div>
-                <small className="pulse-metric-sub">
-                  {overdueCount > 0
-                    ? 'Follow up required on overdue rentals'
-                    : 'All rentals are running on schedule'}
-                </small>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              className="secondary wide pulse-explore-btn"
-              data-page="Reports"
-              onClick={() => onNavigate('Reports')}
-            >
-              Open full analytics <Icon name="arrow" />
-            </button>
-          </section>
-
-          <section className="panel terminal-panel">
-            <div className="panel-title">
-              <h3>
-                <Icon name="chip" /> ESP32 terminal
-              </h3>
-            </div>
-            <div className="dashboard-terminal-status" data-online={Boolean(t?.online)}>
-              <span className="dashboard-status-dot" aria-hidden="true" />
-              <div><strong>{t ? (t.online ? 'Connected' : 'Offline') : 'Not configured'}</strong>
-                <span>{t ? `${t.name || 'Counter terminal'} · ${t.terminal_code}` : 'Set up a terminal to confirm counter handovers.'}</span></div>
-            </div>
-            <div className="terminal-meta">
-              <span>Awaiting confirmation</span>
-              <strong>{queue.length}</strong>
-            </div>
-            <p className="terminal-note">
-              Confirm counter handovers, delivery dispatches, and completed inspections.
-            </p>
-            <div className="dashboard-terminal-actions">
-              <button type="button" className="secondary" id="cmd-ping-terminal" disabled={!t || !api || testingTerminal} onClick={async () => {
-                setTestingTerminal(true);
-                try {
-                  await api('/terminals/test-ping', { method: 'POST', body: JSON.stringify({ terminalCode: t.terminal_code }) });
-                  toast?.('Test sent. Check the terminal for a response.');
-                } catch (err) { toast?.(err.message || 'The terminal test could not be sent.'); }
-                finally { setTestingTerminal(false); }
-              }}>{testingTerminal ? 'Sending test…' : 'Test terminal'}</button>
-            </div>
-            <button
-              className="secondary wide"
-              data-page="ESP32 terminal"
-              onClick={() => onNavigate('ESP32 terminal')}
-            >
-              Open terminal <Icon name="arrow" />
-            </button>
-          </section>
 
           </div>
     </div>

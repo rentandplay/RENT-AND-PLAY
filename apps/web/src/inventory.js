@@ -1,8 +1,8 @@
+import { serializeCsv, csvNumber, downloadCsv } from './csv-export.js';
 import { getMx10Printer, renderLabelPng, normalizeMx10PrintSettings, normalizeMx10LabelCalibration } from './mx10-printer.js';
 import { createEquipmentQrLabel as qrLabelSvg, QR_LABEL_GEOMETRY as qrLabelGeometry } from './equipment-label.js';
 import { groupInventory, stockMatchesStatus, stockMatchesSearch, inventoryStockCounts } from './inventory-stock.js';
 
-import { formatExcelCsvCell } from './date-time.js';
 
 const printer = getMx10Printer();
 
@@ -198,14 +198,17 @@ export function createInventory(h) {
     }
   }
   function exportInventory() {
-    const num = v => typeof v === 'number' && Number.isFinite(v) ? v : (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : '');
+    const num = csvNumber;
     const rows = [
-      ['Unit codes', 'Equipment', 'Category', 'Available stock', 'Total stock', 'Archived units', 'Status', 'Condition', 'Rate basis', 'Rental rate (PHP)', 'Late penalty per hour (PHP)', 'Replacement cost (PHP)'],
+      ['Matching unit codes', 'Equipment', 'Category', 'Available stock', 'Reserved stock', 'Out or awaiting inspection', 'Under maintenance', 'Total active stock', 'Archived units', 'Status', 'Condition', 'Rate basis', 'Rental rate (PHP)', 'Late penalty per hour (PHP)', 'Replacement cost (PHP)'],
       ...filtered().map(item => [
         item.visible_units.map(unit => unit.item_code).join(' / '),
         item.name,
         item.category,
         item.available_quantity,
+        item.reserved_quantity,
+        item.rented_quantity,
+        item.maintenance_quantity,
         item.total_quantity,
         item.archived_quantity,
         label(item.effective_status),
@@ -213,10 +216,10 @@ export function createInventory(h) {
         displayRateUnit(item),
         num(displayRateAmount(item)),
         num(displayLatePenalty(item)),
-        num(item.replacement_cost ?? 0)
+        num(item.replacement_cost)
       ])
     ];
-    download('\uFEFF' + rows.map(row => row.map(formatExcelCsvCell).join(',')).join('\r\n'), 'text/csv;charset=utf-8', 'rent-play-inventory.csv');
+    downloadCsv(serializeCsv(rows), 'inventory');
     toast('Filtered inventory exported.');
   }
   function draw() {
@@ -907,9 +910,8 @@ function createInventoryView(root, h) {
 
   const statusText = item => stateLabel(item.effective_status || item.status || 'Unknown');
   const quickActions = item => {
-    const archiveReason = archiveUnavailableReason(item);
-    const actions = [['view', 'View equipment', 'eye', ''], ['add-stock', 'Add stock units', 'plus', ''], ['edit', 'Edit equipment details', 'edit', ''], ['qr', 'Unit QR labels', 'qr', ''], ['archive', 'Archive equipment', 'archive', archiveReason]];
-    return `<div class="inv-item-actions" role="group" aria-label="Actions for ${e(item.name)}">${actions.map(([action, name, glyph, reason]) => `<button type="button" class="inv-quick-action${action === 'archive' ? ' inv-quick-archive' : ''}" data-inv-action="${action}" data-inv-id="${e(item.id)}" aria-label="${e(name)} for ${e(item.name)}" title="${e(reason || name)}" aria-haspopup="dialog" ${reason ? 'disabled' : ''}>${icon(glyph)}</button>`).join('')}</div>`;
+    const actions = [['view', 'View equipment', 'eye', ''], ['add-stock', 'Add stock units', 'plus', ''], ['edit', 'Edit equipment details', 'edit', ''], ['qr', 'Unit QR labels', 'qr', '']];
+    return `<div class="inv-item-actions" role="group" aria-label="Actions for ${e(item.name)}">${actions.map(([action, name, glyph, reason]) => `<button type="button" class="inv-quick-action" data-inv-action="${action}" data-inv-id="${e(item.id)}" aria-label="${e(name)} for ${e(item.name)}" title="${e(reason || name)}" aria-haspopup="dialog" ${reason ? 'disabled' : ''}>${icon(glyph)}</button>`).join('')}</div>`;
   };
   const signature = item => JSON.stringify([item.id, item.name, item.item_code, item.category, item.effective_status, item.status, item.condition_status, item.rate_type, item.rental_rate, item.pricing_product_id, item.custom_rate_options || [], item.custom_rate_options_version, item.sale_price, item.image_data || '', productFor(item) || null, isActive(item), item.open_rentals, item.open_maintenance, item.reserved_rental_id, item.available_quantity, item.total_quantity, item.reserved_quantity, item.rented_quantity, item.maintenance_quantity, item.archived_quantity, item.status_counts, item.visible_units.map(unit => [unit.id, unit.condition_status])]);
   const identity = item => item.units.length === 1 ? `${e(item.item_code)} · ${e(item.category)}` : `${e(item.category)} · ${item.visible_units.length} ${isActive(item) ? 'unit' : 'archived unit'}${item.visible_units.length === 1 ? '' : 's'}`;

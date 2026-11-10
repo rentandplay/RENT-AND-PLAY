@@ -700,36 +700,38 @@ export function createRentalDesk(h) {
     }, { confirm: false });
   }
   function receiveForm(id, reject = false) {
+    const targetId = (typeof id === 'object' && id !== null) ? (id.id || id.rental_code) : id;
     const transactions = Array.isArray(getModel()?.transactions) ? getModel().transactions : [];
-    const row = transactions.find(row => String(row.id) === String(id) || String(row.rental_code) === String(id));
+    let row = (typeof id === 'object' && id !== null && id.item_name) ? id : transactions.find(row => String(row.id) === String(targetId) || String(row.rental_code) === String(targetId));
+    if (!row && Array.isArray(getModel()?.rentals)) {
+      row = getModel().rentals.find(r => String(r.id) === String(targetId) || String(r.rental_code) === String(targetId));
+    }
     if (!row) { toast('Refresh the rental record first.'); return; }
     if (row.status === 'RETURN_PENDING_INSPECTION') { completeReturnForm(row); return; }
     if (reject) {
       showModal('Reject customer return request', `<form class="admin-form rental-desk-form"><label>Reason<textarea name="reason" required maxlength="1000"></textarea></label>${actions('Reject return request')}</form>`);
-      submit(modal.querySelector('form'), 'Reject this request?', 'The rental stays active until physical receipt.', async fields => saved(await api(`/mobile/rentals/${encodeURIComponent(id)}/return/review`, { method:'POST', body:JSON.stringify({action:'REJECT',reason:fields.reason}) }), 'Return request rejected.')); return;
+      submit(modal.querySelector('form'), 'Reject this request?', 'The rental stays active until physical receipt.', async fields => saved(await api(`/mobile/rentals/${encodeURIComponent(row.id)}/return/review`, { method:'POST', body:JSON.stringify({action:'REJECT',reason:fields.reason}) }), 'Return request rejected.')); return;
     }
-    showModal('Record physical return', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Record receipt when the item reaches the desk. This stops overtime before inspection.</p>${scanField('inventoryCode','Returned equipment inventory QR',scannedInventory.get(row.id) || '')}${manualControls}<label class="pricing-check"><input name="physicalReceiptConfirmed" type="checkbox" required/> I physically received this equipment.</label>${actions('Receive & inspect')}</form>`);
+    const assignedCode = row.item_code || '';
+    const initialCode = scannedInventory.get(row.id) || assignedCode;
+    showModal('Record physical return', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Record receipt when the item reaches the desk. This stops overtime before inspection.</p>${scanField('inventoryCode','Returned equipment inventory QR',initialCode)}${manualControls}<label class="pricing-check"><input name="physicalReceiptConfirmed" type="checkbox" required checked/> I physically received this equipment.</label>${actions('Receive & inspect')}</form>`);
     const form = modal.querySelector('form'); bindManual(form,row,false);
-    submit(form,'Receive equipment?','The rental timer stops at receipt. The unit stays unavailable during inspection.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(id)}/receipt`,{method:'POST',body:JSON.stringify({requestKey:key,inventoryCode:fields.inventoryCode,physicalReceiptConfirmed:fields.physicalReceiptConfirmed === 'on',...(fields.manualLookup === 'on' ? {manualLookup:true,manualReason:fields.manualReason}: {})})}),'Equipment received.',completeReturnForm), { confirm: false });
+    if (assignedCode && form.elements.manualLookup) {
+      form.elements.manualLookup.checked = true;
+      if (form.elements.inventoryCode) form.elements.inventoryCode.value = assignedCode;
+    }
+    submit(form,'Receive equipment?','The rental timer stops at receipt. The unit stays unavailable during inspection.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/receipt`,{method:'POST',body:JSON.stringify({requestKey:key,inventoryCode:fields.inventoryCode,physicalReceiptConfirmed:fields.physicalReceiptConfirmed === 'on',...(fields.manualLookup === 'on' || assignedCode ? {manualLookup:true,manualReason:fields.manualReason || 'Assigned equipment returned at desk'}: {})})}),'Equipment received.',completeReturnForm), { confirm: false });
   }
   function completeReturnForm(row) {
-    const returnActions = `<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button><button type="button" class="primary btn-terminal-dispatch" data-return-esp32 title="Send return inspection to ESP32 Counter Terminal for physical button confirmation.">${terminalWifiIcon}<span>Confirm return at counter terminal</span></button><div class="emergency-terminal-bypass" data-emergency-return-bypass><button type="button" class="emergency-bypass-link" data-toggle-return-emergency>⚠️ Terminal offline? Manual emergency return</button><div class="emergency-bypass-drawer" data-emergency-return-drawer hidden><label class="pricing-check"><input type="checkbox" name="emergencyReturnConfirm"/><span>I confirm the ESP32 terminal is offline and authorize manual return intake.</span></label><button type="submit" class="secondary" data-return-confirm disabled>Complete Return (Emergency Manual)</button></div></div></div>`;
+    const terminals = Array.isArray(getModel()?.terminals) ? getModel().terminals : [];
+    const hasOnlineTerminal = terminals.some(t => t.online);
+    const returnActions = `<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Cancel</button>${hasOnlineTerminal ? `<button type="button" class="secondary btn-terminal-dispatch" data-return-esp32 title="Send return inspection to ESP32 Counter Terminal for physical button confirmation.">${terminalWifiIcon}<span>Confirm return at counter terminal</span></button>` : ''}<button type="submit" class="primary" data-return-confirm>Complete return</button></div>`;
     showModal('Inspect and confirm return', `<form class="admin-form rental-desk-form"><p>${e(row.item_name)} · ${e(row.customer_name)}</p><p>Received ${e(h.formatDate(row.received_at))}. Fees use this receipt time and the original saved rates.</p>${inspectionControls(false)}<label>Damage / missing-part penalty (₱)<input name="penaltyAmount" type="number" min="0" max="9999999999.99" step="0.01" value="0" required/><small>Overtime is calculated separately.</small></label><label>Penalty reason<textarea name="penaltyReason" maxlength="1000"></textarea></label>${returnActions}</form>`);
     const form=modal.querySelector('form'),photos=bindInspectionPhotos(form);
     form.elements.condition.onchange=()=>{const damaged=['DAMAGED','NEEDS_INSPECTION'].includes(form.elements.condition.value);if(damaged)form.elements.result.value='UNDER_MAINTENANCE';form.elements.result.querySelector('[value="AVAILABLE"]').disabled=damaged;const notes=form.elements.inspectionNotes;if(notes){notes.required=damaged;notes.placeholder=damaged?'Describe the damage or issue. Required for damaged items.':'Optional — add any notes about the condition or accessories.';const label=typeof notes.closest==='function'?notes.closest('label'):null;if(label){const small=label.querySelector('small')||label.appendChild(document.createElement('small'));small.textContent=damaged?'Required for damaged or flagged items.':'Optional';}}};form.elements.condition.onchange();
     form.elements.penaltyAmount.oninput=()=>{form.elements.penaltyReason.required=Number(form.elements.penaltyAmount.value)>0;};
     const terminalOperationKey = rentalOperationKey();
     const espReturnBtn = form.querySelector('[data-return-esp32]');
-    const toggleReturnEmerg = form.querySelector('[data-toggle-return-emergency]');
-    const returnEmergDrawer = form.querySelector('[data-emergency-return-drawer]');
-    const returnEmergCheck = form.elements.emergencyReturnConfirm;
-    const returnConfirmBtn = form.querySelector('[data-return-confirm]');
-    if (toggleReturnEmerg && returnEmergDrawer) {
-      toggleReturnEmerg.onclick = () => { returnEmergDrawer.hidden = !returnEmergDrawer.hidden; };
-    }
-    if (returnEmergCheck && returnConfirmBtn) {
-      returnEmergCheck.onchange = () => { returnConfirmBtn.disabled = !returnEmergCheck.checked; };
-    }
     if (espReturnBtn) {
       espReturnBtn.onclick = async () => {
         if (typeof form.reportValidity === 'function' && !form.reportValidity()) return;
@@ -754,7 +756,7 @@ export function createRentalDesk(h) {
         }
       };
     }
-    submit(form,'Complete this return?','The unit becomes available only if the inspection clears it. Payment balances remain separate.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/complete-return`,{method:'POST',body:JSON.stringify({requestKey:key,penaltyAmount:Number(fields.penaltyAmount),penaltyReason:fields.penaltyReason,inspection:{condition:fields.condition,result:fields.result,notes:fields.inspectionNotes,accessoriesChecked:fields.accessoriesChecked==='on',photos:photos()}})}),'Return confirmed. Review any outstanding rental balance.',updated=>continueRental({...row,...updated})));
+    submit(form,'Complete this return?','The unit becomes available only if the inspection clears it. Payment balances remain separate.',async(fields,key)=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/complete-return`,{method:'POST',body:JSON.stringify({requestKey:key,penaltyAmount:Number(fields.penaltyAmount),penaltyReason:fields.penaltyReason,inspection:{condition:fields.condition,result:fields.result,notes:fields.inspectionNotes,accessoriesChecked:fields.accessoriesChecked==='on',photos:photos()}})}),'Return confirmed. Review any outstanding rental balance.',updated=>continueRental({...row,...updated})), { confirm: false });
   }
   function chooseReturn() { lookupForm('INVENTORY'); }
   function lookupForm(kind = 'RENTAL') {

@@ -231,7 +231,7 @@ export function DashboardView({
       workspaceUI.openTransaction(id, { rentalCode: r.rental_code, rental: enrichedRental });
       return;
     }
-    const showReceive = r.status === 'RETURN_PENDING_INSPECTION' || r.latest_return_request_status === 'PENDING_ADMIN_APPROVAL' || r.displayStatus === 'Overdue';
+    const showReceive = r.status === 'RETURN_PENDING_INSPECTION' || r.latest_return_request_status === 'PENDING_ADMIN_APPROVAL' || r.displayStatus === 'Return requested' || r.displayStatus === 'Overdue';
     const dueInfo = getDueInfo(r);
     const overdueLabel = dueInfo.isOverdue
       ? `Overdue by ${Math.max(1, Math.ceil((Date.now() - new Date(r.due_at).getTime()) / 3600000))}h`

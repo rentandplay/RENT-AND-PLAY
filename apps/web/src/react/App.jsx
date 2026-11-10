@@ -76,8 +76,9 @@ export function App() {
     const initial = Object.fromEntries(navGroups.map(group => [group.id, false]));
     try {
       const saved = JSON.parse(localStorage.getItem('rent-play-nav-groups-pinned') || '{}');
-      for (const group of navGroups) {
-        if (typeof saved[group.id] === 'boolean') initial[group.id] = saved[group.id];
+      const savedGroup = navGroups.find(group => saved[group.id] === true);
+      if (savedGroup) {
+        initial[savedGroup.id] = true;
       }
     } catch {}
     return initial;
@@ -309,8 +310,10 @@ export function App() {
       }
       const group = navGroups.find(grp => grp.items.some(([, target]) => target === next));
       if (group) {
-        setNavGroupExpanded(prev => {
-          const updated = { ...prev, [group.id]: true };
+        setNavGroupExpanded(() => {
+          const updated = Object.fromEntries(
+            navGroups.map(g => [g.id, g.id === group.id])
+          );
           try {
             localStorage.setItem('rent-play-nav-groups-pinned', JSON.stringify(updated));
           } catch {}
@@ -931,13 +934,16 @@ export function App() {
   };
 
   const handleToggleNavGroup = groupId => {
-      setNavGroupExpanded(prev => {
-        const next = { ...prev, [groupId]: !prev[groupId] };
-        try {
-          localStorage.setItem('rent-play-nav-groups-pinned', JSON.stringify(next));
-        } catch {}
-        return next;
-      });
+    setNavGroupExpanded(prev => {
+      const willOpen = !prev[groupId];
+      const next = Object.fromEntries(
+        navGroups.map(group => [group.id, group.id === groupId ? willOpen : false])
+      );
+      try {
+        localStorage.setItem('rent-play-nav-groups-pinned', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     requestAnimationFrame(() => {
       document.getElementById(`nav-group-toggle-${groupId}`)?.focus();
     });

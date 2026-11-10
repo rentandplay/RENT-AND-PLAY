@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseHTML } from 'linkedom';
 
-test('nav groups are closed by default, open on hover, close on hover off, stay open on click, and settings/logout stay in sidebar-bottom with profile', async () => {
+test('nav groups are closed by default, open on hover, close on hover off, stay open on click, close other navbars when opening another one, and settings/logout stay in sidebar-bottom with profile', async () => {
   const { window } = parseHTML('<html><body><div id="root"></div></body></html>');
   const previous = { window: globalThis.window, document: globalThis.document, requestAnimationFrame: globalThis.requestAnimationFrame };
   globalThis.window = window; globalThis.document = window.document;
@@ -22,7 +22,10 @@ test('nav groups are closed by default, open on hover, close on hover off, stay 
     onSetSidebarCollapsed: () => {},
     onToggleNavGroup: id => {
       toggleCalls.push(id);
-      navGroupExpanded = { ...navGroupExpanded, [id]: !navGroupExpanded[id] };
+      const willOpen = !navGroupExpanded[id];
+      navGroupExpanded = Object.fromEntries(
+        Object.keys(navGroupExpanded).map(key => [key, key === id ? willOpen : false])
+      );
     },
     onNavigate: () => {},
     onLogout: () => {}
@@ -36,7 +39,9 @@ test('nav groups are closed by default, open on hover, close on hover off, stay 
   };
 
   try {
-    root.render(React.createElement(WorkspaceShell, props)); await flush();
+    root.render(React.createElement(WorkspaceShell, props));
+    const mountDeadline = Date.now() + 1500;
+    while (!document.querySelector('.sidebar-bottom') && Date.now() < mountDeadline) await flush(20);
 
     // 1. Settings, Logout and profile avatar/name are in .sidebar-bottom
     const sidebarBottom = document.querySelector('.sidebar-bottom');
@@ -87,12 +92,23 @@ test('nav groups are closed by default, open on hover, close on hover off, stay 
     assert.equal(mgmtToggle.getAttribute('aria-expanded'), 'true', 'Management must stay open after click even on hover off');
     assert.equal(mgmtItems.hasAttribute('hidden'), false);
 
-    // 6. Click again closes / unpins
-    mgmtToggle.click(); await flush();
-    assert.equal(toggleCalls.at(-1), 'management');
-    root.render(React.createElement(WorkspaceShell, { ...props, navGroupExpanded })); await flush(150);
-    assert.equal(mgmtToggle.getAttribute('aria-expanded'), 'false', 'Management must close after clicking again');
+    // 6. Opening another navbar automatically closes the previous one
+    const analyticsToggle = document.getElementById('nav-group-toggle-analytics');
+    const analyticsItems = document.getElementById('nav-group-analytics');
+    analyticsToggle.click(); await flush();
+    assert.equal(toggleCalls.at(-1), 'analytics');
+    root.render(React.createElement(WorkspaceShell, { ...props, navGroupExpanded })); await flush();
+    assert.equal(analyticsToggle.getAttribute('aria-expanded'), 'true', 'Analytics must open on click');
+    assert.equal(analyticsItems.hasAttribute('hidden'), false);
+    assert.equal(mgmtToggle.getAttribute('aria-expanded'), 'false', 'Management must automatically close when Analytics opens');
     assert.equal(mgmtItems.hasAttribute('hidden'), true);
+
+    // 7. Click again closes / unpins
+    analyticsToggle.click(); await flush();
+    assert.equal(toggleCalls.at(-1), 'analytics');
+    root.render(React.createElement(WorkspaceShell, { ...props, navGroupExpanded })); await flush(150);
+    assert.equal(analyticsToggle.getAttribute('aria-expanded'), 'false', 'Analytics must close after clicking again');
+    assert.equal(analyticsItems.hasAttribute('hidden'), true);
   } finally {
     root.unmount(); await flush(); Object.assign(globalThis, previous);
   }

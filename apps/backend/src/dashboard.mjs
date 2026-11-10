@@ -7,6 +7,7 @@ export function databaseDate(value) {return asDate(value);}
 export const dateKey = date => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 export function rentalStatus(row,now=new Date()) {
   if(row.status!=='ACTIVE')return row.status==='APPROVED'?(row.delivery_status==='OUT_FOR_DELIVERY'?'On the way':row.delivery_status==='DELIVERY_FAILED'?'Delivery unsuccessful':row.scheduled_start_at && !row.delivery_preparation?'Scheduled':row.fulfillment_mode==='SHOP_HANDOVER'?'Awaiting shop handover':'Awaiting resort handoff'):row.status==='RETURN_PENDING_INSPECTION'?'Inspection pending':row.status==='PENDING_ADMIN_APPROVAL'?'Pending admin review':row.status==='PENDING_VERIFICATION'?'Pending':row.status;
+  if(row.latest_return_request_status==='PENDING_ADMIN_APPROVAL')return 'Return requested';
   const due=databaseDate(row.due_at);
   if(!due || !Number.isFinite(due.getTime()))return 'Due time needs review';
   if(due<now)return 'Overdue';

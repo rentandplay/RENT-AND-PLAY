@@ -706,9 +706,10 @@ export function WorkspaceShell({
             </button>
 
             {navGroups.map(group => {
+              const activeHoverGroup = hoveredNavGroup && hoverSuppressed !== hoveredNavGroup ? hoveredNavGroup : null;
               const isPinned = Boolean(navGroupExpanded[group.id]);
-              const isHovered = hoveredNavGroup === group.id && hoverSuppressed !== group.id;
-              const isExpanded = isPinned || isHovered;
+              const isHovered = activeHoverGroup === group.id;
+              const isExpanded = activeHoverGroup ? isHovered : isPinned;
               const hasActiveChild = group.items.some(([label, target, section]) => {
                 return section
                   ? page === 'Reports' && reportSection === section

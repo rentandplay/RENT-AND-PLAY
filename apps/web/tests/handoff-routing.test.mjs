@@ -59,3 +59,29 @@ test('shop handoff keeps terminal confirmation primary and hides the explicit of
   assert.equal(form.querySelector('[data-release-confirm]').disabled, true);
 });
 
+
+test('return inspection requires ESP32 terminal confirmation and locks manual confirmation behind emergency override', async () => {
+  const { document } = parseHTML('<html><body><dialog open></dialog></body></html>');
+  const modal = document.querySelector('dialog'); modal.open = true; modal.close = () => { modal.open = false; };
+  const row = { id: 'rental-ret', rental_code: 'R-RET', status: 'RETURN_PENDING_INSPECTION', received_at: '2026-10-06T06:00:00Z', item_name: 'Bike', customer_name: 'Guest' };
+  const calls = [];
+  const desk = createRentalDesk({ modal, escape: v => String(v ?? ''), model: () => ({ transactions: [row], terminals: [], verification: [] }), money: v => `PHP ${v}`, formatDate: String, toast() {}, redraw() {}, refresh: async () => {},
+    showModal: (_title, html) => {
+      modal.innerHTML = html;
+      const form = modal.querySelector('form');
+      form.elements = Object.fromEntries([...form.querySelectorAll('[name]')].map(el => [el.name, el]));
+      form.reportValidity = () => true;
+    },
+    api: async (path, options) => {
+      calls.push({ path, body: JSON.parse(options.body) });
+      return { rental: row, request: { id: 'req-1', status: 'PENDING', verification_code: 'A1B2' } };
+    }
+  });
+  desk.completeReturnForm(row);
+  const form = modal.querySelector('form');
+  const espBtn = form.querySelector('[data-return-esp32]');
+  assert.ok(espBtn, 'ESP32 return button is always rendered');
+  assert.ok(espBtn.classList.contains('primary'), 'ESP32 return button is the primary action');
+  assert.equal(form.querySelector('[data-emergency-drawer]').hidden, true);
+  assert.equal(form.querySelector('[data-return-confirm]').disabled, true);
+});

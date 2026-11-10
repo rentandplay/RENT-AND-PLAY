@@ -17702,6 +17702,9 @@ textarea,
 .analytics-workspace .ana-action-card h3 { line-height: 1.5; margin: 14px 0; }
 .analytics-workspace .ana-evidence p, .analytics-workspace .ana-next-step p { font-size: 13px; line-height: 1.7; }
 .analytics-workspace .ana-action-card.is-high { border-top: 3px solid #d85b49; }
+.ana-threshold-line { stroke: #d97706; stroke-width: 1.5; stroke-dasharray: 4 4; opacity: .75; pointer-events: none; }
+.ana-threshold-label { fill: #d97706; font-family: inherit; font-size: 10px; font-weight: 650; pointer-events: none; }
+.ana-threshold-strip { background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 10px; padding: 12px 16px; }
 
 /* Analytics pulse: actual history on the left, current operations on the right. */
 .dashboard-workspace .analytics-pulse-panel { align-self: start; }

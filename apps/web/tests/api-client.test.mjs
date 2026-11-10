@@ -47,6 +47,9 @@ test('service failures never show infrastructure details, while business validat
     await assert.rejects(client.request('/inventory'), error => /temporarily unavailable/.test(error.message) && !/Supabase|SQL|localhost|TypeError|<html>/.test(error.message));
   }
   assert.equal(publicErrorMessage({ status: 409, message: 'This unit has already been rented.' }), 'This unit has already been rented.');
+  assert.equal(publicErrorMessage({ status: 401, message: 'Email or password is incorrect.' }), 'Email or password is incorrect.');
+  assert.match(publicErrorMessage({ status: 401, message: 'Please sign in.' }), /sign in again/);
+  assert.equal(publicErrorMessage({ status: 429, message: 'Too many attempts. Try again in 15 minutes.' }), 'Too many attempts. Try again in 15 minutes.');
   assert.match(publicErrorMessage({ status: 403 }), /permission/);
   assert.match(publicErrorMessage({ status: 401 }), /sign in again/);
 });

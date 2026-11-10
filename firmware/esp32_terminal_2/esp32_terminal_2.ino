@@ -86,7 +86,7 @@ String currentVerificationCode = "";
 int currentInspectionRevision = 0;
 
 unsigned long lastPollTime = 0;
-const unsigned long POLL_INTERVAL_MS = 3000;
+const unsigned long POLL_INTERVAL_MS = 1500;
 
 // Button state with Hardware Interrupt support (Active LOW)
 volatile bool buttonTriggered = false;
@@ -651,6 +651,7 @@ void setup() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
+    WiFi.setSleep(false);
     Serial.println("\n[WIFI] Connected! IP address: ");
     Serial.println(WiFi.localIP());
     pollPendingRequests();
@@ -668,6 +669,7 @@ void loop() {
     buttonArmed = false;
     showConnectingScreen();
     WiFi.reconnect();
+    WiFi.setSleep(false);
     delay(1000);
     return;
   }

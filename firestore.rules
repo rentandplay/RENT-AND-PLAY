@@ -1,0 +1,20 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // -------------------------------------------------------------------------
+    // RENT & PLAY — ZERO-TRUST FIRESTORE SECURITY RULES
+    // -------------------------------------------------------------------------
+    // All read and write operations in Rent & Play are strictly mediated by
+    // the Node.js Backend API using the Firebase Admin SDK with Service Account.
+    // The Admin SDK automatically bypasses these rules with elevated privileges.
+    //
+    // By denying all direct client SDK access (Web, Mobile, Postman, etc.),
+    // we prevent any unauthorized access, bypass of Role-Based Access Control (RBAC),
+    // tampering with rates/pricing, or malicious direct database writes.
+    // -------------------------------------------------------------------------
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

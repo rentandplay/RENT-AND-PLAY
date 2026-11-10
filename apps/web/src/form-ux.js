@@ -12,12 +12,36 @@ export function installFormUX(root) {
     if (message && !field.validity.customError) { field.setCustomValidity(message); owned.set(field, message); }
   };
   const validate = field => {
-    if (!eligible(field)) return;
+    if (!eligible(field) || hasDedicatedError(field)) {
+      setOwnError(field, '');
+      return;
+    }
     const value = String(field.value ?? '');
     const text = field.matches('textarea,input:not([type]),input[type=text],input[type=tel],input[type=email],input[type=search],input[type=url]');
     setOwnError(field, field.required && text && value.length && !value.trim() ? 'Enter a value; spaces alone are not valid.' : '');
   };
+  const hasDedicatedError = field => {
+    if (field.dataset.accountValidation === 'true') return true;
+    const describedBy = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+    for (const id of describedBy) {
+      if (id.startsWith('ux-')) continue;
+      const el = field.ownerDocument?.getElementById(id);
+      if (el?.classList?.contains('field-error')) return true;
+    }
+    const valId = `${field.id || field.name}-validation`;
+    const dedicatedEl = field.ownerDocument?.getElementById(valId);
+    if (dedicatedEl?.classList?.contains('field-error')) return true;
+    return false;
+  };
   const feedback = field => {
+    if (hasDedicatedError(field)) {
+      const existing = field.parentElement?.querySelector(`[data-field-error="${field.dataset.uxField || 'none'}"]`);
+      if (existing) {
+        existing.remove();
+        field.removeAttribute('data-ux-field');
+      }
+      return;
+    }
     const invalid = eligible(field) && !field.validity.valid;
     let error = field.parentElement?.querySelector(`[data-field-error="${field.dataset.uxField || 'none'}"]`);
     if (!error && invalid) {
@@ -42,15 +66,24 @@ export function installFormUX(root) {
       reference.setAttribute('aria-required', String(reference.required));
     }
   };
+  const refreshInvalidFields = form => {
+    if (!form) return;
+    const invalidFields = form.querySelectorAll('[aria-invalid="true"]');
+    for (const el of invalidFields) {
+      if (hasDedicatedError(el)) continue;
+      if (!eligible(el) || el.validity.valid) {
+        setOwnError(el, '');
+        feedback(el);
+      }
+    }
+  };
   const onInput = event => {
     const field = event.target;
     if (!isControl(field)) return;
     paymentReference(field.form);
     validate(field);
     if (field.hasAttribute('aria-invalid')) feedback(field);
-    // Changing QR to cash also clears an obsolete reference error.
-    const reference = field.form?.querySelector('input[name=reference][aria-invalid]');
-    if (reference && field.name === 'paymentMethod') feedback(reference);
+    refreshInvalidFields(field.form);
   };
   const onInvalid = event => { if (isControl(event.target)) feedback(event.target); };
   const onBlur = event => {

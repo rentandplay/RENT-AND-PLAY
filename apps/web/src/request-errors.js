@@ -9,7 +9,9 @@ export function publicErrorMessage(problem, { mutation = false, offline = false 
   else if (code === 'TIMEOUT') text = 'This is taking longer than expected. Please try again shortly.';
   else if (code === 'CANCELLED') text = 'The request was cancelled. You can try again.';
   else if (code === 'NETWORK') text = 'We couldn’t connect to Rent & Play. Please try again shortly.';
+  else if (status === 401 && message && !['Unauthorized', 'unauthorized', 'Please sign in.'].includes(message.trim()) && !technical.test(message)) text = message;
   else if (status === 401) text = 'Your session has ended. Please sign in again.';
+  else if (status === 429 && code !== 'FIRESTORE_QUOTA_EXCEEDED' && message && !technical.test(message)) text = message;
   else if (status === 429) text = 'Rent & Play is busy right now. Please wait a moment before trying again.';
   else if (status >= 500 || code === 'INVALID_RESPONSE' || technical.test(message)) text = 'Rent & Play is temporarily unavailable. Please try again shortly. If this continues, contact your system administrator.';
   else if (message && message.length <= 500) text = message;

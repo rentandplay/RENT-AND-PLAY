@@ -50,8 +50,9 @@ export function phoneError(value, required = true) {
 export function bindAccountValidation(form, rules) {
   const fields = new Map();
   for (const [name, validate] of Object.entries(rules)) {
-    const input = form.elements.namedItem(name) || form.querySelector(`#${name}`);
+    const input = form.elements?.namedItem?.(name) || form.elements?.[name] || form.querySelector(`#${name}, [name="${name}"]`);
     if (!input) continue;
+    input.dataset.accountValidation = 'true';
     const error = form.ownerDocument.createElement('small');
     error.className = 'field-error'; error.id = `${input.id || name}-validation`; error.setAttribute('aria-live', 'polite');
     const label = input.closest('label');
@@ -59,7 +60,10 @@ export function bindAccountValidation(form, rules) {
     input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), error.id].filter(Boolean).join(' '));
     const row = { input, validate, error, touched: false };
     const update = () => {
-      if (input.type === 'email') input.value = normalizeEmail(input.value);
+      if (input.type === 'email') {
+        const normalized = normalizeEmail(input.value);
+        if (input.value !== normalized) input.value = normalized;
+      }
       const message = input.disabled ? '' : validate(input.value);
       input.setCustomValidity(message); input.setAttribute('aria-invalid', String(row.touched && Boolean(message)));
       error.textContent = row.touched ? message : ''; error.hidden = !error.textContent;

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from './react-shim.js';
 import { initials, Icon } from './icons.jsx';
+import { bindAccountValidation, nameError, emailError } from '../account-validation.js';
 
 export function ProfileView({
   user,
@@ -24,6 +25,10 @@ export function ProfileView({
     if (!profileEditing || !formRef.current) return;
     const form = formRef.current;
     form.querySelector('input')?.focus();
+    const validation = bindAccountValidation(form, {
+      fullName: nameError,
+      email: emailError
+    });
     confirmSubmit(
       form,
       {
@@ -33,6 +38,7 @@ export function ProfileView({
         confirmLabel: 'Yes, save changes'
       },
       async () => {
+        if (!validation.validate()) return;
         const button = form.querySelector('[type="submit"]');
         const error = form.querySelector('.profile-error');
         button.disabled = true;

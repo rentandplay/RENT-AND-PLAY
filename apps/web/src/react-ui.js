@@ -1251,6 +1251,7 @@ function DashboardView({
 }
 
 // src/react/ProfileView.jsx
+import { bindAccountValidation as bindAccountValidation3, nameError, emailError as emailError2 } from "./account-validation.js";
 function ProfileView({
   user,
   profileEditing,
@@ -1273,6 +1274,10 @@ function ProfileView({
     if (!profileEditing || !formRef.current) return;
     const form = formRef.current;
     form.querySelector("input")?.focus();
+    const validation = bindAccountValidation3(form, {
+      fullName: nameError,
+      email: emailError2
+    });
     confirmSubmit(
       form,
       {
@@ -1281,6 +1286,7 @@ function ProfileView({
         confirmLabel: "Yes, save changes"
       },
       async () => {
+        if (!validation.validate()) return;
         const button = form.querySelector('[type="submit"]');
         const error = form.querySelector(".profile-error");
         button.disabled = true;

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseHTML } from 'linkedom';
 import { installFormUX, prepareModalUX } from '../src/form-ux.js';
+import { bindAccountValidation, emailError } from '../src/account-validation.js';
 
 function fixture(markup) {
   const {document,window} = parseHTML(`<html><body>${markup}</body></html>`);
@@ -59,4 +60,48 @@ test('modal preparation is idempotent and keeps Cancel and Back while removing r
   assert.equal(buttons[0].hidden,true); assert.equal(buttons[1].hidden,false); assert.equal(buttons[2].hidden,false);
   assert.equal(modal.querySelector('input').getAttribute('aria-required'),'true');
   assert.equal(modal.querySelector('small').textContent,'As shown on the ID');
+});
+
+test('fields bound with account validation do not produce duplicate field-error elements', () => {
+  const {document,form,fire} = fixture('<form><label for="email">Email address</label><input id="email" name="email" type="email" required></form>');
+  const emailInput = document.querySelector('#email');
+  bindAccountValidation(form, { email: emailError });
+  emailInput.value = 'rentandplay@ gmail.com';
+  fire(emailInput, 'input');
+  let errors = document.querySelectorAll('.field-error');
+  assert.equal(errors.length, 1, 'Only one field-error element should exist');
+  assert.equal(errors[0].textContent, 'Email addresses cannot contain spaces.');
+  assert.equal(errors[0].hidden, false);
+
+  // Submitting the form must not generate a duplicate error from form-ux either
+  fire(form, 'submit');
+  errors = document.querySelectorAll('.field-error');
+  assert.equal(errors.length, 1, 'Still only one field-error element after submit');
+  assert.equal(errors[0].textContent, 'Email addresses cannot contain spaces.');
+
+  emailInput.value = 'rentandplay@gmail.com';
+  fire(emailInput, 'input');
+  assert.equal(document.querySelectorAll('.field-error').length, 1);
+  assert.equal(errors[0].hidden, true);
+});
+
+test('switching form controls immediately clears stale errors on fields that become valid or ineligible', () => {
+  const {document,form,fire} = fixture('<form><label>Method<select name="paymentMethod"><option value="QR" selected>QR</option><option value="CASH">Cash</option></select></label><label>Reference<input name="reference"></label></form>');
+  const reference = document.querySelector('input');
+  const method = document.querySelector('select');
+
+  // Submit to trigger required error on reference
+  fire(form, 'submit');
+  assert.equal(reference.getAttribute('aria-invalid'), 'true');
+  const errorEl = document.querySelector(`[data-field-error="${reference.dataset.uxField}"]`);
+  assert.ok(errorEl);
+  assert.equal(errorEl.hidden, false);
+
+  // Switch to CASH: reference is no longer required, so it becomes valid
+  method.querySelector('option[value=QR]').removeAttribute('selected');
+  method.querySelector('option[value=CASH]').setAttribute('selected', '');
+  fire(method, 'change');
+
+  assert.equal(reference.hasAttribute('aria-invalid'), false, 'aria-invalid must be removed');
+  assert.equal(errorEl.hidden, true, 'error feedback must be hidden');
 });

@@ -62,7 +62,8 @@ async function serveWeb(req, res, requestPath) {
       target = nodePath.join(webRoot, 'index.html'); content = await readFile(target);
     }
     const etag = '"' + createHash('sha256').update(content).digest('base64url') + '"';
-    const headers = { 'Content-Type': contentTypes[nodePath.extname(target)] || 'application/octet-stream', 'Cache-Control': nodePath.extname(target) === '.html' ? 'no-store' : 'private, no-cache', ETag: etag };
+    const isHttps = Boolean(req.socket?.encrypted || req.headers?.['x-forwarded-proto'] === 'https' || process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production');
+    const headers = { 'Content-Type': contentTypes[nodePath.extname(target)] || 'application/octet-stream', 'Cache-Control': nodePath.extname(target) === '.html' ? 'no-store' : 'private, no-cache', ETag: etag, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'strict-origin-when-cross-origin', ...(isHttps ? { 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains' } : {}) };
     if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers).end(); return; }
     res.writeHead(200, headers);
     if (req.method === 'HEAD') res.end(); else res.end(content);
@@ -437,10 +438,11 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     if (origins.has(origin)) return true;
     try {
       const url = new URL(origin);
-      return url.protocol === 'http:' && Boolean(url.port) && ['localhost', '127.0.0.1'].includes(url.hostname) && url.origin === origin;
+      return ['http:', 'https:'].includes(url.protocol) && Boolean(url.port) && ['localhost', '127.0.0.1'].includes(url.hostname) && url.origin === origin;
     } catch { return false; }
   };
-  function send(res, status, value, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Server-Time': new Date().toISOString(), 'Access-Control-Expose-Headers': 'X-Server-Time', ...headers }); res.end(JSON.stringify(value)); }
+  const defaultSecurityHeaders = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()' };
+  function send(res, status, value, headers = {}) { const isHttps = Boolean(res.req?.socket?.encrypted || res.req?.headers?.['x-forwarded-proto'] === 'https' || process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production'); res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Server-Time': new Date().toISOString(), 'Access-Control-Expose-Headers': 'X-Server-Time', ...defaultSecurityHeaders, ...(isHttps ? { 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains' } : {}), ...headers }); res.end(JSON.stringify(value)); }
   function stopRentalEventStream(res) { res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); }
   function sendRentalUpdate(res, status, value, { rentalId = '', customerId = '' } = {}) {
     if (value?.duplicate !== true) {
@@ -497,13 +499,15 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     if (!row || at - row.startedAt >= 900000) registrationAttempts.set(key, { startedAt: at, count: 1 });
     else registrationAttempts.set(key, { ...row, count: row.count + 1 });
   }
-  function cookie(value, seconds, persistent = false) { return `rent_play_session=${value}; HttpOnly; SameSite=Strict; Path=/${persistent ? `; Max-Age=${seconds}` : ''}${process.env.COOKIE_SECURE === 'true' ? '; Secure' : ''}`; }
+  function buildSessionCookie(value, seconds, persistent = false, req = null) { const secure = Boolean(req?.socket?.encrypted || req?.headers?.['x-forwarded-proto'] === 'https' || process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production'); return `rent_play_session=${value}; HttpOnly; SameSite=Strict; Path=/${persistent ? `; Max-Age=${seconds}` : ''}${secure ? '; Secure' : ''}`; }
+  function cookie(value, seconds, persistent = false) { return buildSessionCookie(value, seconds, persistent); }
   async function body(req, maxBytes = 8192) {
     if (!(req.headers['content-type'] || '').startsWith('application/json')) throw Object.assign(new Error('JSON body required.'), { status: 415 });
     let value = ''; for await (const chunk of req) { value += chunk; if (Buffer.byteLength(value) > maxBytes) throw Object.assign(new Error('Request is too large.'), { status: 413 }); }
-    try { return JSON.parse(value); } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
+    try { return JSON.parse(value, (key, val) => (key === '__proto__' || key === 'constructor' || key === 'prototype' ? undefined : val)); } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
   }
   const server = http.createServer(async (req, res) => {
+    const cookie = (value, seconds, persistent = false) => buildSessionCookie(value, seconds, persistent, req);
     const requestPath = new URL(req.url, 'http://127.0.0.1').pathname;
     if (!requestPath.startsWith('/api/')) return serveWeb(req, res, requestPath);
     const path = requestPath;

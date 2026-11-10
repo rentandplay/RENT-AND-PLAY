@@ -7408,6 +7408,17 @@ tr[data-record-type]:focus-visible > td { background-color: var(--record-hover);
 .counter-handoff-details { margin: 20px 24px; border-top: 1px solid var(--ui-border); }
 .counter-handoff-details > summary { padding: 16px 0; cursor: pointer; font-size: 13px; color: var(--ui-text); }
 @media (max-width: 600px) { .counter-handoff-facts { grid-template-columns: minmax(0, 1fr); } }
+.counter-handoff-status.is-confirmed { background: #ecfdf5; border-bottom-color: #a7f3d0; }
+[data-theme="dark"] .counter-handoff-status.is-confirmed { background: rgba(16, 185, 129, 0.12); border-bottom-color: rgba(16, 185, 129, 0.3); }
+.counter-handoff-status.is-confirmed h3 { color: #065f46; }
+[data-theme="dark"] .counter-handoff-status.is-confirmed h3 { color: #6ee7b7; }
+.counter-handoff-status.is-closed { background: #fef2f2; border-bottom-color: #fecaca; }
+[data-theme="dark"] .counter-handoff-status.is-closed { background: rgba(239, 68, 68, 0.12); border-bottom-color: rgba(239, 68, 68, 0.3); }
+.counter-handoff-status-head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+.counter-handoff-status-head > div { flex: 1; min-width: 0; }
+.counter-handoff-status-head h3 { margin: 4px 0 0; }
+.counter-handoff-badge.is-success { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; background: #10b981; color: #fff; font-size: 20px; font-weight: 700; flex-shrink: 0; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3); }
+.handoff-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid var(--ui-border); background: var(--ui-soft); }
 [data-theme="dark"] .settings-workspace { --settings-accent: #f3a36c; --settings-tint: rgb(243 163 108 / 12%); }
 
 /* Reserve the document scrollbar track so pages with different heights align. */
@@ -11566,6 +11577,9 @@ dialog:has(.customer-form) { width: min(720px, calc(100vw - 32px)); }
 .customer-history-empty > svg { color: var(--customer-subtle); margin-bottom: 12px; }
 .customer-history-empty h3 { font-size: 12px; }
 .customer-history-empty p { color: var(--customer-subtle); font-size: 12px; line-height: 1.6; margin-top: 7px; }
+.customer-history-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 48px 24px; min-height: 180px; gap: 14px; text-align: center; }
+.customer-history-loading .session-spinner { width: 28px; height: 28px; border-width: 3px; margin: 0; }
+.customer-history-loading p { color: var(--customer-subtle); font-size: 13px; margin: 0; }
 .customer-profile-error:empty { display: none; }
 dialog[open] > .admin-form.customer-form { display: flex; flex-direction: column; gap: 20px; }
 .customer-form-intro { font-size: 12px; line-height: 1.7; color: var(--customer-subtle); }
@@ -13224,6 +13238,10 @@ input[aria-invalid="true"]{border-color:#b42318!important}
 .finance-row-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .finance-row-actions button { font-size: 12px; white-space: nowrap; }
 .finance-row-actions .secondary { padding: 8px 10px; }
+.finance-rental-link { padding: 0; font: inherit; text-align: left; cursor: pointer; color: var(--ui-accent); }
+.finance-rental-link:hover { text-decoration: underline; }
+.finance-receipt-action { color: var(--ui-accent); cursor: pointer; }
+.finance-receipt-action:hover { text-decoration: underline; }
 .finance-badge { display: inline-flex; border-radius: 20px; background: var(--ui-soft); color: var(--ui-muted); padding: 5px 9px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .finance-badge.warning { color: #a65b0b; background: #fff2dc; }
 .finance-badge.success { color: #247250; background: #eaf6ef; }
@@ -14392,7 +14410,7 @@ details[open] .chevron-arrow {
   color: #1d4ed8;
   margin-bottom: 4px;
 }
-.rental-flow-banner p {
+.rental-flow-banner p, .rental-flow-banner span { display: block;
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
@@ -14412,7 +14430,7 @@ details[open] .chevron-arrow {
 [data-theme="dark"] .rental-flow-banner strong {
   color: #93c5fd;
 }
-[data-theme="dark"] .rental-flow-banner p {
+[data-theme="dark"] .rental-flow-banner p, [data-theme="dark"] .rental-flow-banner span {
   color: #cbd5e1;
 }
 [data-theme="dark"] .rental-flow-banner.is-delivery {
@@ -14507,7 +14525,7 @@ details[open] .chevron-arrow {
   stroke: currentColor;
 }
 
-.terminal-emergency-bypass {
+.emergency-terminal-bypass, .terminal-emergency-bypass {
   margin-top: 10px;
   padding: 8px 12px;
   border-radius: 8px;
@@ -14517,7 +14535,7 @@ details[open] .chevron-arrow {
   box-sizing: border-box;
 }
 
-[data-theme="dark"] .terminal-emergency-bypass {
+[data-theme="dark"] .emergency-terminal-bypass, [data-theme="dark"] .terminal-emergency-bypass {
   border-color: #334155;
   background: #0f172a;
 }
@@ -17871,3 +17889,203 @@ textarea,
 @media(max-width:900px) { .ana-outlook-panel .ana-model-behavior { height: 64px; min-height: 64px; } }
 @media(max-width:560px) { .ana-outlook-panel .ana-model-behavior { height: 96px; min-height: 96px; } .ana-excluded-label { font-size: 8px; } }
 
+
+/* Smooth Walk-in Creation Form & Active Release Notice */
+.rental-form-scroll > [data-duration]:not([hidden]) {
+  display: contents;
+}
+.rental-form-scroll > [data-duration][hidden] {
+  display: none;
+}
+.rental-form-scroll [data-duration] > .duration-chip-row {
+  grid-column: 1 / -1;
+}
+.rental-form-scroll > [data-new-customer]:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+  padding: 16px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-soft);
+}
+.rental-form-scroll > [data-new-customer]:not([hidden]) > h3,
+.rental-form-scroll > [data-new-customer]:not([hidden]) > p,
+.rental-form-scroll > [data-new-customer]:not([hidden]) > label:has(textarea) {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.rental-form-scroll > [data-delivery-location]:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+@media (max-width: 600px) {
+  .rental-form-scroll > [data-new-customer]:not([hidden]),
+  .rental-form-scroll > [data-delivery-location]:not([hidden]) {
+    grid-template-columns: 1fr;
+  }
+}
+[data-quote-preview] {
+  transition: opacity 0.18s ease;
+}
+[data-quote-preview].is-calculating {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.quote-loading-state,
+.quote-unavailable-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-soft);
+  font-size: 13px;
+  color: var(--ui-muted);
+}
+.quote-unavailable-note {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--ui-text);
+}
+.rental-released-notice {
+  margin-bottom: 14px;
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.25);
+}
+.rental-released-notice .notice-icon {
+  color: #10b981;
+}
+[data-theme="dark"] .rental-released-notice {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+/* Unified Rental Process Modal Polish (Deliver / Handover, Prepare, Review, Return) */
+#modal[open] > .admin-form.rental-release-form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+#modal[open] > .admin-form.rental-release-form > * {
+  width: 100%;
+  box-sizing: border-box;
+}
+#modal:has(.rental-release-form) > .modal-heading {
+  padding: 14px 24px;
+  min-height: 54px;
+}
+.rental-release-form > .rental-task-progress,
+.transaction-record-modal > .rental-task-progress {
+  margin: 0;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--ui-border);
+  border-radius: 0;
+  padding: 12px 24px;
+  box-sizing: border-box;
+}
+.rental-release-form > .rental-task-progress p,
+.transaction-record-modal > .rental-task-progress p {
+  margin: 8px 0 0;
+  padding-top: 8px;
+}
+.rental-release-steps {
+  padding: 10px 24px;
+  gap: 20px;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--ui-surface);
+}
+.rental-release-steps li > strong {
+  white-space: nowrap;
+}
+.rental-flow-summary {
+  padding: 10px 24px;
+  gap: 14px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.rental-flow-summary > div {
+  gap: 2px;
+}
+.rental-flow-summary strong {
+  font-size: 16px;
+}
+.rental-flow-scroll {
+  flex: 1 1 auto;
+  min-height: 220px;
+  width: 100%;
+  padding: 18px 24px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.rental-release-form .rental-verified-notice {
+  margin-bottom: 14px;
+  padding: 11px 14px;
+}
+.rental-release-form .rental-section-heading {
+  margin-bottom: 10px;
+}
+.rental-release-inspection-grid {
+  align-items: end;
+  gap: 12px;
+}
+.rental-release-inspection-grid > label:first-child > .field-label {
+  min-height: 0;
+}
+.rental-release-inspection .rental-accessory-check {
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--ui-surface);
+  min-height: 44px;
+  margin: 0;
+  box-sizing: border-box;
+}
+.rental-release-footer {
+  padding: 12px 24px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.rental-release-footer > p {
+  margin: 0;
+  max-width: 34ch;
+}
+.rental-release-footer > .form-actions {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.emergency-terminal-bypass[hidden],
+.emergency-bypass-drawer[hidden] {
+  display: none !important;
+}
+.rental-release-footer .emergency-terminal-bypass,
+.rental-desk-form .form-actions .emergency-terminal-bypass {
+  flex: 0 0 100%;
+  margin-top: 6px;
+}
+@media (max-width: 600px) {
+  .rental-release-steps li > strong {
+    white-space: normal;
+  }
+  .rental-release-form > .rental-task-progress,
+  .transaction-record-modal > .rental-task-progress {
+    padding: 10px 16px;
+  }
+  .rental-flow-scroll {
+    min-height: 180px;
+    padding: 14px 16px;
+  }
+}

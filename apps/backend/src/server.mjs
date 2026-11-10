@@ -14,7 +14,7 @@ import { inventoryList, inventoryDetail, inventoryQr, inventoryQrLabels, createI
 import { updateProfile } from './profile.mjs';
 import { loadWorkspace, createCustomer, createMobileCustomerAccount, updateCustomer, changeCustomerPassword, deleteArchivedCustomer, saveRate, savePricing, saveSettings, savePaymentSettings, saveTermsSettings, saveRulesSettings, saveReceiptSettings, createWorkspaceUser, updateWorkspaceUser, syncMissingCustomerProfiles } from './workspace.mjs';
 import { loadPricing, quoteRental } from './pricing.mjs';
-import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, terminalPending, testTerminalPing, dispatchRentalToTerminal } from './transactions.mjs';
+import { authenticateTerminal, createRentalRequest, createReturnRequest, createMobileRentalRequest, reviewMobileRental, cancelMobileRentalRequest, quoteEquipmentRental, requestMobileReturn, reviewMobileReturn, createExpirySweep, resolveTerminalRequest, saveRequestInspection, terminalPending, testTerminalPing, dispatchRentalToTerminal, getVerificationRequestStatus } from './transactions.mjs';
 import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions, mobileTerms, mobileBusinessSettings, mobileCustomerTrust } from './mobile.mjs';
 import { createReadCache } from './read-cache.mjs';
 import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-errors.mjs';
@@ -212,6 +212,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     },
     terminalConfirm: (terminal, input) => resolveTerminalRequest(firestore, terminal, input),
     testTerminalPing: (actor, id) => testTerminalPing(firestore, actor, id, now()),
+    verificationRequestStatus: id => getVerificationRequestStatus(firestore, id, new Date(), { expire: () => verificationSweep.run({ force: true }) }),
     dispatchRentalToTerminal: async (actor, id, input) => { await verificationSweep.run(); return dispatchRentalToTerminal(firestore, actor, id, input, now(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
     createRentalRequest: async (actor, input) => { await verificationSweep.run(); return createRentalRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
     createReturnRequest: async (actor, input) => { await verificationSweep.run(); return createReturnRequest(firestore, actor, input, new Date(), Number(process.env.VERIFICATION_TTL_SECONDS || 600)); },
@@ -399,7 +400,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
   };
   const rootTypes = { getUser: 'users', createItem: 'items', updateItem: 'items', createCustomer: 'customers', updateCustomer: 'customers', createUser: 'users', updateUser: 'users', saveRate: 'item_rates', createItemCategory: 'item_categories' };
   const referenceOperations = new Set([
-    'getUser', 'workspace', 'dashboard', 'inventoryList', 'inventoryDetail', 'mobileAdminWorkspace', 'mobileCatalog', 'mobileProfile', 'mobileRentalList', 'resolveMobileItem', 'listNotifications', 'terminalPending',
+    'getUser', 'workspace', 'dashboard', 'inventoryList', 'inventoryDetail', 'mobileAdminWorkspace', 'mobileCatalog', 'mobileProfile', 'mobileRentalList', 'resolveMobileItem', 'listNotifications', 'terminalPending', 'verificationRequestStatus',
     'rentalTicket', 'lookupRental', 'maintenanceDetail', 'maintenanceStaff', ...Object.keys(cacheInvalidations)
   ]);
   for (const name of referenceOperations) {
@@ -692,7 +693,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (path === '/api/notifications/device' && req.method === 'DELETE') return send(res, 200, await services.unregisterNotificationDevice(actor, await body(req)));
         return send(res, 405, { error: 'Method not allowed.' });
       }
-      if (path === '/api/mobile/catalog' && req.method === 'GET') return send(res, 200, { ...await services.mobileCatalog(), firebaseProjectId: services.firebaseProjectId });
+      if (path === '/api/mobile/catalog' && req.method === 'GET') { if (req.headers['cache-control'] === 'no-cache') services.invalidateReadCache?.(['items', 'item_rates', 'rentals']); return send(res, 200, { ...await services.mobileCatalog(), firebaseProjectId: services.firebaseProjectId }); }
       if (path === '/api/mobile/catalog/resolve' && req.method === 'POST') return send(res, 200, { ...await services.resolveMobileItem(await body(req)), firebaseProjectId: services.firebaseProjectId });
       if (path === '/api/mobile/settings' && req.method === 'GET') return send(res, 200, await services.mobileBusinessSettings());
       if ((path === '/api/terms' || path === '/api/mobile/terms') && req.method === 'GET') return send(res, 200, await services.mobileTerms());
@@ -720,8 +721,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const [, id, action] = mobileRentalRoute || [];
         if (id && action === 'extension-quote' && req.method === 'POST') return send(res,200,await services.quoteRentalExtension(actor,id,await body(req)));
         if (id && action === 'extension' && req.method === 'POST') return sendRentalUpdate(res,200,await services.requestRentalExtension(actor,id,await body(req)),{rentalId:id,customerId:actor.id});
-        if (id && action === 'ticket' && req.method === 'GET') return send(res, 200, await services.rentalTicket(actor, id));
-        if (mobileRentalRoute && req.method === 'GET' && !action) return send(res, 200, await services.mobileRentalList(actor, id,Object.fromEntries(new URL(req.url,'http://localhost').searchParams)));
+        if (id && action === 'ticket' && req.method === 'GET') { services.invalidateReadCache?.(['rentals']); return send(res, 200, await services.rentalTicket(actor, id)); }
+        if (mobileRentalRoute && req.method === 'GET' && !action) { services.invalidateReadCache?.(['rentals', 'items']); return send(res, 200, await services.mobileRentalList(actor, id,Object.fromEntries(new URL(req.url,'http://localhost').searchParams))); }
         if (id && action === 'payment-proof' && req.method === 'POST') return sendRentalUpdate(res, 200, await services.submitRentalPaymentProof(actor, id, await body(req, 550000)), { rentalId: id, customerId: actor.id });
         if (mobileRentalRoute && req.method === 'POST') {
           if (!id) {
@@ -768,7 +769,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         return send(res, 405, { error: 'Method not allowed.' });
       }
       const inspectionRoute = path.match(/^\/api\/verification-requests\/([A-Za-z0-9_-]{1,128})\/inspection$/);
-      const transactionRoute = path === '/api/rentals' || path === '/api/returns' || inspectionRoute;
+      const verificationStatusRoute = path.match(/^\/api\/verification-requests\/([A-Za-z0-9_-]{1,128})$/);
+      const transactionRoute = path === '/api/rentals' || path === '/api/returns' || inspectionRoute || verificationStatusRoute;
       const rentalFlowRoute = path.match(/^\/api\/rentals\/([A-Za-z0-9_-]{1,128})\/(release-verification|release|prepare-delivery|payment-proof|payment-review|rolling-qr|receipt|complete-return|assignment|settlement|delivery|extension-review|extension-quote|extension|terminal-dispatch)$/);
       const rentalLookupRoute = path === '/api/rentals/lookup';
       const counterBookingRoute = path === '/api/rental-bookings';
@@ -892,6 +894,13 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (mobileReviewRoute && req.method === 'POST') return sendRentalUpdate(res, 200, await services.reviewMobileRental({ id: user.id, full_name: user.full_name || user.name }, mobileReviewRoute[1], await body(req)), { rentalId: mobileReviewRoute[1] });
         if (mobileReturnReviewRoute && req.method === 'POST') return sendRentalUpdate(res, 200, await services.reviewMobileReturn({ id: user.id, full_name: user.full_name || user.name }, mobileReturnReviewRoute[1], await body(req)), { rentalId: mobileReturnReviewRoute[1] });
         if (inspectionRoute && req.method === 'PUT') return sendRentalUpdate(res, 200, { request: await services.saveRequestInspection(user, inspectionRoute[1], await body(req)) });
+        if (verificationStatusRoute && req.method === 'GET') {
+          const status = await services.verificationRequestStatus(verificationStatusRoute[1]);
+          if (status?.request?.status && status.request.status !== 'PENDING') {
+            services.invalidateReadCache?.(['verification_requests', 'rentals', 'items', 'terminals']);
+          }
+          return send(res, 200, status);
+        }
         if (transactionRoute) return send(res, 405, { error: 'Method not allowed.' });
         if (itemCategoriesRoute) {
           const [, id] = itemCategoriesRoute;

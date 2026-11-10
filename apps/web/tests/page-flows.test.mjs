@@ -153,7 +153,7 @@ test('pricing editor preserves saved service hours when changing unrelated price
 });
 
 
-test('terminal confirmation automatically opens final details exactly once', async () => {
+test('terminal confirmation displays the success screen with action buttons and stops polling', async () => {
   const opened = [];
   const s = handoffFixture({ transactionDetails: rental => opened.push(rental) });
   s.workflow.verificationDetails('request');
@@ -163,8 +163,36 @@ test('terminal confirmation automatically opens final details exactly once', asy
     verification: [{ ...s.model().verification[0], status: 'CONFIRMED' }]
   }));
   await s.workflow.refreshPendingHandoff();
-  assert.equal(opened.length, 1);
-  assert.equal(opened[0].status, 'COMPLETED');
+  assert.equal(s.title.textContent, 'Return confirmed');
+  assert.match(s.panel.innerHTML, /Return confirmed at counter!/);
+  assert.match(s.panel.innerHTML, /data-handoff-details/);
+  assert.match(s.panel.innerHTML, /data-handoff-done/);
+  assert.equal(await s.workflow.refreshPendingHandoff(), false);
+});
+
+test('direct verification status polling resolves shop dispatch confirmation and renders resort handoff button', async () => {
+  const s = handoffFixture({
+    api: async path => {
+      if (path === '/verification-requests/request-dispatch') {
+        return {
+          request: { id: 'request-dispatch', rental_id: 'rental-dispatch', rental_code: 'R-0327', item_name: 'Pickleball Set', transaction_type: 'RENTAL', terminal_mode: 'SHOP_DISPATCH', status: 'CONFIRMED', terminal_code: 'TERM-01', confirmed_at: '2026-11-10T06:00:00Z' },
+          rental: { id: 'rental-dispatch', rental_code: 'R-0327', item_name: 'Pickleball Set', status: 'APPROVED', delivery_status: 'OUT_FOR_DELIVERY', fulfillment_mode: 'DELIVERY' }
+        };
+      }
+      throw new Error('Unexpected path: ' + path);
+    }
+  });
+  s.setModel({
+    ...s.model(),
+    transactions: [],
+    verification: [{ id: 'request-dispatch', rental_id: 'rental-dispatch', rental_code: 'R-0327', item_name: 'Pickleball Set', transaction_type: 'RENTAL', terminal_mode: 'SHOP_DISPATCH', status: 'PENDING', verification_code: '495109', terminal_code: 'TERM-01' }]
+  });
+  s.workflow.verificationDetails('request-dispatch');
+  assert.equal(s.title.textContent, 'Awaiting terminal confirmation');
+  assert.match(s.panel.innerHTML, /495109/);
   await s.workflow.refreshPendingHandoff();
-  assert.equal(opened.length, 1);
+  assert.equal(s.title.textContent, 'Shop dispatch confirmed');
+  assert.match(s.panel.innerHTML, /Equipment prepared &amp; confirmed!/);
+  assert.match(s.panel.innerHTML, /Proceed to resort handoff/);
+  assert.match(s.panel.innerHTML, /data-handoff-proceed="delivery"/);
 });

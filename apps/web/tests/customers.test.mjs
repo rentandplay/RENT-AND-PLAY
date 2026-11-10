@@ -114,3 +114,65 @@ test('paginated directory explains its counts and preserves summarized past rent
   assert.ok(!html.includes('Ready for their first rental'));
   assert.ok(!html.includes('No rentals yet'));
 });
+
+
+test('customer profile renders full profile shell immediately while loading history, and recovers on retry', async () => {
+  const prior = globalThis.document;
+  const modalStates = [];
+  let marker = { isConnected: true };
+  const buttons = {};
+  const element = dataset => ({ dataset, addEventListener(event, callback) { this[event] = callback; } });
+  const modal = {
+    open: true,
+    querySelector: selector => selector === '[data-customer-history-loading]' ? marker : buttons[selector] || null,
+    querySelectorAll: selector => selector === '[data-customer-rental]' ? Object.values(buttons).filter(b => b.dataset?.customerRental) : []
+  };
+  const showModal = (title, content) => {
+    modalStates.push(content);
+    marker = { isConnected: true };
+    for (const name of ['profile-edit', 'profile-toggle', 'history-prev', 'history-next', 'history-retry']) {
+      if (content.includes(`data-${name}`)) buttons[`[data-${name}]`] = element({});
+    }
+  };
+  let shouldFail = true;
+  const detailBtn = { dataset: { customerDetail: 'c1' } };
+  globalThis.document = { querySelector: () => null, querySelectorAll: selector => selector === '[data-customer-detail]' ? [detailBtn] : [], createElement: () => ({}) };
+
+  try {
+    const ui = createCustomerUI({
+      ...helpers,
+      model: () => ({
+        customers: [{ id: 'c1', customer_code: 'CUST-001', full_name: 'Maria Clara', email: 'maria@example.test', phone: '09181234567', is_active: true }],
+        transactions: []
+      }),
+      modal,
+      showModal,
+      transactionDetails: () => {},
+      api: async () => {
+        if (shouldFail) throw new Error('Network timeout loading rentals.');
+        return { records: [{ id: 'rent-1', item_name: 'Badminton Racket', status: 'COMPLETED' }], nextCursor: null };
+      }
+    });
+    ui.render('', { paged: rows => ({ rows, footer: '' }), table: (_, rows) => rows, status: String, empty: () => '' });
+    ui.bind(() => {}, () => {}, () => {});
+
+    await detailBtn.onclick();
+    assert.ok(modalStates[0].includes('customer-profile'), 'Modal shell has customer-profile container');
+    assert.ok(modalStates[0].includes('Maria Clara'), 'Shows customer name immediately');
+    assert.ok(modalStates[0].includes('CUST-001'), 'Shows customer code immediately');
+    assert.ok(modalStates[0].includes('maria@example.test'), 'Shows contact email immediately');
+    assert.ok(modalStates[0].includes('data-customer-history-loading'), 'Shows loading indicator inside history');
+    assert.ok(modalStates[0].includes('session-spinner'), 'Shows styled loading spinner');
+
+    assert.ok(modalStates[1].includes('customer-profile'), 'Profile shell preserved on error');
+    assert.ok(modalStates[1].includes('Network timeout loading rentals'), 'Displays clear error message');
+    assert.ok(modalStates[1].includes('data-history-retry'), 'Provides retry button');
+
+    shouldFail = false;
+    await buttons['[data-history-retry]'].click();
+    assert.ok(modalStates[3].includes('Badminton Racket'), 'Loads rental history records on retry');
+    assert.ok(modalStates[3].includes('Maria Clara'), 'Keeps customer details');
+  } finally {
+    globalThis.document = prior;
+  }
+});

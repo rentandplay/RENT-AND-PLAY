@@ -87,7 +87,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
       if (name === 'maintenance_records' && view !== 'Reports') query=query.where('status','in',['OPEN','IN_PROGRESS']).limit(100);
       // Reports calculate full-period metrics; the operational page cap would
       // silently truncate terminal verification and utilization exported to CSV.
-      if (view !== 'Reports' && ['item_status_history','item_condition_records','verification_requests'].includes(name)) query=query.limit(100);
+      if (view !== 'Reports' && ['item_status_history','item_condition_records'].includes(name)) query=query.limit(100);
     }
     return query.get();
   };
@@ -102,6 +102,12 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
     !mobile && view === 'Reports' ? db.collection('report_summary_state').doc('presentation_demo').get() : Promise.resolve({ exists:false })
   ]);
   const source = Object.fromEntries(names.map((name, index) => [name, rows(snapshots[index])]));
+  if (view && view !== 'Reports' && source.verification_requests.length > 100) {
+    const sortedVerification = [...source.verification_requests].sort((a, b) => (asDate(b.requested_at)?.getTime() || 0) - (asDate(a.requested_at)?.getTime() || 0));
+    const pendingVerification = sortedVerification.filter(row => row.status === 'PENDING');
+    const seenIds = new Set(pendingVerification.map(row => row.id));
+    source.verification_requests = [...pendingVerification, ...sortedVerification.filter(row => !seenIds.has(row.id))].slice(0, Math.max(100, pendingVerification.length));
+  }
   const rankingPromise = view === 'Transaction History' ? equipmentRentalRanking(db,source.items,{from:filters.rankingFrom,to:filters.rankingTo},now) : Promise.resolve(null);
   // These pages use stock metadata; equipment photos load from Inventory when opened.
   if (view && !mobile) source.items = source.items.map(({ image_data, image_data_url, ...item }) => item);

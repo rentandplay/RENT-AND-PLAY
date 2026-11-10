@@ -131,3 +131,59 @@ test('a delayed notification lookup cannot replace a newer dialog', async () => 
   finish({ rental: row }); await opening;
   assert.equal(body, 'New inspection draft');
 });
+
+
+test('active rentals on Rentals stay out of return intake until viewed in Returns or requested for return', async () => {
+  let modalBody = '', closed = 0;
+  const closeListeners = [];
+  const modal = {
+    open: true,
+    close() { closed++; this.open = false; },
+    querySelector: () => null,
+    querySelectorAll: selector => selector === '[data-close]'
+      ? [{ addEventListener: (_evt, cb) => closeListeners.push(cb) }]
+      : []
+  };
+  const activeWalkIn = { ...row, id: 'active-walkin', rental_code: 'R-0321', status: 'ACTIVE', request_source: 'WALK_IN', confirmed_rental_at: '2026-10-03T04:00:00Z' };
+  const returnRequested = { ...row, id: 'return-requested', rental_code: 'R-REQ', status: 'ACTIVE', latest_return_request_status: 'PENDING_ADMIN_APPROVAL' };
+  const awaitingInspection = { ...row, id: 'awaiting-inspection', rental_code: 'R-INSP', status: 'RETURN_PENDING_INSPECTION' };
+  const data = {
+    transactions: [activeWalkIn, returnRequested, awaitingInspection],
+    customers: [], items: [], categories: [], rates: [], maintenance: [], users: [], settings: {}, terminals: [], verification: []
+  };
+  const ui = createWorkspaceUI({
+    ...h,
+    modal,
+    showModal: (_title, body) => { modalBody = body; closeListeners.length = 0; },
+    api: async () => data
+  });
+  await ui.load();
+
+  // 1. On Rentals module: released active rental must not prompt to receive equipment back
+  ui.render('Rentals', {});
+  await ui.openTransaction('active-walkin');
+  assert.ok(!modalBody.includes('Receive returned equipment'));
+  assert.ok(!modalBody.includes('data-mobile-return-confirm'));
+  assert.ok(modalBody.includes('Active rental in progress'));
+  assert.ok(modalBody.includes('Rental in progress · Handover complete'));
+  assert.ok(modalBody.includes('Done'));
+  assert.equal(closeListeners.length, 1);
+  closeListeners[0]();
+  assert.equal(closed, 1);
+
+  // 2. Customer return request still surfaces return intake even outside Returns
+  await ui.openTransaction('return-requested');
+  assert.ok(modalBody.includes('Receive returned equipment'));
+  assert.ok(modalBody.includes('data-mobile-return-confirm'));
+
+  // 3. Physically received unit awaiting inspection surfaces Complete inspection
+  await ui.openTransaction('awaiting-inspection');
+  assert.ok(modalBody.includes('Complete inspection'));
+  assert.ok(modalBody.includes('data-mobile-return-confirm'));
+
+  // 4. On Returns module: active rentals show Receive returned equipment
+  ui.render('Returns', {});
+  await ui.openTransaction('active-walkin');
+  assert.ok(modalBody.includes('Receive returned equipment'));
+  assert.ok(modalBody.includes('data-mobile-return-confirm'));
+});

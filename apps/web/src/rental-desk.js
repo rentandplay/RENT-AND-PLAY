@@ -243,17 +243,20 @@ export function createRentalDesk(h) {
   }
   function bookingForm() {
     const model = getModel();
-    const items = (model.items || []).filter(item => item.is_active !== false && ['AVAILABLE','RENTED','RESERVED_PENDING'].includes(item.status));
+    const isAvailableNow = item => String(item.status || '').toUpperCase() === 'AVAILABLE' && !item.reserved_rental_id && !item.current_rental_id;
+    const items = (model.items || [])
+      .filter(item => item.is_active !== false && ['AVAILABLE', 'RENTED', 'RESERVED_PENDING'].includes(item.status))
+      .sort((a, b) => Number(isAvailableNow(b)) - Number(isAvailableNow(a)) || String(a.name || '').localeCompare(String(b.name || '')));
     const customers = (model.customers || []).filter(row => row.is_active !== false);
     if (!items.length) { showModal('Walk-in rental', '<p>No equipment is available. Check stock and maintenance before creating a rental.</p>'); return; }
     const resortOptions = pickupLocations.filter(loc => loc !== 'Shop pickup').map(loc => `<option value="${e(loc)}">${e(loc)}</option>`).join('');
-    const durationChips = [[60, '1 hr'], [120, '2 hrs'], [180, '3 hrs'], [300, '5 hrs'], [720, '12 hrs'], [1440, '1 Day (24h)'], [2880, '2 Days (48h)'], [4320, '3 Days (72h)']].map(([mins, label]) => `<button type="button" class="secondary duration-chip" data-duration-chip="${mins}">${label}</button>`).join('');
+    const durationChips = [[60, '1 hr'], [120, '2 hrs'], [180, '3 hrs'], [300, '5 hrs'], [720, '12 hrs'], [1440, '1 Day (24h)'], [2880, '2 Days (48h)'], [4320, '3 Days (72h)']].map(([mins, label]) => `<button type="button" class="secondary duration-chip${mins === 60 ? ' active' : ''}" data-duration-chip="${mins}">${label}</button>`).join('');
     showModal('Create walk-in rental', `<form class="admin-form rental-desk-form">
       <div class="rental-flow-banner"><strong>Walk-In &amp; Resort Guest Desk</strong><span>Counter handover starts timer at shop &middot; Resort delivery starts timer only upon resort QR handoff.</span></div>
       <label>Search existing customer<input type="search" data-customer-search placeholder="Beginning of name or customer reference"/></label>
       <label>Customer<select name="customerId" required><option value="">Select an existing customer</option>${options(customers, row => `${row.full_name} · ${row.customer_code} · ${row.phone || 'No contact'}`)}<option value="__new">+ New walk-in customer</option></select></label>
       <section data-new-customer hidden><h3>New customer profile</h3><p>Check the existing directory first. App login can be added later without changing their customer code.</p><label>Full name<input name="newFullName" maxlength="150" disabled/></label><label>Philippine mobile number<input name="newPhone" type="tel" maxlength="40" placeholder="0917 123 4567" disabled/></label><label>Email (optional)<input name="newEmail" type="email" maxlength="254" disabled/></label><label>Address (optional)<textarea name="newAddress" maxlength="500" disabled></textarea></label></section>
-      <label>Available equipment<select name="itemId" required>${options(items, row => `${row.name} · ${row.item_code}`)}</select></label>
+      <label>Available equipment<select name="itemId" required>${options(items, row => `${row.name} · ${row.item_code}${isAvailableNow(row) ? '' : ' (In use — schedule ahead)'}`)}</select></label>
       <label>Handover method<select name="fulfillmentMode"><option value="SHOP_HANDOVER">Hand over at Rent &amp; Play · Lakewoods (Counter Walk-In)</option><option value="DELIVERY">Deliver to the customer's resort (Lakewoods Subdivision)</option></select></label>
       <div data-delivery-location hidden>
         <label>Lakewoods Subdivision resort<select data-resort-preset disabled><option value="">Select a resort in Lakewoods or type below</option>${resortOptions}</select></label>
@@ -272,47 +275,73 @@ export function createRentalDesk(h) {
     let quote, revision = 0, createdCustomer = null, autoQuoteTimer;
     const profile = () => ({ fullName: form.elements.newFullName.value.trim(), phone: form.elements.newPhone.value.trim(), email: form.elements.newEmail.value.trim(), address: form.elements.newAddress.value.trim() });
     const payload = () => ({ itemId: form.elements.itemId.value, customerId: form.elements.customerId.value, rentalChannel: 'WALK_IN', fulfillmentMode: form.elements.fulfillmentMode.value, mode: form.elements.mode.value, durationMinutes: Number(form.elements.durationMinutes.value), deliveryLocation: form.elements.fulfillmentMode.value === 'SHOP_HANDOVER' ? 'Rent & Play · Lakewoods, Los Baños' : form.elements.deliveryLocation.value.trim(), paymentMethod: form.elements.paymentMethod.value, ...(form.elements.scheduledStartAt.value?{scheduledStartAt:manilaDateTimeIso(form.elements.scheduledStartAt.value)}:{}), ...(form.elements.mode.value === 'WHOLE_STAY' ? { resortCheckoutAt: manilaDateTimeIso(form.elements.resortCheckoutAt.value) } : {}) });
-    const scheduleAutoQuote = () => {
+    const scheduleAutoQuote = (immediate = false) => {
       clearTimeout(autoQuoteTimer);
       if (!form.elements.itemId?.value) return;
-      if (form.elements.mode?.value === 'TIMED' && (!form.elements.durationMinutes?.value || Number(form.elements.durationMinutes.value) <= 0)) return;
-      if (form.elements.fulfillmentMode?.value === 'DELIVERY' && !form.elements.deliveryLocation?.value?.trim()) return;
+      if (form.elements.mode?.value === 'TIMED' && (!form.elements.durationMinutes?.value || Number(form.elements.durationMinutes.value) <= 0)) {
+        price.classList.remove('is-calculating');
+        price.innerHTML = '<div class="quote-unavailable-note">Enter a positive duration in minutes to calculate the rental price.</div>';
+        return;
+      }
+      if (form.elements.mode?.value === 'WHOLE_STAY' && !form.elements.resortCheckoutAt?.value) {
+        price.classList.remove('is-calculating');
+        price.innerHTML = '<div class="quote-unavailable-note">Enter the guest’s resort checkout time to calculate the whole-stay rate.</div>';
+        return;
+      }
       autoQuoteTimer = setTimeout(() => {
         if (form.isConnected && modal.open) preview(true);
-      }, 350);
+      }, immediate ? 0 : 220);
     };
     const durationHumanEl = form.querySelector('[data-duration-human]');
-    const updateDurationHuman = () => {
-      if (durationHumanEl && form.elements.durationMinutes) {
-        const val = Number(form.elements.durationMinutes.value);
-        durationHumanEl.textContent = val > 0 ? `Equivalent: ${formatQuoteMinutes(val)}` : '';
-      }
+    const syncDurationUI = () => {
+      const val = Number(form.elements.durationMinutes?.value || 0);
+      if (durationHumanEl) durationHumanEl.textContent = val > 0 ? `Equivalent: ${formatQuoteMinutes(val)}` : '';
+      form.querySelectorAll('[data-duration-chip]').forEach(chip => {
+        chip.classList.toggle('active', Number(chip.dataset.durationChip) === val);
+      });
     };
-    const invalidate = () => { revision++; quote = null; saveButton.disabled = true; previewButton.disabled = false; previewButton.textContent = 'Review price'; price.innerHTML = ''; updateDurationHuman(); scheduleAutoQuote(); };
+    const invalidate = (immediate = false) => {
+      revision++;
+      quote = null;
+      saveButton.disabled = true;
+      previewButton.disabled = false;
+      previewButton.textContent = 'Review price';
+      if (price.querySelector('.rental-booking-price')) {
+        price.classList.add('is-calculating');
+      } else {
+        price.classList.remove('is-calculating');
+        price.innerHTML = '<div class="quote-loading-state"><span class="session-spinner" aria-hidden="true"></span><span>Calculating rental price…</span></div>';
+      }
+      syncDurationUI();
+      scheduleAutoQuote(immediate);
+    };
     const resortPreset = form.querySelector('[data-resort-preset]');
     if (resortPreset) {
       resortPreset.onchange = () => {
         const chosen = resortPreset.value;
         if (chosen && chosen !== 'Other / Custom Resort') {
           form.elements.deliveryLocation.value = `${chosen}, Lakewoods Subdivision`;
-          invalidate();
         } else if (chosen === 'Other / Custom Resort') {
           form.elements.deliveryLocation.value = '';
           form.elements.deliveryLocation.focus();
-          invalidate();
         }
       };
     }
     form.querySelectorAll('[data-duration-chip]').forEach(chip => {
       chip.onclick = () => {
         form.elements.durationMinutes.value = chip.dataset.durationChip;
-        form.querySelectorAll('[data-duration-chip]').forEach(btn => btn.classList.toggle('active', btn === chip));
-        invalidate();
+        invalidate(true);
       };
     });
     let customerSearchVersion=0,customerSearchTimer;
     form.querySelector('[data-customer-search]').oninput=event=>{
       const query=event.target.value.trim(),version=++customerSearchVersion;clearTimeout(customerSearchTimer);
+      if(!query){
+        const selected=form.elements.customerId.value;
+        form.elements.customerId.innerHTML='<option value="">Select an existing customer</option>'+options(customers,row=>`${row.full_name} · ${row.customer_code} · ${row.phone||'No contact'}`)+'<option value="__new">+ New walk-in customer</option>';
+        form.elements.customerId.value=selected;
+        return;
+      }
       if(query.length<2)return;
       customerSearchTimer=setTimeout(async()=>{
         try{const result=await api('/records/customers?'+new URLSearchParams({search:query,status:'ACTIVE',limit:'20'}));if(version!==customerSearchVersion||!form.isConnected)return;
@@ -322,24 +351,37 @@ export function createRentalDesk(h) {
         form.elements.customerId.innerHTML='<option value="">Select an existing customer</option>'+options(list,row=>`${row.full_name} · ${row.customer_code} · ${row.phone||'No contact'}`)+'<option value="__new">+ New walk-in customer</option>';
         form.elements.customerId.value=selected;
         }catch(problem){if(version===customerSearchVersion&&form.isConnected)toast(problem.message);}
-      },400);
+      },300);
     };
-    const syncFields = () => {
-      const isNew = form.elements.customerId.value === '__new', delivery = form.elements.fulfillmentMode.value === 'DELIVERY';
+    const syncCustomerSection = () => {
+      const isNew = form.elements.customerId.value === '__new';
       form.querySelector('[data-new-customer]').hidden = !isNew;
-      for (const name of ['newFullName', 'newPhone', 'newEmail', 'newAddress']) { form.elements[name].disabled = !isNew; form.elements[name].required = isNew && ['newFullName', 'newPhone'].includes(name); }
+      for (const name of ['newFullName', 'newPhone', 'newEmail', 'newAddress']) {
+        form.elements[name].disabled = !isNew;
+        form.elements[name].required = isNew && ['newFullName', 'newPhone'].includes(name);
+      }
+      validation.update();
+    };
+    const syncDeliveryAndMode = (forceQuote = false) => {
+      const delivery = form.elements.fulfillmentMode.value === 'DELIVERY';
+      form.querySelector('.rental-flow-banner')?.classList.toggle('is-delivery', delivery);
       form.querySelector('[data-delivery-location]').hidden = !delivery;
       if (resortPreset) resortPreset.disabled = !delivery;
       form.elements.deliveryLocation.disabled = !delivery; form.elements.deliveryLocation.required = delivery;
+      const prevMode = form.elements.mode.value;
       form.elements.mode.querySelector('[value="WHOLE_STAY"]').disabled = !delivery;
       if (!delivery) form.elements.mode.value = 'TIMED';
       const stay = form.elements.mode.value === 'WHOLE_STAY';
       form.querySelector('[data-duration]').hidden = stay; form.elements.durationMinutes.disabled = stay; form.elements.durationMinutes.required = !stay;
       form.querySelector('[data-checkout]').hidden = !stay; form.elements.resortCheckoutAt.disabled = !stay; form.elements.resortCheckoutAt.required = stay;
-      validation.update(); invalidate();
+      validation.update();
+      if (forceQuote || prevMode !== form.elements.mode.value) invalidate(true);
     };
-    form.elements.customerId.onchange = syncFields; form.elements.fulfillmentMode.onchange = syncFields; form.elements.mode.onchange = syncFields;
-    for (const name of ['itemId','durationMinutes','scheduledStartAt','deliveryLocation','paymentMethod','resortCheckoutAt','newFullName','newPhone','newEmail','newAddress']) form.elements[name].addEventListener('input', invalidate);
+    form.elements.customerId.onchange = syncCustomerSection;
+    form.elements.fulfillmentMode.onchange = () => syncDeliveryAndMode(false);
+    form.elements.mode.onchange = () => syncDeliveryAndMode(true);
+    form.elements.itemId.onchange = () => invalidate(true);
+    for (const name of ['durationMinutes', 'scheduledStartAt', 'resortCheckoutAt']) form.elements[name].addEventListener('input', () => invalidate(false));
     async function preview(silent = false) {
       if (!silent && !form.reportValidity()) return;
       if (silent && (!form.elements.itemId.value || (form.elements.mode.value === 'TIMED' && !form.elements.durationMinutes.value))) return;
@@ -348,10 +390,23 @@ export function createRentalDesk(h) {
       try {
         const response = await api('/pricing/quote', { method: 'POST', body: JSON.stringify(payload()) });
         if (version !== revision || !form.isConnected || !modal.open) return;
-        quote = response.quote; price.innerHTML = renderBookingPrice(quote, h) + `<p>Late fee: ${e(h.money(quote.overtime_rate || 0))} per started ${e(quote.overtime_unit_minutes || 60)} minutes after the ${e(quote.grace_minutes || 0)} minute grace period.</p>`;
+        quote = response.quote;
+        price.classList.remove('is-calculating');
+        price.innerHTML = renderBookingPrice(quote, h) + `<p>Late fee: ${e(h.money(quote.overtime_rate || 0))} per started ${e(quote.overtime_unit_minutes || 60)} minutes after the ${e(quote.grace_minutes || 0)} minute grace period.</p>`;
         saveButton.disabled = false;
-      } catch (error) { if (version === revision && form.isConnected) { if (!silent) form.querySelector('.form-error').textContent = error.message; quote = null; } }
-      finally { if (version === revision && form.isConnected) { previewButton.disabled = false; previewButton.textContent = 'Review price'; } }
+      } catch (error) {
+        if (version === revision && form.isConnected) {
+          price.classList.remove('is-calculating');
+          quote = null;
+          if (silent) {
+            price.innerHTML = `<div class="quote-unavailable-note" role="note"><strong>Quote unavailable:</strong> ${e(error.message)}</div>`;
+          } else {
+            form.querySelector('.form-error').textContent = error.message;
+          }
+        }
+      } finally {
+        if (version === revision && form.isConnected) { previewButton.disabled = false; previewButton.textContent = 'Review price'; }
+      }
     }
     previewButton.onclick = () => preview(false);
     submit(form, 'Save this walk-in rental?', 'The equipment will be reserved. Inspect the unit and confirm payment, customer agreement and physical handover to start the timer.', async (_fields, key) => {
@@ -373,7 +428,8 @@ export function createRentalDesk(h) {
         });
       } finally { form.inert = false; }
     });
-    syncFields();
+    syncCustomerSection();
+    syncDeliveryAndMode(true);
   }
   function reviewForm(row, action) {
     const approve = action === 'APPROVE';
@@ -521,7 +577,10 @@ export function createRentalDesk(h) {
     const form = modal.querySelector('form'), photos = bindInspectionPhotos(form);
     const terminalOperationKey = rentalOperationKey();
     const espReleaseBtn = form.querySelector('[data-release-esp32]');
+    let lastStep = 1;
     const sync = state => {
+      const stepChanged = state.step !== lastStep;
+      lastStep = state.step;
       form.querySelectorAll('[data-release-panel]').forEach(panel => { panel.hidden = Number(panel.dataset.releasePanel) !== state.step; });
       form.querySelectorAll('[data-release-step]').forEach(step => {
         const number = Number(step.dataset.releaseStep); step.classList.toggle('is-current', number === state.step); step.classList.toggle('is-complete', number < state.step);
@@ -557,10 +616,14 @@ export function createRentalDesk(h) {
       form.querySelector('.form-error').textContent = state.error;
       if (state.error) form.querySelector('.form-error').scrollIntoView({ block: 'nearest' });
       form.querySelector('[data-release-hint]').textContent = state.step === 1 ? (walkIn ? 'Verify the saved rental reference. No customer app is required.' : 'Scan the customer rental QR at the selected handoff location.') : (counterHandoff ? 'Send to the counter terminal, then press its physical button as you hand over the item.' : 'Confirm here only when the customer physically receives the equipment. This starts the rental timer.');
+      if (stepChanged) {
+        const scroller = form.querySelector('.rental-flow-scroll');
+        if (scroller) scroller.scrollTop = 0;
+      }
     };
     const verification = createReleaseVerification({ api, rentalId: row.id, onChange: sync });
     const stopCamera = bindQrReaders(form, modal, { onCapture: () => verifyRental() });
-    const verifyRental = async () => { stopCamera(); if (await verification.verifyBooking()) form.elements.customerVerified.focus(); };
+    const verifyRental = async () => { stopCamera(); if (await verification.verifyBooking()) form.elements.customerVerified.focus({ preventScroll: true }); };
     form.querySelector('[data-release-back]').onclick = () => { stopCamera(); verification.goBack(); form.elements.transactionCode.focus(); };
     for (const name of ['transactionCode', 'manualReason']) {
       form.elements[name].addEventListener('input', () => {

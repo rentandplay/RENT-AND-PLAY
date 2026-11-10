@@ -1,4 +1,4 @@
-import { verifyTransactionQrCode } from './rental-flow.mjs';
+import { MOBILE_RENTAL_TERMS_VERSION, verifyTransactionQrCode } from './rental-flow.mjs';
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import { allocateRecordCodes } from './record-codes.mjs';
 import { healthyUnit, unitHasMaintenance } from './maintenance-state.mjs';
@@ -414,6 +414,9 @@ export async function resolveTerminalRequest(db, terminal, input, now = new Date
             latest_terminal_request_status: 'CONFIRMED'
           };
           Object.assign(changes, rentalPaymentSummary(rental, changes));
+          if (rental.request_source === 'WALK_IN' && request.customer_terms_acknowledged === true && !rental.rental_terms_acceptance) {
+            changes.rental_terms_acceptance = { version: MOBILE_RENTAL_TERMS_VERSION, acceptance_method: 'STAFF_WITNESSED', accepted_at: now, accepted_by: rental.customer_id, witnessed_by: request.requested_by || terminal.id, rental_fee: rental.rental_fee, billed_minutes: fee.billed_minutes, late_fee_rate: fee.overtime_rate, late_fee_unit_minutes: fee.overtime_unit_minutes, grace_minutes: fee.grace_minutes, due_at: due, fulfillment_mode: rental.fulfillment_mode, delivery_location: rental.delivery_location };
+          }
           itemChanges = { status: 'RENTED', condition_status: inspection.condition, reserved_rental_id: null, current_rental_id: rentalDoc.id, updated_at: now };
           queueRentalNotification(tx, db, { id: rentalDoc.id, ...rental, ...changes }, 'RENTAL_RELEASED', now);
         }
@@ -754,3 +757,18 @@ export async function dispatchRentalToTerminal(db, actor, rentalId, input = {}, 
 }
 
 
+export async function getVerificationRequestStatus(db, requestId, now = new Date(), { expire = () => expireVerificationRequests(db, now) } = {}) {
+  const id = idValue(requestId);
+  let requestDoc = await ref(db, 'verification_requests', id).get();
+  if (!requestDoc.exists) fail(404, 'Verification request not found.');
+  let request = { ...docData(requestDoc), transaction_type: requestType(requestDoc.data()) };
+  if (request.status === 'PENDING' && expired(request, now)) {
+    await expire();
+    requestDoc = await ref(db, 'verification_requests', id).get();
+    if (requestDoc.exists) request = { ...docData(requestDoc), transaction_type: requestType(requestDoc.data()) };
+  }
+  const rentalId = request.rental_id && request.rental_id !== 'test_rental' ? String(request.rental_id) : '';
+  const rentalDoc = rentalId ? await ref(db, 'rentals', rentalId).get() : null;
+  const rental = rentalDoc?.exists ? docData(rentalDoc) : null;
+  return serializeTransaction({ request, rental });
+}

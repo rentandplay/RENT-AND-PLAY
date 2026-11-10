@@ -229,27 +229,58 @@ export function createCustomerUI(h) {
   }
 
   async function details(id, historyPage = 0) {
-    const row = rows().find(item => String(item.customer.id) === String(id));
-    if (!row) return;
-    const c=row.customer, pageSize=5, version=++detailVersion;
-    let state=historyPages.get(String(id));
-    if(!state||historyPage===0){state={cursor:'',previous:[],page:0,next:null};historyPages.set(String(id),state);}
-    else if(historyPage>state.page && state.next){state.previous.push(state.cursor);state.cursor=state.next;state.page++;}
-    else if(historyPage<state.page){state.cursor=state.previous.pop()||'';state.page--;}
-    showModal('Customer profile','<p role="status" data-customer-history-loading>Loading customer rental history…</p>');
-    const marker=modal.querySelector('[data-customer-history-loading]');
+    const row = rows().find(item => String(item.customer.id) === String(id) || String(item.customer.customer_code || '').toLowerCase() === String(id).toLowerCase() || (item.customer.auth_uid && String(item.customer.auth_uid) === String(id)));
+    if (!row) {
+      if (typeof toast === 'function') toast('Customer not found in directory.');
+      return;
+    }
+    const c = row.customer, pageSize = 5, version = ++detailVersion;
+    let state = historyPages.get(String(id));
+    if (!state || historyPage === 0) { state = { cursor: '', previous: [], page: 0, next: null }; historyPages.set(String(id), state); }
+    else if (historyPage > state.page && state.next) { state.previous.push(state.cursor); state.cursor = state.next; state.page++; }
+    else if (historyPage < state.page) { state.cursor = state.previous.pop() || ''; state.page--; }
+
+    const profileShell = historySection => `<div class="customer-profile"><header class="customer-profile-heading">${avatar(c)}<div><span class="eyebrow">${e(c.customer_code)}</span><h3>${e(c.full_name)}</h3><p>${c.created_at ? `Customer since ${e(shortDate(c.created_at))}` : 'Customer record'}</p></div>${badge(c)}</header><dl class="customer-profile-contact"><div><dt>Email address</dt><dd>${e(c.email || 'Not provided')}</dd></div><div><dt>Phone number</dt><dd>${e(c.phone || 'Not provided')}</dd></div><div><dt>Address</dt><dd>${e(c.address || 'Not provided')}</dd></div></dl><section class="customer-profile-metrics" aria-label="Customer rental overview"><div><strong>${row.total}</strong><span>Confirmed rentals</span></div><div><strong>${row.active}</strong><span>Equipment out</span></div><div><strong>${row.returned}</strong><span>Returned</span></div><div class="${row.overdue ? 'customer-overdue-text' : ''}"><strong>${row.overdue}</strong><span>Overdue</span></div></section><div class="customer-profile-actions"><button type="button" class="secondary" data-profile-edit>Edit customer</button><button type="button" class="text-button" data-profile-toggle>${c.is_active === false ? 'Restore customer' : 'Archive customer'}</button>${c.is_active === false ? '<button type="button" class="customer-delete" data-profile-delete>Delete permanently</button>' : ''}</div><section class="customer-profile-history">${historySection}</section><p class="customer-profile-error form-error" role="alert"></p></div>`;
+
+    const loadingHistory = `<div class="customer-history-heading"><h3>Rental history <span>Loading…</span></h3><p>Stored rental records · Philippine time</p></div><div class="customer-history-loading" role="status" data-customer-history-loading><div class="session-spinner" aria-hidden="true"></div><p>Loading customer rental history…</p></div>`;
+
+    showModal('Customer profile', profileShell(loadingHistory));
+    const marker = modal.querySelector('[data-customer-history-loading]');
+    const bindProfileActions = () => {
+      const editBtn = modal.querySelector('[data-profile-edit]');
+      if (editBtn) editBtn.onclick = () => form(c);
+      const toggleBtn = modal.querySelector('[data-profile-toggle]');
+      if (toggleBtn) toggleBtn.onclick = event => changeStatus(c, row, event.currentTarget, true);
+      const deleteBtn = modal.querySelector('[data-profile-delete]');
+      if (deleteBtn) deleteBtn.addEventListener('click', event => deleteCustomer(c, event.currentTarget, true));
+    };
+    bindProfileActions();
+
     let page;
-    try{page=await api('/records/rentals?'+new URLSearchParams({customerId:String(id),limit:String(pageSize),...(state.cursor?{cursor:state.cursor}:{})}));}
-    catch(problem){if(version===detailVersion&&modal.open&&marker.isConnected)showModal('Customer profile',`<p class="form-error" role="alert">${e(problem.message)}</p>`);return;}
-    if(version!==detailVersion || !modal.open || !marker.isConnected)return;
-    state.next=page.nextCursor;historyPage=state.page;
-    const history=page.records;row.history=history;
+    try {
+      page = await api('/records/rentals?' + new URLSearchParams({ customerId: String(id), limit: String(pageSize), ...(state.cursor ? { cursor: state.cursor } : {}) }));
+    } catch (problem) {
+      if (version === detailVersion && modal.open && marker?.isConnected) {
+        const errorHistory = `<div class="customer-history-heading"><h3>Rental history</h3><p>Stored rental records · Philippine time</p></div><div class="customer-history-empty"><p class="form-error" role="alert" style="margin-bottom:14px;">${e(problem.message || 'Could not load rental history.')}</p><button type="button" class="secondary" data-history-retry>Retry loading history</button></div>`;
+        showModal('Customer profile', profileShell(errorHistory));
+        bindProfileActions();
+        modal.querySelector('[data-history-retry]')?.addEventListener('click', () => details(id, historyPage));
+      }
+      return;
+    }
+
+    if (version !== detailVersion || !modal.open || !marker?.isConnected) return;
+    state.next = page.nextCursor;
+    historyPage = state.page;
+    const history = page.records;
+    row.history = history;
     const statusLabel = rental => rental.status === 'ACTIVE' && !rental.confirmed_return_at && customerDate(rental.due_at) && customerDate(rental.due_at) < new Date() ? 'Overdue' : rental.status === 'COMPLETED' || rental.confirmed_return_at ? 'Returned' : rental.status === 'PENDING_ADMIN_APPROVAL' ? 'Pending admin review' : rental.status === 'PENDING_VERIFICATION' ? 'Pending verification' : rental.status === 'CANCELLED' ? 'Cancelled' : String(rental.status || 'Unknown').replaceAll('_', ' ');
     const historyHtml = history.length ? helpers.table(['EQUIPMENT / RENTAL', 'RENTED', 'DUE / RETURNED', 'STATUS', '<span class="customer-sr-only">Actions</span>'], history.map(rental => `<tr ${recordAttrs('transaction', rental.id, recordCode(rental))}><td><strong>${e(rental.item_name || 'Unknown equipment')}</strong><small>${e(recordCode(rental))}</small></td><td>${e(shortDate(rental.confirmed_rental_at || rental.created_at))}<small>${rental.confirmed_rental_at ? 'Confirmed rental' : 'Request created'}</small></td><td>${e(shortDate(rental.confirmed_return_at || rental.due_at))}<small>${rental.confirmed_return_at ? 'Returned' : 'Due date'}</small></td><td>${helpers.status(statusLabel(rental))}</td><td><button type="button" class="customer-view" data-customer-rental="${e(rental.id)}" aria-label="View rental ${e(recordCode(rental))}">Details ${icon('arrow')}</button></td></tr>`).join('')) : `<div class="customer-history-empty">${icon('box')}<h3>No rental history yet</h3><p>Their rental records will appear here after their first request.</p></div>`;
-     showModal('Customer profile', `<div class="customer-profile"><header class="customer-profile-heading">${avatar(c)}<div><span class="eyebrow">${e(c.customer_code)}</span><h3>${e(c.full_name)}</h3><p>${c.created_at ? `Customer since ${e(shortDate(c.created_at))}` : 'Customer record'}</p></div>${badge(c)}</header><dl class="customer-profile-contact"><div><dt>Email address</dt><dd>${e(c.email || 'Not provided')}</dd></div><div><dt>Phone number</dt><dd>${e(c.phone || 'Not provided')}</dd></div><div><dt>Address</dt><dd>${e(c.address || 'Not provided')}</dd></div></dl><section class="customer-profile-metrics" aria-label="Customer rental overview"><div><strong>${row.total}</strong><span>Confirmed rentals</span></div><div><strong>${row.active}</strong><span>Equipment out</span></div><div><strong>${row.returned}</strong><span>Returned</span></div><div class="${row.overdue ? 'customer-overdue-text' : ''}"><strong>${row.overdue}</strong><span>Overdue</span></div></section><div class="customer-profile-actions"><button type="button" class="secondary" data-profile-edit>Edit customer</button><button type="button" class="text-button" data-profile-toggle>${c.is_active === false ? 'Restore customer' : 'Archive customer'}</button>${c.is_active === false ? '<button type="button" class="customer-delete" data-profile-delete>Delete permanently</button>' : ''}</div><section class="customer-profile-history"><div class="customer-history-heading"><h3>Rental history <span>${history.length} loaded</span></h3><p>Stored rental records · Philippine time</p></div>${historyHtml}${history.length || state.next || state.previous.length ? `<div class="module-pagination"><span>${historyPage * pageSize + 1}–${historyPage * pageSize + history.length} · ${pageSize} records per page</span><div><button type="button" class="secondary" data-history-prev ${historyPage ? '' : 'disabled'}>← Previous</button><button type="button" class="secondary" data-history-next ${state.next ? '' : 'disabled'}>Next →</button></div></div>` : ''}</section><p class="customer-profile-error form-error" role="alert"></p></div>`);
-    modal.querySelector('[data-profile-edit]').onclick = () => form(c);
-    modal.querySelector('[data-profile-toggle]').onclick = event => changeStatus(c, row, event.currentTarget, true);
-    modal.querySelector('[data-profile-delete]')?.addEventListener('click', event => deleteCustomer(c, event.currentTarget, true));
+
+    const loadedHistory = `<div class="customer-history-heading"><h3>Rental history <span>${history.length} loaded</span></h3><p>Stored rental records · Philippine time</p></div>${historyHtml}${history.length || state.next || state.previous.length ? `<div class="module-pagination"><span>${historyPage * pageSize + 1}–${historyPage * pageSize + history.length} · ${pageSize} records per page</span><div><button type="button" class="secondary" data-history-prev ${historyPage ? '' : 'disabled'}>← Previous</button><button type="button" class="secondary" data-history-next ${state.next ? '' : 'disabled'}>Next →</button></div></div>` : ''}`;
+
+    showModal('Customer profile', profileShell(loadedHistory));
+    bindProfileActions();
     modal.querySelector('[data-history-prev]')?.addEventListener('click', () => details(id, historyPage - 1));
     modal.querySelector('[data-history-next]')?.addEventListener('click', () => details(id, historyPage + 1));
     const openRental = rentalId => {

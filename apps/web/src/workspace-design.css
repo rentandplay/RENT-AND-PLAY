@@ -637,8 +637,9 @@ button:disabled { cursor: not-allowed; }
 #modal#modal { padding: 0; }
 #modal#modal[open] { background: var(--ui-surface); border-color: var(--ui-border); }
 #modal.modal-compact { width: min(520px,calc(100vw - 40px)); }
-#modal[open]:has(.inv-equipment-form,.pricing-form,.rental-release-form,.customer-profile,.inv-details-modal-content) { width: min(980px,calc(100vw - 40px)); }
-#modal[open]:has(.rental-desk-form:not(.rental-release-form)) { width: min(760px,calc(100vw - 40px)); }
+#modal[open]:has(.inv-equipment-form,.pricing-form,.customer-profile,.inv-details-modal-content) { width: min(980px,calc(100vw - 40px)); }
+#modal[open]:has(.rental-release-form) { width: min(880px,calc(100vw - 32px)); display: flex; flex-direction: column; max-height: calc(100dvh - 20px); padding: 0; overflow: hidden; }
+#modal[open]:has(.rental-desk-form:not(.rental-release-form)) { width: min(760px,calc(100vw - 40px)); display: flex; flex-direction: column; max-height: calc(100dvh - 28px); padding: 0; overflow: hidden; }
 #modal[open].modal-compact:has(.rental-desk-form:not(.rental-release-form)) { width: min(520px,calc(100vw - 40px)); }
 #modal[open]:has(.transaction-record-modal) { width: min(840px,calc(100vw - 40px)); }
 #modal[open]:has(.maintenance-detail,.maintenance-form) { width: min(780px,calc(100vw - 40px)); }
@@ -652,11 +653,14 @@ button:disabled { cursor: not-allowed; }
 #modal[open] > .admin-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px 20px; align-items: start; }
 #modal[open].modal-compact > .admin-form { grid-template-columns: minmax(0,1fr); }
 #modal[open] > .admin-form.customer-form { display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
-#modal[open] > .admin-form.rental-desk-form:not(.rental-release-form) { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
+#modal[open] > .admin-form.rental-desk-form, #modal[open] > .admin-form.rental-release-form { display: flex; flex-direction: column; align-items: stretch; flex: 1 1 auto; min-height: 0; width: 100%; gap: 0; padding: 0; margin: 0; overflow: hidden; }
 #modal .rental-form-scroll { width: 100%; padding: 20px 24px; box-sizing: border-box; }
 #modal .rental-desk-form:not(.rental-release-form) > .form-actions { padding: 16px 24px; margin: 0; }
 #modal .rental-flow-banner { background: var(--glass-active); border-color: var(--ui-border); color: var(--ui-text); }
 #modal .rental-flow-banner strong { color: var(--ui-accent); }
+#modal .rental-flow-banner.is-delivery { border-color: rgba(249, 115, 22, 0.35); background: rgba(249, 115, 22, 0.08); }
+#modal .rental-flow-banner.is-delivery strong { color: #c2410c; }
+:root[data-theme="dark"] #modal .rental-flow-banner.is-delivery strong { color: #fdba74; }
 #modal [data-duration-human] { background: var(--ui-soft); color: var(--ui-accent); border-color: var(--ui-border); }
 #modal .customer-form-section { padding: 16px 18px; width: 100%; }
 #modal .customer-form-section h3 { font-size: 16px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -669,9 +673,10 @@ button:disabled { cursor: not-allowed; }
 #modal label :is(input:not([type=checkbox]):not([type=radio]),select,textarea) { width: 100%; margin-top: 0; font-weight: 400; box-sizing: border-box; }
 #modal label small { font-size: 12px; color: var(--ui-muted); font-weight: 400; }
 #modal :is(.form-grid,.inv-form-grid,.maintenance-form-grid,.customer-form-grid,.pricing-edit-grid,.rental-form-scroll) > label > .field-label { min-height: 36px; display: flex; align-items: flex-end; }
-#modal .rental-form-scroll > label > .field-label { min-height: 22px; }
+#modal .rental-form-scroll label > .field-label { min-height: 22px; }
 #modal label:has(> input[required]:not([type=checkbox]):not([type=radio]),> select[required],> textarea[required]) > .field-label::after { content: ' *'; color: var(--ui-accent); margin-left: 3px; }
 #modal :is(.form-actions,.inv-form-actions,.maintenance-form-actions,.transaction-detail-footer) { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 10px; grid-column: 1 / -1; margin: 6px 0 0; padding: 18px 0 0; border-top: 1px solid var(--ui-border); background: var(--ui-surface); }
+#modal :is(.rental-release-footer,.transaction-detail-footer) > .form-actions { margin: 0; padding: 0; border: 0; background: transparent; grid-column: auto; }
 #modal :is(.form-actions,.inv-form-actions) button { flex: 0 1 auto; width: auto; min-width: 100px; max-width: 100%; margin: 0; white-space: normal; }
 #modal .inv-equipment-form { gap: 18px; }
 #modal .inv-equipment-form > .inv-form-section { height: auto; padding: 18px; background: var(--ui-soft); border-radius: 12px; }
@@ -751,6 +756,7 @@ dialog::backdrop { background: rgba(15, 23, 42, 0.55); backdrop-filter: blur(4px
   #modal, #modal[open], #modal.modal-compact { width: calc(100vw - 20px) !important; max-width: calc(100vw - 20px); max-height: calc(100dvh - 24px); border-radius: 13px; }
   #modal > .modal-heading { padding: 15px 18px; min-height: 64px; }
   #modal > :is(form,.customer-profile,.inv-details-modal-content,.rental-actions-dialog,.password-reset-flow) { padding: 18px; }
+  #modal > :is(.admin-form.rental-desk-form,.admin-form.rental-release-form) { padding: 0; }
   #modal[open] > .admin-form, #modal :is(.form-grid,.inv-form-grid,.maintenance-form-grid,.customer-form-grid,.rental-inspection-grid,.pricing-edit-grid,.inv-equipment-form) { grid-template-columns: minmax(0,1fr); gap: 16px; }
   #modal .rental-form-scroll { grid-template-columns: minmax(0,1fr); padding: 18px; }
   #modal :is(.form-grid,.inv-form-grid,.maintenance-form-grid,.customer-form-grid,.pricing-edit-grid) > label > .field-label { min-height: 0; }

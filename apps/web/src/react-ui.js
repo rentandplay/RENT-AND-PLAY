@@ -758,6 +758,7 @@ function DashboardView({
       workspaceUI.openTransaction(id, { rentalCode: r.rental_code, rental: enrichedRental });
       return;
     }
+    const showReceive = r.status === "RETURN_PENDING_INSPECTION" || r.latest_return_request_status === "PENDING_ADMIN_APPROVAL" || r.displayStatus === "Overdue";
     const dueInfo = getDueInfo(r);
     const overdueLabel = dueInfo.isOverdue ? `Overdue by ${Math.max(1, Math.ceil((Date.now() - new Date(r.due_at).getTime()) / 36e5))}h` : "";
     showModal(
@@ -797,18 +798,19 @@ function DashboardView({
         </div>
         <footer class="transaction-detail-footer">
           <div class="transaction-footer-copy">
-            <strong>${["ACTIVE", "RETURN_PENDING_INSPECTION"].includes(r.status) || r.displayStatus === "Overdue" ? "Receive returned equipment" : "Rental record"}</strong>
-            <small>Physical receipt stops the rental clock.</small>
+            <strong>${showReceive ? "Receive returned equipment" : r.status === "ACTIVE" ? "Active rental in progress" : "Rental record"}</strong>
+            <small>${showReceive ? "Physical receipt stops the rental clock." : "Use Returns when equipment comes back to the desk."}</small>
           </div>
           <div class="form-actions">
             <button type="button" class="secondary" data-dashboard-nav-rentals>View in transactions</button>
-            <button type="button" class="primary" data-dashboard-return-action>Receive equipment</button>
+            ${showReceive ? '<button type="button" class="primary" data-dashboard-return-action>Receive equipment</button>' : '<button type="button" class="primary" data-close>Done</button>'}
           </div>
         </footer>
       </div>`
     );
     const modalEl = document.querySelector("dialog[open]");
     if (modalEl) {
+      modalEl.querySelectorAll("[data-close]").forEach((btn) => btn.addEventListener("click", () => modalEl.close?.()));
       modalEl.querySelector("[data-dashboard-nav-rentals]")?.addEventListener("click", () => {
         modalEl.close?.();
         onNavigate("Rentals");
@@ -1104,7 +1106,7 @@ function DashboardView({
   )) : /* @__PURE__ */ React.createElement("p", { className: "terminal-note" }, "Confirm counter handovers, delivery dispatches, and completed inspections."), /* @__PURE__ */ React.createElement("div", { className: "dashboard-terminal-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "secondary", id: "cmd-ping-terminal", disabled: !t || !api || testingTerminal, onClick: async () => {
     setTestingTerminal(true);
     try {
-      await api("/terminals/test-ping", { method: "POST", body: JSON.stringify({ terminalCode: t.terminal_code }) });
+      await api("/terminals/" + encodeURIComponent(t.id) + "/test-ping", { method: "POST" });
       toast?.("Test sent. Check the terminal for a response.");
     } catch (err) {
       toast?.(err.message || "The terminal test could not be sent.");

@@ -26,32 +26,124 @@ export function createTransactionWorkflow(h) {
     if (request.status !== 'PENDING' || String(request.transaction_type || request.type).toUpperCase() !== 'RETURN') return rental;
     return { ...rental, fee_breakdown: { ...rental.fee_breakdown, actual_return_at: request.actual_return_at || rental.fee_breakdown?.actual_return_at, penalty_amount: request.penalty_amount, penalty_reason: request.penalty_reason } };
   }
+  function handoffTitle(request) {
+    if (request.status === 'PENDING') return 'Awaiting terminal confirmation';
+    if (request.status === 'CONFIRMED') {
+      const release = String(request.transaction_type || request.type).toUpperCase() === 'RENTAL';
+      const mode = String(request.terminal_mode || (release ? 'HANDOVER' : 'RETURN')).toUpperCase();
+      if (mode === 'SHOP_DISPATCH') return 'Shop dispatch confirmed';
+      if (mode === 'TEST' || String(request.transaction_type || request.type).toUpperCase() === 'TEST') return 'Terminal test confirmed';
+      return release ? 'Rental confirmed' : 'Return confirmed';
+    }
+    return 'Handoff request closed';
+  }
   function handoffBody(request, rental) {
-    const pending = request.status === 'PENDING', release = String(request.transaction_type || request.type).toUpperCase() === 'RENTAL';
-    const message = pending ? 'Waiting for the physical counter terminal.' : request.status === 'CONFIRMED' ? `${release ? 'Rental' : 'Return'} confirmed at the counter.` : `This request is ${String(request.status).toLowerCase()}. Review the recorded reason below.`;
+    const pending = request.status === 'PENDING', confirmed = request.status === 'CONFIRMED';
+    const release = String(request.transaction_type || request.type).toUpperCase() === 'RENTAL';
+    const message = pending ? 'Waiting for the physical counter terminal.' : confirmed ? `${release ? 'Rental' : 'Return'} confirmed at the counter.` : `This request is ${String(request.status).toLowerCase()}. Review the recorded reason below.`;
     const inspection = request.inspection;
     const mode = String(request.terminal_mode || (release ? 'HANDOVER' : 'RETURN')).toUpperCase();
     const modeLabel = mode === 'SHOP_DISPATCH' ? 'SHOP DISPATCH (RESORT DELIVERY)' : release ? 'RENTAL HANDOVER' : 'RETURN INTAKE';
     const itemName = request.item_name || rental?.item_name || 'Equipment';
     const rentalCode = request.rental_code || rental?.rental_code || request.rental_id || '';
+    const customerName = rental?.customer_name || rental?.customer?.full_name || '';
     const dispatch = mode === 'SHOP_DISPATCH';
-    const outcome = dispatch ? 'Shop departure confirmed. The rental timer stays stopped until the resort handoff.' : release ? 'Equipment handover confirmed. The rental timer has started.' : 'Return inspection confirmed. Review any remaining payment balance.';
-    const statusText = pending ? 'Press confirm on the counter terminal' : request.status === 'CONFIRMED' ? 'Terminal confirmation received' : 'Terminal request closed';
-    return `${release ? renderRentalTaskProgress(rental, request.status === 'CONFIRMED' && !dispatch ? 'released' : dispatch ? 'prepare' : 'handover') : ''}<div class="counter-handoff-status" role="status"><span class="counter-handoff-label">${e(modeLabel)}</span><h3>${e(statusText)}</h3><p>${e(pending ? 'Match the rental reference below with the terminal display before pressing its physical confirmation button.' : request.status === 'CONFIRMED' ? outcome : message)}</p></div>
-      <dl class="counter-handoff-facts"><div><dt>Equipment</dt><dd>${e(itemName)}</dd></div><div><dt>Rental reference</dt><dd>${e(rentalCode)}</dd></div><div><dt>Counter terminal</dt><dd>${e(request.terminal_code || 'Not assigned')}</dd></div>${pending ? `<div><dt>Request expires</dt><dd>${e(formatDate(request.expires_at))}</dd></div>` : ''}</dl>
+    const balanceDue = Number(rental?.balance_due || 0), refundDue = Number(rental?.refund_due || 0);
+    const outcome = dispatch
+      ? 'Shop departure confirmed. Equipment is ready for resort delivery. The rental timer stays stopped until the resort handoff.'
+      : release
+        ? 'Equipment handover confirmed. The rental timer has started.'
+        : balanceDue > 0
+          ? `Return inspection confirmed. Outstanding balance of ${money(balanceDue)} to collect.`
+          : refundDue > 0
+            ? `Return inspection confirmed. Refund of ${money(refundDue)} due to customer.`
+            : 'Return inspection confirmed. Rental completed with zero remaining balance.';
+    const statusText = pending
+      ? 'Press confirm on the counter terminal'
+      : confirmed
+        ? (dispatch ? 'Equipment prepared & confirmed!' : release ? 'Rental handover confirmed!' : 'Return confirmed at counter!')
+        : 'Terminal request closed';
+    const statusClass = `counter-handoff-status${confirmed ? ' is-confirmed' : !pending ? ' is-closed' : ''}`;
+    const badgeHtml = confirmed
+      ? '<span class="counter-handoff-badge is-success" aria-hidden="true">✓</span>'
+      : '';
+    let actionButtons = '';
+    if (confirmed) {
+      const btns = [];
+      if (dispatch) {
+        btns.push('<button type="button" class="primary" data-handoff-proceed="delivery">Proceed to resort handoff →</button>');
+      } else if (!release && (balanceDue > 0 || refundDue > 0)) {
+        btns.push('<button type="button" class="primary" data-handoff-proceed="settle">Record payment or refund →</button>');
+      }
+      if (release && !dispatch && rental?.request_source === 'WALK_IN') {
+        btns.push('<button type="button" class="secondary" data-handoff-receipt-bt>Bluetooth receipt</button>');
+        btns.push('<button type="button" class="secondary" data-handoff-receipt-pdf>PDF receipt</button>');
+      }
+      if (rental?.id || request.rental_id) {
+        btns.push('<button type="button" class="secondary" data-handoff-details>View rental details</button>');
+      }
+      btns.push(`<button type="button" class="${btns.some(b => b.includes('class="primary"')) ? 'secondary' : 'primary'}" data-handoff-done>Done</button>`);
+      actionButtons = `<div class="handoff-actions form-actions">${btns.join('')}</div>`;
+    } else if (!pending) {
+      actionButtons = `<div class="handoff-actions form-actions">${rental?.id || request.rental_id ? '<button type="button" class="secondary" data-handoff-details>View rental details</button>' : ''}<button type="button" class="primary" data-handoff-done>Close</button></div>`;
+    }
+    const progressStage = confirmed ? (dispatch ? 'handover' : 'released') : (dispatch ? 'prepare' : 'handover');
+    return `${release ? renderRentalTaskProgress(rental, progressStage) : ''}<div class="${statusClass}" role="status"><div class="counter-handoff-status-head">${badgeHtml}<div><span class="counter-handoff-label">${e(modeLabel)}</span><h3>${e(statusText)}</h3></div>${confirmed ? '<span class="badge confirmed">CONFIRMED</span>' : ''}</div><p>${e(pending ? 'Match the rental reference below with the terminal display before pressing its physical confirmation button.' : confirmed ? outcome : message)}</p></div>
+      <dl class="counter-handoff-facts"><div><dt>Equipment</dt><dd>${e(itemName)}</dd></div><div><dt>Rental reference</dt><dd>${e(rentalCode)}</dd></div>${customerName ? `<div><dt>Customer</dt><dd>${e(customerName)}</dd></div>` : ''}<div><dt>Counter terminal</dt><dd>${e(request.terminal_code || 'Not assigned')}</dd></div>${pending ? `<div><dt>Request expires</dt><dd>${e(formatDate(request.expires_at))}</dd></div>` : ''}${confirmed ? `<div><dt>Confirmed at</dt><dd>${e(formatDate(request.confirmed_at || request.resolved_at || request.updated_at))}</dd></div>` : ''}</dl>
       ${pending ? `<div class="counter-handoff-code"><span>Terminal matching code</span><strong>${e(request.verification_code)}</strong><p>Check that this code matches the counter terminal, then press its physical confirm button. The terminal sends the code automatically; no typing is needed in the app.</p><p>The clock ${dispatch ? 'stays stopped during delivery' : release ? 'starts only after terminal confirmation' : 'uses the recorded physical receipt time'}.</p></div><div class="handoff-refresh"><p>Status updates automatically. If the terminal is unavailable, close this window and reopen the rental to review the offline fallback.</p><button type="button" class="secondary" data-handoff-refresh>Check confirmation</button></div>` : ''}
+      ${actionButtons}
       <p class="form-error" role="alert" data-handoff-error></p>
-      <details class="counter-handoff-details"><summary>Charges and recorded inspection</summary>${renderFeeBreakdown(rental, h)}${inspection ? `<section class="record-section"><h3>Recorded inspection</h3><dl class="record-fields"><div><dt>Condition</dt><dd>${e(inspection.condition || 'Not recorded')}</dd></div><div><dt>Inspection result</dt><dd>${e(inspection.result || 'Not recorded')}</dd></div><div><dt>Notes</dt><dd>${e(inspection.notes || 'Not recorded')}</dd></div></dl></section>` : ''}${renderRequestHistory([request], { ...h, requestLinks: false })}</details>`;
+      <details class="counter-handoff-details"${confirmed ? ' open' : ''}><summary>Charges and recorded inspection</summary>${renderFeeBreakdown(rental, h)}${inspection ? `<section class="record-section"><h3>Recorded inspection</h3><dl class="record-fields"><div><dt>Condition</dt><dd>${e(inspection.condition || 'Not recorded')}</dd></div><div><dt>Inspection result</dt><dd>${e(inspection.result || 'Not recorded')}</dd></div><div><dt>Notes</dt><dd>${e(inspection.notes || 'Not recorded')}</dd></div></dl></section>` : ''}${renderRequestHistory([request], { ...h, requestLinks: false })}</details>`;
+  }
+  function openHandoffReceiptPdf(rental) {
+    if (typeof h.renderWalkInReceipt !== 'function') return;
+    showModal('Walk-in rental receipt', '<iframe data-receipt-preview title="Rental receipt preview" sandbox="allow-same-origin allow-modals" style="width:100%;height:65vh;border:0;border-radius:8px;background:white"></iframe><div class="form-actions"><button type="button" class="secondary" data-receipt-back>Back</button><button type="button" class="primary" data-receipt-print disabled>Print / Save PDF</button></div>');
+    const preview = modal.querySelector('[data-receipt-preview]'), print = modal.querySelector('[data-receipt-print]');
+    if (preview) {
+      preview.onload = () => { if (preview.isConnected && print) print.disabled = false; };
+      preview.srcdoc = h.renderWalkInReceipt(rental);
+    }
+    if (print) print.onclick = () => { preview?.contentWindow?.focus(); preview?.contentWindow?.print(); };
+    const back = modal.querySelector('[data-receipt-back]');
+    if (back) back.onclick = () => { if (handoff?.request) showHandoff(handoff.request, handoff.rental); else modal.close?.(); };
   }
   function bindHandoff() {
     modal.querySelector('[data-handoff-refresh]')?.addEventListener('click', refreshPendingHandoff);
+    modal.querySelector('[data-handoff-done]')?.addEventListener('click', () => {
+      modal.close?.();
+      if (typeof refresh === 'function') Promise.resolve(refresh()).catch(() => {});
+    });
+    modal.querySelector('[data-handoff-details]')?.addEventListener('click', () => {
+      if (handoff?.rental && typeof h.transactionDetails === 'function') {
+        h.transactionDetails(handoff.rental);
+      } else {
+        modal.close?.();
+      }
+    });
+    modal.querySelector('[data-handoff-proceed]')?.addEventListener('click', evt => {
+      const target = evt?.currentTarget?.dataset?.handoffProceed;
+      const rental = handoff?.rental;
+      if (!rental) { modal.close?.(); return; }
+      if (target === 'delivery' || target === 'handover') desk.releaseForm(rental);
+      else if (target === 'settle') desk.settlementForm(rental);
+      else if (target === 'prepare') desk.prepareForm(rental);
+      else desk.continueRental(rental);
+    });
+    modal.querySelector('[data-handoff-receipt-bt]')?.addEventListener('click', () => {
+      if (handoff?.rental && typeof h.openBluetoothReceipt === 'function') {
+        h.openBluetoothReceipt(handoff.rental, () => modal.close?.(), () => openHandoffReceiptPdf(handoff.rental));
+      }
+    });
+    modal.querySelector('[data-handoff-receipt-pdf]')?.addEventListener('click', () => {
+      if (handoff?.rental) openHandoffReceiptPdf(handoff.rental);
+    });
     bindInspections(modal);
   }
   function showHandoff(source, rental) {
     const request = enrichVerification(source, getModel());
     rental = handoffRental(request, rental);
     handoff = { request, rental, signature: JSON.stringify([request, rental]) };
-    showModal('Awaiting terminal confirmation', `<section data-handoff-request="${e(request.id)}">${handoffBody(request, rental)}</section>`);
+    showModal(handoffTitle(request), `<section data-handoff-request="${e(request.id)}">${handoffBody(request, rental)}</section>`);
     bindHandoff();
     if (typeof HTMLElement !== 'undefined' && modal instanceof HTMLElement && request.status === 'PENDING') {
       if (modal._handoffTimer) clearInterval(modal._handoffTimer);
@@ -62,7 +154,7 @@ export function createTransactionWorkflow(h) {
           return;
         }
         refreshPendingHandoff();
-      }, 2500);
+      }, 2000);
     }
   }
   async function refreshPendingHandoff() {
@@ -72,27 +164,51 @@ export function createTransactionWorkflow(h) {
     const button = panel.querySelector('[data-handoff-refresh]');
     if (button) { button.disabled = true; button.textContent = 'Checking…'; button.setAttribute('aria-busy', 'true'); }
     try {
-      await refresh();
-      if (!modal.open || modal.querySelector('[data-handoff-request]') !== panel) return true;
-      const source = getModel().verification.find(row => String(row.id) === String(handoff.request.id));
-      if (!source) throw new Error('This request is no longer in the workspace. Close the dialog and refresh the queue.');
-      const request = enrichVerification(source, getModel());
-      let savedRental = getModel().transactions.find(row => String(row.id) === String(request.rental_id));
-      if (!savedRental && request.status === 'CONFIRMED' && typeof api === 'function') {
-        // Completed returns can disappear from the active queue immediately.
-        const result = await api('/rentals/lookup', { method: 'POST', body: JSON.stringify({ kind: 'RENTAL', code: request.rental_id }) });
+      let request = null, savedRental = null;
+      if (typeof api === 'function') {
+        try {
+          const direct = await api(`/verification-requests/${encodeURIComponent(handoff.request.id)}`);
+          if (!modal.open || modal.querySelector('[data-handoff-request]') !== panel) return true;
+          if (direct?.request) {
+            request = enrichVerification(direct.request, getModel());
+            if (direct.rental) {
+              savedRental = direct.rental;
+              h.applyResponse?.({ rental: direct.rental, request: direct.request });
+            } else {
+              h.applyResponse?.({ request: direct.request });
+            }
+          }
+        } catch {
+          // Fall back to workspace refresh when direct status endpoint is unavailable.
+        }
+      }
+      if (!request) {
+        await refresh();
         if (!modal.open || modal.querySelector('[data-handoff-request]') !== panel) return true;
-        savedRental = result.rental;
-        h.applyResponse?.(result);
+        const source = getModel().verification.find(row => String(row.id) === String(handoff.request.id));
+        if (!source) throw new Error('This request is no longer in the workspace. Close the dialog and refresh the queue.');
+        request = enrichVerification(source, getModel());
+      }
+      if (!savedRental) {
+        savedRental = getModel().transactions.find(row => String(row.id) === String(request.rental_id));
+      }
+      if (!savedRental && request.status === 'CONFIRMED' && typeof api === 'function') {
+        try {
+          // Completed returns or deliveries can disappear from filtered queues immediately.
+          const result = await api('/rentals/lookup', { method: 'POST', body: JSON.stringify({ kind: 'RENTAL', code: request.rental_id }) });
+          if (!modal.open || modal.querySelector('[data-handoff-request]') !== panel) return true;
+          savedRental = result?.rental;
+          if (result) h.applyResponse?.(result);
+        } catch {
+          // Ignore lookup error and retain existing rental snapshot.
+        }
       }
       const sameInspection = request.inspection_revision === handoff.request.inspection_revision;
-      const rental = handoffRental(request, request.status === 'PENDING' && sameInspection ? { ...savedRental, ...handoff.rental } : savedRental || handoff.rental);
-      if (request.status === 'CONFIRMED' && handoff.request.status === 'PENDING' && savedRental) {
+      const rental = handoffRental(request, request.status === 'PENDING' && sameInspection ? { ...savedRental, ...handoff.rental } : savedRental ? { ...handoff.rental, ...savedRental } : handoff.rental);
+      if (request.status !== 'PENDING') {
         if (modal._handoffTimer) { clearInterval(modal._handoffTimer); modal._handoffTimer = null; }
-        // Advance only the handoff the operator is currently viewing, once.
-        if (desk.continueRental(rental)) {
-          handoff = { request, rental, signature: JSON.stringify([request, rental]) };
-          redraw(); return true;
+        if (typeof api === 'function' && typeof refresh === 'function') {
+          Promise.resolve(refresh()).catch(() => {});
         }
       }
       const signature = JSON.stringify([request, rental]);
@@ -100,8 +216,10 @@ export function createTransactionWorkflow(h) {
       if (signature !== handoff.signature) {
         handoff = { request, rental, signature };
         panel.innerHTML = handoffBody(request, rental);
-        const title = request.status === 'PENDING' ? 'Awaiting terminal confirmation' : request.status === 'CONFIRMED' ? `${String(request.transaction_type || request.type).toUpperCase() === 'RENTAL' ? 'Rental' : 'Return'} confirmed` : 'Handoff request closed';
-        modal.querySelector('h2').textContent = title; modal.setAttribute('aria-label', title);
+        const title = handoffTitle(request);
+        const h2 = modal.querySelector('h2');
+        if (h2) h2.textContent = title;
+        modal.setAttribute('aria-label', title);
         bindHandoff();
       }
       redraw();

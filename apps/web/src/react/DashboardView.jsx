@@ -631,6 +631,7 @@ export function DashboardView({
                           </td>
                           <td>
                             <StatusBadge status={r.displayStatus} />
+                            {r.extension_request?.status === 'PENDING' && <small className="record-sub">Extension awaiting review</small>}
                           </td>
                           <td>
                             <button

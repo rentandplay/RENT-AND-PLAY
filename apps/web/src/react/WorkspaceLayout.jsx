@@ -534,7 +534,8 @@ export function WorkspaceShell({
         } else if (entry.dataset.notificationRental) {
           await workspaceUI.openTransaction(entry.dataset.notificationRental, {
             rentalCode: entry.dataset.rentalCode,
-            refresh: true
+            refresh: true,
+            notificationType: entry.dataset.notificationType
           });
         } else if (entry.dataset.notificationPage) {
           onNavigate(entry.dataset.notificationPage);

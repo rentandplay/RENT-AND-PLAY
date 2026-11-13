@@ -17,7 +17,9 @@ export function updateForecastWorkspace(root,html) {
   const title=outlook.querySelector('.ana-panel-head > div'),freshTitle=nextOutlook.querySelector('.ana-panel-head > div');
   if(title&&freshTitle) title.innerHTML=freshTitle.innerHTML;
   outlook.querySelector('.ana-model-behavior').innerHTML=nextOutlook.querySelector('.ana-model-behavior').innerHTML;
-  for(const control of outlook.querySelectorAll('[data-forecast-model],[data-forecast-scenario],[data-analytics-metric]')) {
+  const interpretation=outlook.querySelector('.ana-interpretation'),freshInterpretation=nextOutlook.querySelector('.ana-interpretation');
+  if(interpretation&&freshInterpretation) interpretation.innerHTML=freshInterpretation.innerHTML;
+  for(const control of outlook.querySelectorAll('[data-analytics-metric]')) {
     const fresh=nextOutlook.querySelector('#'+control.id);
     if(fresh) {control.setAttribute('aria-pressed',fresh.getAttribute('aria-pressed'));control.disabled=fresh.disabled;}
   }

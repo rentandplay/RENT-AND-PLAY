@@ -64,7 +64,7 @@
    > *"Upang masolusyunan ito nang buo, pinagsama namin ang limang layers:*
    > - *1. **Android Mobile App (Flutter):** Para sa portable QR scanning ng equipment at mabilisang inspeksyon.*
    > - *2. **Central REST API (Node.js/Express):** Ang nagpapatupad ng business rules, fee calculations, at security.*
-   > - *3. **Cloud Database (Firebase Firestore & Auth):** Ang centralized real-time source of truth.*
+   > - *3. **Supabase PostgreSQL and Storage:** Dito naka-save ang business records at media. Firebase Authentication ang ginagamit sa login; Firebase Cloud Messaging ang ginagamit sa push notifications.*
    > - *4. **Administrative Web Dashboard (React/Modern JS):** Para sa may-ari — inventory, rates, analytics, at staff monitoring.*
    > - *5. **ESP32 Counter Verification Terminal (IoT Layer):** Ang aming physical confirmation gate sa counter na may OLED, buzzer, alert LEDs, at physical push button."*
 
@@ -142,7 +142,7 @@ sequenceDiagram
   - Sa **Mobile Phone**: Magco-close ang waiting modal at magpapakita ng `Transaction Confirmed!`. Pwedeng mag-trigger ng 58mm thermal receipt printing.
   - Sa **Web Dashboard**: Nang hindi nire-refresh ang browser, awtomatikong magiging `RENTED / ACTIVE` ang gamit at makikitang umaandar ang countdown timer at due date.
 - **Sasabihin:**
-  > *"Within 1 second matapos pindutin ang button, nagka-real-time synchronization ang mobile app, web dashboard, at cloud database. Nagsimula na ang due-date monitoring engine."*
+  > *"Pagkatapos ma-confirm ng backend ang physical handoff, ina-update ang rental at ipinapadala ang update sa web at mobile. Ipapakita namin ang aktuwal na oras ng pag-update sa live demo; nakadepende ito sa network at device connectivity."*
 
 #### Hakbang 3.5: Return Flow & Overdue Penalty Assessment
 - **Gawin:** Kunin ulit ang Android phone (o gamitin ang Web Return Desk). I-scan ang parehong equipment QR code para sa return process.

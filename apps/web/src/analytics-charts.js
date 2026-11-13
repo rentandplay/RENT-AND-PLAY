@@ -3,6 +3,22 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 const compact = value => new Intl.NumberFormat('en-PH', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 const plain = value => new Intl.NumberFormat('en-PH', { maximumFractionDigits: 2 }).format(value);
 
+export function categoryDonut(rows=[], {escape:e=escapeHtml, currency=false, id='category-share'}={}) {
+  const clean=rows.filter(row=>finite(row.value)&&row.value>0).sort((a,b)=>b.value-a.value);
+  const total=clean.reduce((n,row)=>n+row.value,0);
+  if(!total) return '<div class="ana-empty"><strong>No category contribution yet</strong><p>No positive recorded values exist in this view.</p></div>';
+  const shown=clean.length>6?[...clean.slice(0,5),{label:'Other categories',value:clean.slice(5).reduce((n,row)=>n+row.value,0)}]:clean;
+  const colors=['#337db5','#de792e','#378c80','#8774b2','#bc6677','#8b8064'];
+  let offset=0;
+  const marks=shown.map((row,i)=>{const share=row.value/total*100,start=offset;offset+=share;return `<circle cx="110" cy="110" r="76" fill="none" stroke="${colors[i]}" stroke-width="27" pathLength="100" stroke-dasharray="${share} ${100-share}" stroke-dashoffset="${-start}" transform="rotate(-90 110 110)"><title>${e(row.label)}: ${plain(share)}%</title></circle>`;}).join('');
+  return `<figure class="ana-donut-chart" aria-labelledby="${id}-title"><svg viewBox="0 0 220 220" role="img" aria-labelledby="${id}-title ${id}-description"><title id="${id}-title">Category share of ${currency?'recorded rental fees':'confirmed rentals'}</title><desc id="${id}-description">${shown.map(row=>e(row.label)+': '+plain(row.value/total*100)+'%').join('; ')}. Exact values are listed alongside the chart.</desc>${marks}<text x="110" y="104" text-anchor="middle" class="ana-donut-total">${currency?'&#8369;':''}${compact(total)}</text><text x="110" y="126" text-anchor="middle" class="ana-donut-label">${currency?'Recorded fees':'Rentals'}</text></svg><figcaption>${shown.map((row,i)=>`<div><i style="background:${colors[i]}"></i><span>${e(row.label)}</span><strong>${plain(row.value/total*100)}%</strong></div>`).join('')}</figcaption></figure>`;
+}
+
+export function demandHeatmap(days=[], bands=[], matrix=[], {escape:e=escapeHtml}={}) {
+  const peak=Math.max(1,...matrix.flat());
+  return `<figure class="ana-heatmap"><figcaption>Confirmed handoffs by weekday and time band</figcaption><div class="ana-heatmap-scroll"><table><thead><tr><th scope="col">PH time</th>${days.map(day=>`<th scope="col">${e(day)}</th>`).join('')}</tr></thead><tbody>${bands.map((band,h)=>`<tr><th scope="row">${e(band)}</th>${days.map((day,d)=>{const n=matrix[d]?.[h]||0,level=n?Math.min(4,1+Math.floor(n/peak*3)):0;return `<td class="ana-heat-${level}" aria-label="${e(day+' '+band)}: ${n} confirmed handoffs"><span>${n}</span></td>`;}).join('')}</tr>`).join('')}</tbody></table></div><p class="ana-note">Darker cells mean more recorded handoffs. Counts are totals; time bands have different lengths.</p></figure>`;
+}
+
 export function sparklineSvg(values = [], color = '#ee8534') {
   const clean = values.map(v => (finite(v) ? Math.max(0, v) : 0));
   if (clean.length < 2) return '';
@@ -52,7 +68,7 @@ function axisScale(peak, integers = false) {
 const replayButton = '<button type="button" class="ana-chart-replay" data-ana-replay aria-label="Replay chart animation"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6a6 6 0 1 1-1 6M4 2v5h5"/></svg>Replay</button>';
 const chartTools = zoom => `<div class="ana-chart-tools"><span class="ana-chart-hint"><i aria-hidden="true"></i>Hover or tap to explore</span><div class="ana-chart-tool-actions">${replayButton}${zoom ? '<label><span class="sr-only">View</span><select data-ana-zoom aria-label="Chart zoom"><option value="0">Full period</option><option value="14">Last 14 periods</option><option value="7">Last 7 periods</option></select></label>' : ''}</div></div>`;
 
-export function lineChart(labels, series, { escape: e, id='analytics-line', title, currency = false, forecastStart = null, integerTicks = false, width=730, height=272, domainMax=null, handoff=null, reserveRangeNote=false, threshold=null } = {}) {
+export function lineChart(labels, series, { escape: e, id='analytics-line', title, currency = false, forecastStart = null, integerTicks = false, width=730, height=272, domainMax=null, handoff=null, reserveRangeNote=false, threshold=null, straight=false } = {}) {
   if (!labels.length) return '<div class="ana-empty"><strong>No activity to chart yet</strong><p>Recorded activity will appear here when the selected period has data.</p></div>';
   const g=layout(width,height), {left,right,top,bottom}=g, span=right-left;
   const values=series.flatMap(row=>[...row.values,...(row.high||[])]).filter(finite);
@@ -68,7 +84,7 @@ export function lineChart(labels, series, { escape: e, id='analytics-line', titl
     const runs=[];let run=[];
     row.values.forEach((value,i)=>{if(finite(value))run.push({value,index:i});else if(run.length){runs.push(run);run=[];}});if(run.length)runs.push(run);
     const ink=runs.map((points,runIndex)=>{
-      const coordinates=points.map(p=>[x(p.index),y(p.value)]),d=curve(coordinates),key=`${seriesIndex}-${runIndex}`;
+      const coordinates=points.map(p=>[x(p.index),y(p.value)]),d=straight?coordinates.map((p,i)=>`${i?'L':'M'}${p[0]},${p[1]}`).join(' '):curve(coordinates),key=`${seriesIndex}-${runIndex}`;
       const band=row.low&&row.high ? `<path class="ana-variation-band" d="${curve(points.map(p=>[x(p.index),y(finite(row.high[p.index])?row.high[p.index]:p.value)]))} ${[...points].reverse().map(p=>`L${x(p.index)},${y(finite(row.low[p.index])?row.low[p.index]:p.value)}`).join(' ')} Z" fill="${row.color}"/>` : '';
       const area=row.area ? `<path data-ana-area="${key}" class="ana-area-fill" d="${d} L${coordinates.at(-1)[0]},${bottom} L${coordinates[0][0]},${bottom} Z" fill="url(#${id}-fill-${seriesIndex})"/>` : '';
       return `${band}${area}<path data-ana-stroke="${key}" data-ana-bottom="${bottom}" class="ana-line-stroke ${row.dashed?'is-estimate':''}" d="${d}" fill="none" stroke="${row.color}" stroke-width="2.7" ${row.dashed?'stroke-dasharray="5 5"':''} stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
@@ -86,7 +102,7 @@ export function lineChart(labels, series, { escape: e, id='analytics-line', titl
   const inspection=labels.map((label,i)=>({label,x:x(i),rows:series.flatMap((row,seriesIndex)=>finite(row.values[i])?[{seriesIndex,name:row.name,color:row.color,x:x(i),y:y(row.values[i]),label:row.labels?.[i]||label,value:`${currency?'₱':''}${plain(row.values[i])}`,spread:finite(row.low?.[i])&&finite(row.high?.[i])?`${currency?'₱':''}${plain(row.low[i])} – ${currency?'₱':''}${plain(row.high[i])}`:null}]:[])}));
   const hits=labels.map((_,i)=>{const start=i===0?left:(x(i-1)+x(i))/2,end=i===labels.length-1?right:(x(i)+x(i+1))/2;return `<rect focusable="false" aria-hidden="true" data-ana-point="${i}" x="${start}" y="${top}" width="${end-start}" height="${bottom-top}" fill="transparent"/>`;}).join('');
   const thresholdSvg=threshold&&finite(threshold.value)&&threshold.value>0?`<g class="ana-threshold-group"><line x1="${left}" x2="${right}" y1="${y(threshold.value)}" y2="${y(threshold.value)}" class="ana-threshold-line"/><text x="${right-4}" y="${Math.max(top+12,y(threshold.value)-5)}" text-anchor="end" class="ana-threshold-label">${e(threshold.label||'Threshold')}: ${currency?'₱':''}${compact(threshold.value)}</text></g>`:'';
-  const payload={type:'line',labels,series,options:{id,title,currency,forecastStart,integerTicks,width,height,domainMax,handoff,reserveRangeNote,threshold}};
+  const payload={type:'line',labels,series,options:{id,title,currency,forecastStart,integerTicks,width,height,domainMax,handoff,reserveRangeNote,threshold,straight}};
   return `<figure class="ana-chart ana-interactive ana-modern-chart" data-ana-chart data-ana-values="${e(JSON.stringify(inspection))}" data-ana-source="${e(JSON.stringify(payload))}" data-ana-view="${e(JSON.stringify(payload))}" aria-labelledby="${id}-title">${chartTools(labels.length>14)}<div class="ana-plot" data-ana-plot tabindex="0" role="group" aria-label="${e(title)}. Use Left and Right arrows to explore, Enter to pin, Escape to dismiss."><svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${id}-title ${id}-description"><title id="${id}-title">${e(title)}</title><desc id="${id}-description">${e(series.map(row=>row.name).join(' and '))}. Focus the chart and use arrow keys to inspect exact values.</desc>${defs}${divider}${grid}${thresholdSvg}${handoffPath}${plots}${handoffLabel}${tickLabels}<line data-ana-crosshair x1="${left}" x2="${left}" y1="${top}" y2="${bottom}" class="ana-crosshair" hidden/>${series.map((row,i)=>`<circle data-ana-cursor-dot="${i}" r="5" fill="${row.color}" class="ana-cursor-dot" hidden/>`).join('')}${hits}</svg>${chartTooltip()}</div><figcaption class="ana-chart-legend">${series.map((row,i)=>`<button type="button" data-ana-toggle="${i}" aria-pressed="true" aria-label="Show ${e(row.name)}"><i style="--ana-series-color:${row.color};background:${row.color}" class="${row.dashed?'is-dashed':''}"></i>${e(row.name)}</button>`).join('')}${series.some(row=>row.low)?'<span class="ana-range-key">Shaded: historical variation (±1 standard deviation), not a confidence interval</span>':reserveRangeNote?'<span class="ana-range-key">No calibrated uncertainty interval is estimated for this model.</span>':''}</figcaption></figure>`;
 }
 
@@ -109,6 +125,47 @@ export function barChart(rows, { escape:e,title,currency=false,color='#358d80',c
 }
 
 
+// Actual and target share one zero-based scale. Missing goals remain missing.
+export function combinationChart(labels = [], actualValues = [], targetValues = [], { escape:e=escapeHtml, id='performance-combination', title='Actual versus target', currency=false, previousValues=null, actualLabel='Actual', targetLabel='Target', previousLabel='Previous period', integerTicks=false, width=730, height=300, caption='' }={}) {
+  if (!labels.length) return '<div class="ana-empty"><strong>No periods to chart</strong><p>Select a reporting period with recorded history.</p></div>';
+  const {left,right,top,bottom}=layout(width,height), column=(right-left)/labels.length;
+  const clean=values=>labels.map((_,i)=>finite(values?.[i])?Math.max(0,values[i]):null);
+  const actual=clean(actualValues),target=clean(targetValues),previous=clean(previousValues);
+  const series=[{name:actualLabel,values:actual,color:'#4c86ad',kind:'bar'},...(target.some(finite)?[{name:targetLabel,values:target,color:'#e17c2f',kind:'line'}]:[]),...(previous.some(finite)?[{name:previousLabel,values:previous,color:'#7d8998',kind:'line',dashed:true}]:[])];
+  const scale=axisScale(Math.max(1,...series.flatMap(row=>row.values).filter(finite)),integerTicks);
+  const x=i=>roundCoordinate(left+column*(i+.5)),y=value=>roundCoordinate(bottom-value/scale.maximum*(bottom-top));
+  const grid=scale.ticks.map(value=>`<g><line x1="${left}" x2="${right}" y1="${y(value)}" y2="${y(value)}" class="ana-gridline"/><text x="${left-10}" y="${y(value)+4}" text-anchor="end" class="ana-axis-label">${currency?'₱':''}${compact(value)}</text></g>`).join('');
+  const marks=series.map((row,seriesIndex)=>{
+    if(row.kind==='bar') return `<g data-ana-series="${seriesIndex}">${row.values.map((value,i)=>finite(value)?`<rect data-ana-bar="${i}" class="ana-animated-bar" x="${roundCoordinate(x(i)-Math.min(22,column*.3))}" y="${y(value)}" width="${roundCoordinate(Math.min(44,column*.6))}" height="${roundCoordinate(bottom-y(value))}" rx="4" fill="${row.color}"><title>${e(labels[i])}: ${currency?'₱':''}${plain(value)}</title></rect>`:'').join('')}</g>`;
+    const runs=[];let run=[];row.values.forEach((value,i)=>{if(finite(value))run.push([x(i),y(value)]);else if(run.length){runs.push(run);run=[];}});if(run.length)runs.push(run);
+    return `<g data-ana-series="${seriesIndex}">${runs.map((points,i)=>`<path data-ana-stroke="${seriesIndex}-${i}" data-ana-bottom="${bottom}" class="ana-line-stroke" d="${points.map((p,n)=>`${n?'L':'M'}${p[0]},${p[1]}`).join(' ')}" fill="none" stroke="${row.color}" stroke-width="3" ${row.dashed?'stroke-dasharray="5 5"':''} vector-effect="non-scaling-stroke"/>`).join('')}${row.values.map((value,i)=>finite(value)?`<circle cx="${x(i)}" cy="${y(value)}" r="3.5" fill="${row.color}"><title>${e(row.name)} · ${e(labels[i])}: ${currency?'₱':''}${plain(value)}</title></circle>`:'').join('')}</g>`;
+  }).join('');
+  const tickEvery=Math.max(1,Math.ceil(labels.length/Math.max(2,Math.floor((right-left)/75))));
+  const ticks=labels.map((label,i)=>i%tickEvery===0||i===labels.length-1?`<text x="${x(i)}" y="${height-15}" text-anchor="middle" class="ana-axis-label">${e(label)}</text>`:'').join('');
+  const inspection=labels.map((label,i)=>({label,x:x(i),rows:series.flatMap((row,seriesIndex)=>finite(row.values[i])?[{seriesIndex,name:row.name,color:row.color,x:x(i),y:y(row.values[i]),value:`${currency?'₱':''}${plain(row.values[i])}`,label:row.kind==='bar'?'Recorded actual':row.name}]:[])}));
+  const hits=labels.map((_,i)=>`<rect data-ana-point="${i}" aria-hidden="true" focusable="false" x="${roundCoordinate(left+column*i)}" y="${top}" width="${roundCoordinate(column)}" height="${bottom-top}" fill="transparent"/>`).join('');
+  const payload={type:'combination',labels,actualValues:actual,targetValues:target,options:{id,title,currency,previousValues:previous,actualLabel,targetLabel,previousLabel,integerTicks,width,height,caption}};
+  return `<figure class="ana-chart ana-interactive ana-modern-chart ana-combination-chart" data-ana-chart data-ana-values="${e(JSON.stringify(inspection))}" data-ana-source="${e(JSON.stringify(payload))}" data-ana-view="${e(JSON.stringify(payload))}" aria-labelledby="${id}-title">${chartTools(labels.length>14)}<div class="ana-plot" data-ana-plot tabindex="0" role="group" aria-label="${e(title)}. Left and Right inspect periods; Enter pins; Escape dismisses."><svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${id}-title ${id}-description"><title id="${id}-title">${e(title)}</title><desc id="${id}-description">${e(series.map(row=>row.name).join(', '))}. Columns and lines use the same ${currency?'Philippine peso':'value'} scale starting at zero. Missing targets are omitted.</desc>${grid}${marks}${ticks}<line data-ana-crosshair x1="${left}" x2="${left}" y1="${top}" y2="${bottom}" class="ana-crosshair" hidden/>${hits}</svg>${chartTooltip()}</div><figcaption class="ana-chart-legend">${series.map((row,i)=>`<button type="button" data-ana-toggle="${i}" aria-pressed="true" aria-label="Show ${e(row.name)}"><i style="--ana-series-color:${row.color};background:${row.color}" class="${row.dashed?'is-dashed':''}"></i>${e(row.name)}</button>`).join('')}${caption?`<span class="ana-range-key">${e(caption)}</span>`:''}</figcaption></figure>`;
+}
+
+export function horizontalBarChart(rows = [], { escape:e=escapeHtml, id='equipment-comparison', title='Equipment comparison', currency=false, percentage=false, valueLabel='Selected period', previousLabel='Previous period', width=730, height=null, caption='' }={}) {
+  if(!rows.length) return '<div class="ana-empty"><strong>No equipment to compare</strong><p>Choose another filter or record confirmed rentals.</p></div>';
+  const narrow=width<500,left=narrow?18:185,right=width-(currency?105:65),top=34,rowHeight=narrow?76:66;
+  height=Math.max(height||0,top+rows.length*rowHeight+35);
+  const scale=axisScale(Math.max(1,...rows.flatMap(row=>[row.value,row.previous]).filter(finite)),!currency&&!percentage),span=right-left;
+  const barWidth=value=>roundCoordinate(Math.max(0,value)/scale.maximum*span),valueText=value=>`${currency?'₱':''}${plain(Math.max(0,value))}${percentage?'%':''}`;
+  const hasPrevious=rows.some(row=>finite(row.previous));
+  const grid=scale.ticks.map(value=>`<g><line x1="${left+barWidth(value)}" x2="${left+barWidth(value)}" y1="${top-5}" y2="${height-32}" class="ana-gridline"/><text x="${left+barWidth(value)}" y="${height-10}" text-anchor="middle" class="ana-axis-label">${currency?'₱':''}${compact(value)}${percentage?'%':''}</text></g>`).join('');
+  const marks=rows.map((row,i)=>{
+    const y=top+i*rowHeight+(narrow?20:6),value=finite(row.value)?Math.max(0,row.value):null,previous=finite(row.previous)?Math.max(0,row.previous):null;
+    const label=String(row.label||'Unnamed equipment'),short=label.length>(narrow?42:23)?label.slice(0,narrow?40:21)+'…':label;
+    return `<g data-ana-point="${i}" class="ana-bar-column" tabindex="0" role="button" aria-label="${e(label)}. ${e(valueLabel)}: ${value===null?'Not recorded':e(valueText(value))}${previous!==null?`; ${e(previousLabel)}: ${e(valueText(previous))}`:''}. Enter to pin."><title>${e(label)}</title><rect x="0" y="${top+i*rowHeight-5}" width="${width}" height="${rowHeight}" fill="transparent"/><text x="${narrow?left:left-12}" y="${narrow?y-6:y+14}" text-anchor="${narrow?'start':'end'}" class="ana-axis-label">${e(short)}</text>${value!==null?`<rect data-horizontal-bar="${i}" x="${left}" y="${y}" width="${barWidth(value)}" height="${hasPrevious?13:20}" rx="3" fill="#4c86ad"/><text x="${left+barWidth(value)+7}" y="${y+12}" class="ana-bar-value">${e(valueText(value))}</text>`:''}${previous!==null?`<rect x="${left}" y="${y+18}" width="${barWidth(previous)}" height="9" rx="3" fill="#a6b9c8"/><text x="${left+barWidth(previous)+7}" y="${y+27}" class="ana-axis-label">${e(valueText(previous))}</text>`:''}</g>`;
+  }).join('');
+  const inspection=rows.map(row=>({label:String(row.label||'Unnamed equipment'),x:left+span/2,rows:[...(finite(row.value)?[{name:valueLabel,value:valueText(row.value),label:'Selected reporting period'}]:[]),...(finite(row.previous)?[{name:previousLabel,value:valueText(row.previous),label:row.previousLabel||'Previous matched period'}]:[])]}));
+  const payload={type:'horizontal',rows,options:{id,title,currency,percentage,valueLabel,previousLabel,width,height,caption}};
+  return `<figure class="ana-chart ana-interactive ana-modern-chart ana-horizontal-chart" data-ana-chart data-ana-values="${e(JSON.stringify(inspection))}" data-ana-source="${e(JSON.stringify(payload))}" data-ana-view="${e(JSON.stringify(payload))}" aria-labelledby="${id}-title"><div class="ana-chart-tools"><span class="ana-chart-hint">Hover or tap a row for exact values</span></div><div class="ana-plot" data-ana-plot><svg viewBox="0 0 ${width} ${height}" role="group" aria-labelledby="${id}-title ${id}-description"><title id="${id}-title">${e(title)}</title><desc id="${id}-description">Bars start at zero. Focus an equipment row and use arrow keys to inspect exact values; Enter pins; Escape dismisses. Full equipment names are available in the readout.</desc>${grid}${marks}</svg>${chartTooltip()}</div><figcaption class="ana-chart-legend"><span><i style="background:#4c86ad"></i>${e(valueLabel)}</span>${hasPrevious?`<span><i style="background:#a6b9c8"></i>${e(previousLabel)}</span>`:''}${caption?`<span class="ana-range-key">${e(caption)}</span>`:''}</figcaption></figure>`;
+}
+
 function chartTooltip() {
   return '<div class="ana-tooltip" data-ana-tooltip hidden><output data-ana-readout aria-live="polite" aria-atomic="true"></output><button type="button" data-ana-unpin aria-label="Dismiss pinned chart value" hidden>Dismiss ×</button></div>';
 }
@@ -118,7 +175,20 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character =>
 const chartCleanup = new WeakMap();
 let chartResizeObserver;
 
+function renderChart(source,dimensions={}) {
+  const options={...source.options,...dimensions,escape:escapeHtml};
+  if(source.type==='combination') return combinationChart(source.labels,source.actualValues,source.targetValues,options);
+  if(source.type==='horizontal') return horizontalBarChart(source.rows,options);
+  if(source.type==='bar') return barChart(source.rows,options);
+  return lineChart(source.labels,source.series,options);
+}
+
 function slicedChart(source,count,dimensions={}) {
+  if(source.type==='combination') {
+    const start=count?Math.max(0,source.labels.length-count):0;
+    return combinationChart(source.labels.slice(start),source.actualValues.slice(start),source.targetValues.slice(start),{...source.options,...dimensions,previousValues:source.options.previousValues?.slice(start),escape:escapeHtml});
+  }
+  if(source.type!=='line') return renderChart(source,dimensions);
   const start=count?Math.max(0,source.labels.length-count):0;
   const sliced=source.series.map(row=>({...row,values:row.values.slice(start),labels:row.labels?.slice(start),low:row.low?.slice(start),high:row.high?.slice(start)}));
   const handoff=source.options.handoff;
@@ -131,7 +201,7 @@ function slicedChart(source,count,dimensions={}) {
 // Keep the figure, plot and SVG nodes mounted during model/scenario changes.
 export function updateAnalyticsChart(chart,next) {
   const source=JSON.parse(next.dataset.anaSource),current=JSON.parse(chart.dataset.anaView||chart.dataset.anaSource);
-  if(source.type!=='line'||current.type!=='line') return false;
+  if(source.type!==current.type) return false;
   const zoom=chart.querySelector('[data-ana-zoom]'),count=Number(zoom?.value||0);
   const holder=chart.ownerDocument.createElement('div');
   holder.innerHTML=slicedChart(source,count,{width:current.options.width,height:current.options.height});
@@ -139,7 +209,7 @@ export function updateAnalyticsChart(chart,next) {
   rememberChartMotion(chart); settleChartMotion(chart); chartCleanup.get(chart)?.();
   const plot=chart.querySelector('[data-ana-plot]'),svg=plot.querySelector('svg'),nextSvg=rendered.querySelector('.ana-plot>svg');
   chartResizeObserver?.unobserve(plot);
-  svg.innerHTML=nextSvg.innerHTML;
+  svg.replaceChildren(...Array.from(nextSvg.childNodes));
   for(const attr of nextSvg.attributes) svg.setAttribute(attr.name,attr.value);
   chart.querySelector('.ana-chart-legend').innerHTML=rendered.querySelector('.ana-chart-legend').innerHTML;
   chart.dataset.anaValues=rendered.dataset.anaValues;
@@ -147,7 +217,7 @@ export function updateAnalyticsChart(chart,next) {
   chart.dataset.anaView=rendered.dataset.anaView;
   chart.querySelector('[data-ana-tooltip]').hidden=true;
   chart.querySelector('[data-ana-unpin]').hidden=true;
-  delete chart.dataset.anaBound;
+  chart.removeAttribute('data-ana-bound');
   bindAnalyticsCharts(chart.parentElement);
   return true;
 }
@@ -157,11 +227,13 @@ function responsiveChart(chart) {
   const bounds=plot.getBoundingClientRect?.(),svgBounds=svg.getBoundingClientRect?.();
   if (!(bounds?.width>0&&svgBounds?.height>0)) return false;
   const source=JSON.parse(chart.dataset.anaView||chart.dataset.anaSource);
-  const width=Math.max(250,Math.round(plot.clientWidth||bounds.width)),height=Math.max(200,Math.round(svg.clientHeight||svgBounds.height));
+  const width=Math.max(250,Math.round(plot.clientWidth||bounds.width));
+  // Recompute row height rather than inheriting the old SVG aspect ratio on resize.
+  const height=source.type==='horizontal'?34+source.rows.length*(width<500?76:66)+35:Math.max(200,Math.round(svg.clientHeight||svgBounds.height));
   if (source.options.width===width&&source.options.height===height) return false;
   const holder=chart.ownerDocument.createElement('div');
   const options={...source.options,width,height,escape:escapeHtml};
-  holder.innerHTML=source.type==='bar'?barChart(source.rows,options):lineChart(source.labels,source.series,options);
+  holder.innerHTML=renderChart(source,options);
   const next=holder.firstElementChild;
   next.dataset.anaSource=chart.dataset.anaSource;
   next.querySelector('.ana-chart-tools').innerHTML=chart.querySelector('.ana-chart-tools').innerHTML;
@@ -212,9 +284,9 @@ export function bindAnalyticsCharts(root = document) {
     on(plot,'focusout', event => { if (!pinned && !plot.contains(event.relatedTarget)) hide(); });
     on(plot,'keydown', event => {
       if (event.target !== plot) return;
-      if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
+      if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
         event.preventDefault();
-        const next = event.key === 'Home' ? 0 : event.key === 'End' ? values.length - 1 : selected + (event.key === 'ArrowRight' ? 1 : -1);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? values.length - 1 : selected + (['ArrowRight','ArrowDown'].includes(event.key) ? 1 : -1);
         show(next);
       }
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pinned = !pinned; unpin.hidden = !pinned; show(selected); }
@@ -227,9 +299,9 @@ export function bindAnalyticsCharts(root = document) {
       on(point,'click', pin);
       on(point,'keydown', event => {
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pin(); }
-        if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
+        if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
           event.preventDefault(); const points = [...chart.querySelectorAll('[data-ana-point]')];
-          const next = event.key === 'Home' ? 0 : event.key === 'End' ? points.length - 1 : Math.max(0, Math.min(points.length - 1, Number(point.dataset.anaPoint) + (event.key === 'ArrowRight' ? 1 : -1)));
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? points.length - 1 : Math.max(0, Math.min(points.length - 1, Number(point.dataset.anaPoint) + (['ArrowRight','ArrowDown'].includes(event.key) ? 1 : -1)));
           points[next]?.focus();
         }
       });

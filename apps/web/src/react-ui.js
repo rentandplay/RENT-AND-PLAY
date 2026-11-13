@@ -1061,7 +1061,7 @@ function DashboardView({
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "item-cell" }, /* @__PURE__ */ React.createElement("span", { className: "item-symbol" }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: itemCategory })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, r.item_name), /* @__PURE__ */ React.createElement("small", null, r.rental_code)))),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "customer-cell-wrap" }, /* @__PURE__ */ React.createElement("span", { className: "mini-avatar" }, initials(r.customer)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, r.customer), isResort ? /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag resort", title: r.delivery_location || "Resort delivery" }, r.delivery_location ? r.delivery_location.split(",")[0].trim() : "Resort delivery") : /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag shop", title: "Shop counter handover" }, "Store pickup")))),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("strong", null, formatDate(r.due_at)), /* @__PURE__ */ React.createElement("small", { className: dueInfo.isOverdue ? "due-overdue-alert" : dueInfo.isDueSoon || r.extension_request?.status === "PENDING" ? "due-soon-alert" : "" }, r.extension_request?.status === "PENDING" ? "Extension requested" : Array.isArray(r.extension_history) && r.extension_history.length > 0 && dueInfo.badge === "Philippine time" ? `Extended (${r.extension_history.length}x)` : dueInfo.badge)),
-      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(StatusBadge, { status: r.displayStatus })),
+      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(StatusBadge, { status: r.displayStatus }), r.extension_request?.status === "PENDING" && /* @__PURE__ */ React.createElement("small", { className: "record-sub" }, "Extension awaiting review")),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(
         "button",
         {
@@ -2374,7 +2374,8 @@ function WorkspaceShell({
         } else if (entry.dataset.notificationRental) {
           await workspaceUI.openTransaction(entry.dataset.notificationRental, {
             rentalCode: entry.dataset.rentalCode,
-            refresh: true
+            refresh: true,
+            notificationType: entry.dataset.notificationType
           });
         } else if (entry.dataset.notificationPage) {
           onNavigate(entry.dataset.notificationPage);
@@ -2893,6 +2894,7 @@ import {
 } from "./workspace-navigation.js";
 import { createApiClient } from "./api-client.js";
 import { createRentalNotifications, syncLiveRentalUpdate } from "./notifications.js";
+import { createNotificationSound } from "./notification-sound.js";
 import { initHardwareBarcodeScanner } from "./qr-reader.js";
 import { installFormUX, prepareModalUX } from "./form-ux.js";
 import { requestError } from "./request-errors.js";
@@ -3049,6 +3051,7 @@ function App() {
       inventoryController: null,
       workspaceUI: null,
       rentalNotifications: null,
+      notificationSound: createNotificationSound(),
       api: null,
       goTo: null,
       endSession: null
@@ -3187,15 +3190,19 @@ function App() {
       showEquipmentDetails: (id) => c.inventoryController.details(id),
       onMaintenanceSaved: () => c.inventoryController.refresh({ force: true }),
       onReportSectionChange: setReportSection,
-      navigate: (...args) => c.goTo(...args)
+      navigate: (...args) => c.goTo(...args),
+      refreshDashboard: () => c.refreshDashboard?.()
     });
     c.workspaceUI.setReportSection(reportSectionForPath(location.pathname));
     c.rentalNotifications = createRentalNotifications({
       api: (...args) => c.api(...args),
       onChange: () => setNotificationVersion((v) => v + 1),
-      onAlert: (notification, count) => toast(
-        count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`
-      )
+      onAlert: (notification, count) => {
+        c.notificationSound.play();
+        toast(
+          count > 1 ? `${count} new rental updates. Open notifications to review them.` : `${notification.title}: ${notification.message}`
+        );
+      }
     });
   }
   const refresh = useCallback(
@@ -3243,6 +3250,7 @@ function App() {
     },
     [api, endSession, triggerRender]
   );
+  controllersRef.current.refreshDashboard = () => refresh({ force: true });
   useEffect(() => {
     if (!user || !connectionError || offline) return;
     const timer = setInterval(() => {
@@ -3373,6 +3381,12 @@ function App() {
     },
     [scheduleRentalEventSync]
   );
+  useEffect(() => {
+    if (!user?.id || user.mustChangePassword) return;
+    const sound = controllersRef.current.notificationSound;
+    sound.start();
+    return () => sound.stop();
+  }, [user?.id, user?.mustChangePassword]);
   useEffect(() => {
     const c = controllersRef.current;
     if (!user || user.mustChangePassword) {

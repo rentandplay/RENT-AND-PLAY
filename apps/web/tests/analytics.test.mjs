@@ -198,7 +198,8 @@ test('full CSV follows filters, preserves zeros and neutralizes spreadsheet form
   const data=structuredClone(operational);data.items[2].name='  =HYPERLINK("bad")';
   const selection={...historical,categoryId:'sports'},result=calculateAnalytics(data,selection,now),csv=analyticsCsv(result,data,selection);
   assert.ok(csv.startsWith('\uFEFF'));
-  for(const section of ['TREND','EQUIPMENT PERFORMANCE','CATEGORY FEES','TERMINAL VERIFICATION','DATA COVERAGE','CONFIRMED RENTALS'])assert.ok(csv.includes(section));
+  for(const section of ['TREND','EQUIPMENT PERFORMANCE','CATEGORY FEES','TERMINAL VERIFICATION','DATA COVERAGE'])assert.ok(csv.includes(section));
+  assert.ok(!csv.includes('CONFIRMED RENTALS LOG'));
   assert.ok(csv.includes('"\'  =HYPERLINK(""bad"")"'));
   assert.ok(!csv.includes('"Board"'));
   assert.ok(csv.includes('"Average rental duration (hours)"'));

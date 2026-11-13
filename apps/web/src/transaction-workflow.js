@@ -18,7 +18,12 @@ export function handoffChoices(model) {
 export function createTransactionWorkflow(h) {
   const { api, escape: e, showModal, modal, toast, formatDate, money, model: getModel, refresh, redraw, confirmSubmit, icon } = h;
   const getIcon = name => typeof icon === 'function' ? icon(name) : '';
-  const desk = createRentalDesk({ ...h, showHandoff: (request, rental) => showHandoff(request, rental) });
+  function returnToDashboard() {
+    modal.close?.();
+    h.navigate?.('Dashboard');
+    Promise.resolve(h.refreshDashboard?.()).catch(() => {});
+  }
+  const desk = createRentalDesk({ ...h, onReturnConfirmed: returnToDashboard, showHandoff: (request, rental) => showHandoff(request, rental) });
   const filters = { status: 'ALL', type: 'ALL', terminal: 'ALL' };
   let guideOpen = false, deviceDetailsOpen = false;
   let handoff = null, handoffRefreshing = false, handoffPollTimer = null, pagePollTimer = null;
@@ -213,6 +218,12 @@ export function createTransactionWorkflow(h) {
       }
       const signature = JSON.stringify([request, rental]);
       panel.querySelector('[data-handoff-error]').textContent = '';
+      const returnConfirmed = request.status === 'CONFIRMED' && String(request.transaction_type || request.type).toUpperCase() === 'RETURN';
+      if (returnConfirmed) {
+        returnToDashboard();
+        toast('Return confirmed. Returning to Dashboard.');
+        return true;
+      }
       if (signature !== handoff.signature) {
         handoff = { request, rental, signature };
         panel.innerHTML = handoffBody(request, rental);

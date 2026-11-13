@@ -1,10 +1,10 @@
-export const preferenceDefaults=Object.freeze({autoRefresh:true,reportPeriod:'30d',reportGrouping:'auto'});
+export const preferenceDefaults=Object.freeze({autoRefresh:true,reportPeriod:'365d',reportGrouping:'monthly'});
 const key='rent-play-workspace-preferences';
 export function normalizePreferences(value={}) {
   return {
     autoRefresh:typeof value?.autoRefresh==='boolean'?value.autoRefresh:true,
-    reportPeriod:['7d','30d','90d','365d'].includes(value?.reportPeriod)?value.reportPeriod:'30d',
-    reportGrouping:['auto','daily','weekly','monthly'].includes(value?.reportGrouping)?value.reportGrouping:'auto'
+    reportPeriod:['7d','30d','90d','365d'].includes(value?.reportPeriod)?value.reportPeriod:'365d',
+    reportGrouping:['auto','daily','weekly','monthly'].includes(value?.reportGrouping)?value.reportGrouping:'monthly'
   };
 }
 export function readPreferences(storage) {

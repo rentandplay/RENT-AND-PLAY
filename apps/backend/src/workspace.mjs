@@ -77,11 +77,13 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
     let query = db.collection(name);
     if (view) {
       if (name === 'rentals') {
-        if (view === 'Reports') {
-          const from=filters.from || new Date(now.getTime()-365*86400000).toISOString().slice(0,10);
-          query=query.where('confirmed_rental_at','>=',new Date(Date.parse(from+'T00:00:00+08:00')-31*86400000));
-          if (filters.to) query=query.where('confirmed_rental_at','<=',new Date(Date.parse(filters.to+'T23:59:59.999+08:00')));
-        } else query=query.where('status','in',OPEN_RENTALS).limit(201);
+        // A confirmation-date window loses the preceding comparison period,
+        // rentals carried into this period, older handoffs returned here, and
+        // currently overdue/reserved units when viewing historical dates.
+        // Reports need the complete evidence; the calculator applies each
+        // metric's own date basis. Supabase app_list_docs returns the full
+        // collection as one JSON aggregate, without a row-page or query cap.
+        if (view !== 'Reports') query=query.where('status','in',OPEN_RENTALS).limit(201);
       }
       if (name === 'customers') query=query.limit(100);
       if (name === 'maintenance_records' && view !== 'Reports') query=query.where('status','in',['OPEN','IN_PROGRESS']).limit(100);
@@ -571,6 +573,38 @@ export async function saveSettings(db, actor, input, now = new Date()) {
   batch.set(ref, value, { merge: true });
   stageAudit(batch, db, actor, 'BUSINESS_SETTINGS_UPDATED', 'SETTINGS', 'business', { before: current.exists ? auditFields(current.data(), businessFields) : null, after: auditFields(value, businessFields), now });
   await batch.commit(); return { ...value };
+}
+
+// Business targets are optional owner decisions. No quota is inferred from sample data.
+export async function saveAnalyticsSettings(db, actor, input, now = new Date()) {
+  const fields = ['monthly_fee_goal', 'monthly_rental_goal', 'utilization_goal', 'overdue_rate_alert'];
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Enter valid analytics targets.');
+  if (Object.keys(input).some(key => !fields.includes(key))) fail(400, 'Unknown analytics target field.');
+  if (!Object.keys(input).length) fail(400, 'Provide at least one analytics target.');
+  const supplied = {};
+  for (const key of fields) {
+    if (!Object.hasOwn(input, key)) continue;
+    const raw = input[key];
+    if (raw === null || typeof raw === 'string' && !raw.trim()) { supplied[key] = null; continue; }
+    if (!['number', 'string'].includes(typeof raw)) fail(400, `Enter a valid ${key.replaceAll('_', ' ')}.`);
+    const value = Number(raw);
+    if (!Number.isFinite(value)) fail(400, `Enter a valid ${key.replaceAll('_', ' ')}.`);
+    if (key === 'monthly_fee_goal' && (value <= 0 || !Number.isSafeInteger(Math.round(value * 100)) || Math.abs(value * 100 - Math.round(value * 100)) > 0.000001)) fail(400, 'Monthly rental fee goal must be positive and have at most two decimal places.');
+    if (key === 'monthly_rental_goal' && (!Number.isSafeInteger(value) || value <= 0)) fail(400, 'Monthly rental goal must be a positive whole number.');
+    if (key === 'utilization_goal' && (value <= 0 || value > 1)) fail(400, 'Utilization goal must be greater than 0 and at most 1.');
+    if (key === 'overdue_rate_alert' && (value < 0 || value > 1)) fail(400, 'Overdue alert rate must be between 0 and 1.');
+    supplied[key] = key === 'monthly_fee_goal' ? Math.round(value * 100) / 100 : value;
+  }
+  const ref = db.collection('settings').doc('business');
+  return db.runTransaction(async tx => {
+    const current = await tx.get(ref), before = current.exists ? current.data() : {};
+    const previous = Object.fromEntries(fields.map(key => [key, before.analytics_targets?.[key] ?? null]));
+    const analytics_targets = { ...previous, ...supplied };
+    const value = { analytics_targets, analytics_targets_updated_at: now, analytics_targets_updated_by: String(actor) };
+    tx.set(ref, value, { merge: true });
+    stageAudit(tx, db, actor, 'ANALYTICS_TARGETS_UPDATED', 'SETTINGS', 'business', { before: previous, after: analytics_targets, now });
+    return { ...before, ...value };
+  });
 }
 
 export async function savePaymentSettings(db, actor, input, now = new Date()) {

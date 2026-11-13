@@ -3,10 +3,23 @@ import { formatDurationHuman } from './transaction-records.js';
 export function createRentalPlanning(h) {
   const {api,escape:e,money,formatDate,showModal,modal,toast,refresh,redraw,icon}=h;
   const operationKey=()=>[...crypto.getRandomValues(new Uint8Array(16))].map(n=>n.toString(16).padStart(2,'0')).join('');
-  function form(title,html,save) {
-    showModal(title,`<form class="admin-form"><p>Local delivery within Lakewood Subdivision, Los Baños, Laguna.</p>${html}<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Back</button><button class="primary">Confirm</button></div></form>`);
+  function form(title,html,save,{submitLabel='Confirm',intro='',onSaved}={}) {
+    showModal(title,`<form class="admin-form">${intro ? `<p>${intro}</p>` : ''}${html}<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Back</button><button type="submit" class="primary">${submitLabel}</button></div></form>`);
     const element=modal.querySelector('form'), requestKey=operationKey();
-    element.onsubmit=async event=>{event.preventDefault();if(element.inert||!element.reportValidity())return;const fields=Object.fromEntries(new FormData(element));element.inert=true;try{await save(fields,requestKey);modal.close();try{await refresh();}catch{toast('Saved. Refresh the list to see the latest state.');}redraw();}catch(error){element.querySelector('.form-error').textContent=error.message;}finally{element.inert=false;}};
+    element.onsubmit=async event=>{
+      event.preventDefault();
+      if(element.inert||!element.reportValidity())return;
+      const fields=Object.fromEntries(new FormData(element));element.inert=true;
+      try{
+        const result=await save(fields,requestKey);
+        if(result?.rental)h.applyResponse?.(result);
+        modal.close();
+        try{await refresh();}catch{toast('Saved. Refresh the list to see the latest state.');}
+        redraw();
+        if(!modal.open)onSaved?.(result);
+      }catch(error){element.querySelector('.form-error').textContent=error.message;}
+      finally{element.inert=false;}
+    };
   }
   function deliveryForm(row) {
     const failed=row.delivery_status==='DELIVERY_FAILED';
@@ -15,7 +28,17 @@ export function createRentalPlanning(h) {
   function extensionForm(row) {
     const request=row.extension_request;
     if(!request||request.status!=='PENDING'){toast('No pending extension.');return;}
-    form('Review rental extension',`<strong>${e(row.rental_code)} · ${e(row.customer_name)}</strong><dl class="record-fields"><div><dt>Added time</dt><dd>${e(formatDurationHuman(request.quote?.billed_minutes || request.additional_minutes))}</dd></div><div><dt>Current due time</dt><dd>${e(formatDate(request.original_due_at))}</dd></div><div><dt>New due time</dt><dd>${e(formatDate(request.requested_due_at))}</dd></div><div><dt>Additional charge</dt><dd>${e(money(request.additional_fee))}</dd></div></dl><p>Approval checks the next reservation again. Collect the added balance in person or verify its QR transfer through the rental payment action.</p><label>Decision<select name="action"><option>APPROVE</option><option>REJECT</option></select></label><label>Reason if rejected<textarea name="reason" maxlength="1000"></textarea></label>`,async fields=>{await api(`/rentals/${encodeURIComponent(row.id)}/extension-review`,{method:'POST',body:JSON.stringify({...fields,requestKey:request.request_key})});toast('Extension reviewed.');});
+    form('Review rental extension',`<strong>${e(row.rental_code)} · ${e(row.customer_name)}</strong><dl class="record-fields"><div><dt>Current due time</dt><dd>${e(formatDate(request.original_due_at))}</dd></div><div><dt>New due time</dt><dd>${e(formatDate(request.requested_due_at))}</dd></div><div><dt>Additional time</dt><dd>${e(formatDurationHuman(request.quote?.billed_minutes || request.additional_minutes))}</dd></div><div><dt>Additional charge</dt><dd>${e(money(request.additional_fee))}</dd></div></dl><p>The equipment stays with the customer and the rental timer keeps running. Approval updates the due time and checks the next reservation again. Collect the added balance in person or verify its QR transfer through the rental payment action.</p><label>Decision<select name="action"><option value="APPROVE">Approve extension</option><option value="REJECT">Reject extension</option></select></label><label>Reason if rejected<textarea name="reason" maxlength="1000"></textarea></label>`,async fields=>{
+      const result=await api(`/rentals/${encodeURIComponent(row.id)}/extension-review`,{method:'POST',body:JSON.stringify({...fields,requestKey:request.request_key})});
+      toast(fields.action==='APPROVE'?'Extension approved. Rental remains active.':'Extension rejected. Original due time still applies.');
+      return result;
+    },{submitLabel:'Approve extension',onSaved:result=>{if(result?.rental)h.transactionDetails?.({...row,...result.rental});}});
+    const element=modal.querySelector('form');
+    element.querySelector('[name="action"]').onchange=event=>{
+      const rejected=event.target.value==='REJECT';
+      element.querySelector('.primary').textContent=rejected?'Reject extension':'Approve extension';
+      element.querySelector('[name="reason"]').required=rejected;
+    };
   }
   function requestExtension(row) {
     let quote=null;

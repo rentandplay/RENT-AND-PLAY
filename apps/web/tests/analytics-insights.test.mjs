@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateDetailedAnalytics, analyticsEquipmentOptions, groupEquipmentPerformance, forecastScenario, forecastEquipmentMix } from '../src/analytics-insights.js';
+import { calculateDetailedAnalytics, analyticsEquipmentOptions, groupEquipmentPerformance, forecastEquipmentMix } from '../src/analytics-insights.js';
 import { analyticsCsv } from '../src/analytics.js';
 
 const now = new Date('2026-10-13T03:00:00Z');
@@ -102,15 +102,6 @@ test('a long empty calendar cannot be reported as a successful historical foreca
   assert.match(result.forecast.backtest.reason, /confirmed rental activity/);
 });
 
-test('forecast scenarios scale estimates and spreads without changing the baseline', () => {
-  const result = calculateDetailedAnalytics(history(), { period: '90d', groupBy: 'daily' }, now), first = result.forecast.points[0];
-  const lower = forecastScenario(result.forecast, 'lower')[0], higher = forecastScenario(result.forecast, 'higher')[0];
-  assert.equal(lower.rentals, first.rentals * .8);
-  assert.equal(higher.fees, first.fees * 1.2);
-  assert.equal(higher.rentalSpread.high, first.rentalSpread.high * 1.2);
-  assert.notEqual(higher.rentalSpread, first.rentalSpread);
-  assert.equal(result.forecast.points[0], first);
-});
 
 test('allocated equipment demand adds up to the baseline rental estimate', () => {
   const result = calculateDetailedAnalytics(history(), { period: '90d', groupBy: 'daily' }, now);
@@ -134,11 +125,10 @@ test('invalid recorded fees cannot create NaN in weekday charts', () => {
   assert.ok(result.quality.some(row => row.text.includes('no valid recorded fee')));
 });
 
-test('CSV includes matched comparisons, grouped unit codes, scenarios and recommendation rules', () => {
+test('CSV includes the fixed average method, comparisons, grouped unit codes and recommendation rules', () => {
   const result = calculateDetailedAnalytics(history(), { period: '90d', groupBy: 'daily' }, now);
-  result.forecast.points = forecastScenario(result.forecast, 'higher'); result.forecast.scenario = 'higher';
   const csv = analyticsCsv(result, stock, {});
-  for (const value of ['PREVIOUS MATCHED PERIOD', 'Training periods used', 'higher', 'Rental spread low', 'Trigger rule', 'EQUIP-001 / EQUIP-002 / EQUIP-003']) assert.ok(csv.includes(value), value);
+  for (const value of ['PREVIOUS MATCHED PERIOD', 'Training periods used', 'Rental spread low', 'Trigger rule', 'EQUIP-001 / EQUIP-002 / EQUIP-003']) assert.ok(csv.includes(value), value);
   assert.ok(!csv.includes('NaN'));
 });
 
@@ -151,87 +141,10 @@ test('CSV identifies synthetic rentals in the selected report', () => {
 });
 
 
-test('multi-model forecast benchmarking ranks 4 time-series algorithms and supports model switching', () => {
-  const result = calculateDetailedAnalytics(history(), { period: '90d', groupBy: 'daily' }, now);
-  const bm = result.forecast.benchmark;
-  assert.ok(bm.available);
-  assert.equal(bm.models.length, 4);
-  assert.deepEqual(bm.models.map(m => m.rank), [1, 2, 3, 4]);
-  assert.equal(bm.models.filter(m => m.isBestFit).length, 1);
-  assert.equal(bm.recommended.id, bm.models[0].id);
-  for (const model of bm.models) {
-    assert.ok(Number.isFinite(model.maeRentals));
-    assert.ok(Number.isFinite(model.rmseRentals));
-    assert.ok(Number.isFinite(model.smapeRentals));
-    assert.ok(Number.isFinite(model.accuracyRentals));
-    assert.equal(model.validationRentals.length, 7);
-    const pts = forecastScenario(result.forecast, 'baseline', model.id);
-    assert.equal(pts.length, result.forecast.horizon);
-    assert.ok(pts.every(pt => Number.isFinite(pt.rentals) && Number.isFinite(pt.fees)));
-  }
-});
 
-test('unvalidated models have no performance rank, winner or recommendation', () => {
-  const result = calculateDetailedAnalytics(history(29), { period: '30d', groupBy: 'daily' }, now);
-  assert.ok(result.forecast.available);
-  const bm = result.forecast.benchmark;
-  assert.equal(bm.available, false);
-  assert.equal(bm.recommended, null);
-  assert.ok(bm.models.every(m => m.rank === null && !m.isBestFit && m.maeRentals === null));
-});
 
-test('SES, WMA and OLS match their displayed formulas without hidden seasonal blending', () => {
-  const transactions = Array.from({ length: 4 }, (_, i) => rental(`impulse-${i}`, 'bike', '2026-10-12 10:00:00', 100));
-  const f = calculateDetailedAnalytics({ ...stock, transactions }, { period: '30d', groupBy: 'daily' }, now).forecast;
-  assert.ok(f.available);
-  const ses = forecastScenario(f, 'baseline', 'ses'), wma = forecastScenario(f, 'baseline', 'wma'), linear = forecastScenario(f, 'baseline', 'linear');
-  assert.ok(ses.every(p => Math.abs(p.rentals - 1.4) < 1e-10));
-  assert.ok(wma.every(p => Math.abs(p.rentals - 1) < 1e-10));
-  // Oct 13 is partial/excluded; the first target Oct 14 is two steps after Oct 12.
-  assert.equal(linear[0].from, '2026-10-14');
-  assert.ok(Math.abs(linear[0].rentals - (4 / 7 + 54 / 1827)) < 1e-10);
-  assert.ok(linear.at(-1).rentals > linear[0].rentals);
-  assert.equal(ses[0].rentalSpread, null);
-  assert.equal(wma[0].feeSpread, null);
-  for (const model of ['seasonal', 'ses', 'wma', 'linear', 'auto']) {
-    const points = forecastScenario(f, 'higher', model);
-    const mix = forecastEquipmentMix([{ share: .2 }, { share: .8 }], points);
-    assert.ok(Math.abs(mix.reduce((sum, row) => sum + row.expectedRentals, 0) - points.reduce((sum, row) => sum + row.rentals, 0)) < 1e-10);
-  }
-});
 
-test('walk-forward predictions never learn from the held-out observation or later records', () => {
-  const original = history(), altered = structuredClone(original);
-  altered.transactions.push(...Array.from({ length: 20 }, (_, i) => rental(`last-${i}`, 'bike', '2026-10-12 12:00:00', 9999)));
-  const before = calculateDetailedAnalytics(original, { period: '90d', groupBy: 'daily' }, now).forecast.benchmark;
-  const after = calculateDetailedAnalytics(altered, { period: '90d', groupBy: 'daily' }, now).forecast.benchmark;
-  for (const m of before.models) {
-    const next = after.models.find(row => row.id === m.id);
-    assert.deepEqual(next.validationRentals, m.validationRentals);
-    assert.deepEqual(next.validationFees, m.validationFees);
-  }
-  const seasonal = before.models.find(m => m.id === 'seasonal');
-  assert.equal(seasonal.maeRentals, 0);
-  assert.equal(seasonal.rmseRentals, 0);
-  assert.equal(seasonal.smapeRentals, 0);
-  assert.equal(seasonal.accuracyRentals, 1);
-});
 
-test('zero held-out totals leave WAPE fit score undefined and nonzero errors remain measurable', () => {
-  const transactions = Array.from({ length: 4 }, (_, i) => rental(`old-${i}`, 'bike', '2026-10-01 10:00:00', 100));
-  const bm = calculateDetailedAnalytics({ ...stock, transactions }, { period:'90d', groupBy:'daily' }, now).forecast.benchmark;
-  assert.ok(bm.available);
-  const ses = bm.models.find(m => m.id === 'ses');
-  assert.equal(ses.accuracyRentals, null);
-  assert.equal(ses.errorRateRentals, null);
-  assert.ok(ses.maeRentals > 0);
-  const errors = ses.validationRentals;
-  const mae = errors.reduce((a, b) => a + b, 0) / 7;
-  const rmse = Math.sqrt(errors.reduce((a, b) => a + b * b, 0) / 7);
-  assert.ok(Math.abs(ses.maeRentals - mae) < 1e-10);
-  assert.ok(Math.abs(ses.rmseRentals - rmse) < 1e-10);
-  assert.equal(ses.smapeRentals, 2);
-});
 
 test('seasonal forecasts reproduce an independent known weekday/weekend pattern',()=>{
   const f=calculateDetailedAnalytics(history(),{period:'90d',groupBy:'daily'},now).forecast;
@@ -242,20 +155,55 @@ test('seasonal forecasts reproduce an independent known weekday/weekend pattern'
   }
 });
 
-test('OLS extrapolates known linear fees across the excluded current day and clamps negatives',()=>{
-  const build=declining=>({...stock,transactions:Array.from({length:64},(_,i)=>{
-    const day=new Date(Date.parse('2026-10-13T00:00:00Z')-(64-i)*86400000).toISOString().slice(0,10);
-    return rental('trend-'+i,'bike',day+' 10:00:00',declining?135-2*i:7+2*i);
-  })});
-  const get=data=>calculateDetailedAnalytics(data,{period:'90d',groupBy:'daily'},now).forecast;
-  const a=get(build(false)),linear=forecastScenario(a,'baseline','linear');
-  assert.equal(linear[0].from,'2026-10-14');
-  assert.ok(Math.abs(linear[0].fees-137)<1e-8);
-  assert.ok(Math.abs(linear.at(-1).fees-149)<1e-8);
-  const b=get(build(true)),negative=forecastScenario(b,'baseline','linear');
-  assert.ok(Math.abs(negative[0].fees-5)<1e-8);
-  assert.equal(negative.at(-1).fees,0);
-  const changed=build(false);changed.transactions.push(rental('partial','bike','2026-10-13 09:00:00',99999));
-  const partial=get(changed);
-  for(const id of ['seasonal','ses','wma','linear'])assert.deepEqual(forecastScenario(partial,'baseline',id),forecastScenario(a,'baseline',id));
+
+test('fixed averaging forecast ignores partial today and never selects or ranks alternative algorithms',()=>{
+ const original=history(),altered=structuredClone(original);
+ altered.transactions.push(rental('today','bike','2026-10-13 09:00:00',99999));
+ const before=calculateDetailedAnalytics(original,{period:'90d',groupBy:'daily'},now).forecast;
+ const after=calculateDetailedAnalytics(altered,{period:'90d',groupBy:'daily'},now).forecast;
+ assert.deepEqual(after.points,before.points);
+ assert.equal(before.benchmark,undefined);
+ assert.match(before.method,/Same-weekday average/);
+ const csv=analyticsCsv(calculateDetailedAnalytics(original,{period:'90d',groupBy:'daily'},now),original,{});
+ assert.doesNotMatch(csv,/BENCHMARKING|Best-fit|Selected model|Scenario/);
+});
+test('internal average validation never trains on a held-out outcome',()=>{
+ const original=history(),altered=structuredClone(original);
+ altered.transactions.push(...Array.from({length:20},(_,i)=>rental('changed'+i,'bike','2026-10-12 12:00:00',9999)));
+ const before=calculateDetailedAnalytics(original,{period:'90d',groupBy:'daily'},now).forecast.backtest;
+ const after=calculateDetailedAnalytics(altered,{period:'90d',groupBy:'daily'},now).forecast.backtest;
+ assert.ok(before.available);
+ assert.deepEqual(after.rows.map(r=>[r.estimatedRentals,r.estimatedFees]),before.rows.map(r=>[r.estimatedRentals,r.estimatedFees]));
+ assert.equal(before.rentalError,0);
+ assert.ok(after.rentalError>0);
+});
+
+test('monthly historical review obeys readiness and uses only the six recent earlier months',()=>{
+ const data=history(600);
+ const result=calculateDetailedAnalytics(data,{period:'365d',groupBy:'monthly'},now);
+ const review=result.forecast.backtest;
+ assert.equal(review.available,true);
+ for(const [i,row] of review.rows.entries()) {
+  const window=review.windows[i];
+  assert.equal(window.window.length,8);
+  assert.equal(window.samples.length,6);
+  assert.ok(window.window.every(p=>p.to<row.from));
+  assert.equal(row.estimatedRentals,window.samples.reduce((n,p)=>n+p.rentals,0)/6);
+ }
+ const short=calculateDetailedAnalytics(history(270),{period:'365d',groupBy:'monthly'},now).forecast.backtest;
+ assert.equal(short.available,false);
+ assert.equal(short.required,10);
+ assert.ok(short.found<10);
+ assert.match(analyticsCsv(result,data,{}),/HISTORICAL FORECAST REVIEW/);
+});
+
+test('weekday and time-band heatmap preserves handoff totals in Philippine time',()=>{
+ const data={...stock,transactions:[rental('utc-boundary','bike','2026-10-11T23:00:00Z'),rental('noon','bike','2026-10-12T04:00:00Z'),rental('overnight','bike','2026-10-11T17:00:00Z')]};
+ const result=calculateDetailedAnalytics(data,{period:'7d',groupBy:'daily'},now);
+ assert.equal(result.demandMatrix.flat().reduce((a,b)=>a+b,0),3);
+ assert.equal(result.demandMatrix[0][0],1);
+ assert.equal(result.demandMatrix[0][1],1);
+ assert.equal(result.demandMatrix[0][4],1);
+ for(let day=0;day<7;day++) assert.equal(result.demandMatrix[day].reduce((a,b)=>a+b,0),result.weekdays[day].rentals);
+ for(let band=0;band<8;band++) assert.equal(result.demandMatrix.reduce((n,row)=>n+row[band],0),result.hours[band].rentals);
 });

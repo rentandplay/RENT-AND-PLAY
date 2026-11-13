@@ -18092,3 +18092,88 @@ textarea,
     padding: 14px 16px;
   }
 }
+
+/* Rental analytics: business decisions first, details on demand. */
+.analytics-workspace.ana-business { gap: 22px; }
+.ana-business .ana-tabs { gap: 12px; border: 0; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
+.ana-business .ana-tabs button { display: flex; align-items: center; border: 1px solid var(--ui-border); border-radius: 12px; padding: 18px; background: var(--ui-surface); min-width: 0; text-align: left; }
+.ana-business .ana-tabs button[aria-selected="true"] { background: color-mix(in srgb,var(--ana-accent) 6%,var(--ui-surface)); border-color: var(--ana-accent); box-shadow: inset 0 -3px var(--ana-accent); }
+.ana-business .ana-tab-number { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--ui-soft); color: var(--ui-muted); font-size: 12px; }
+.ana-business .ana-tab-body { display: grid; gap: 4px; }
+.ana-business .ana-tab-pill { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.ana-business .ana-tab-name { display: block; font-size: 16px; font-weight: 750; color: var(--ui-text); }
+.ana-business .ana-tab-body small { display: block; font-size: 12px; color: var(--ui-muted); }
+.ana-business .ana-summary { background: linear-gradient(120deg,var(--ui-soft),var(--ui-surface)); border: 1px solid var(--ui-border); padding: 28px; }
+.ana-business .ana-summary h2 { font-size: clamp(21px,2vw,29px); max-width: 32ch; }
+.ana-business .ana-kpi { position: relative; min-height: 172px; border-top: 3px solid var(--ui-border); padding: 22px; }
+.ana-business .ana-kpi:first-child { border-top-color: #337db5; }
+.ana-business .ana-kpi:nth-child(2) { border-top-color: #df762b; }
+.ana-business .ana-kpi:nth-child(3) { border-top-color: #459488; }
+.ana-business .ana-kpi:last-child { border-top-color: #b7724a; }
+.ana-business .ana-kpi-top { color: var(--ui-muted); font-size: 13px; font-weight: 650; }
+.ana-business .ana-kpi > strong { font-size: clamp(25px,2.5vw,35px); }
+.ana-business .ana-kpi small { line-height: 1.65; }
+.ana-overview-grid { display: grid; grid-template-columns: minmax(0,1.65fr) minmax(300px,1fr); gap: 20px; }
+.ana-business .ana-panel { padding: 24px; }
+.ana-business .ana-panel-head h3 { font-size: 17px; }
+.ana-business .ana-panel-head p { line-height: 1.65; }
+.ana-business .ana-segment { flex-wrap: wrap; max-width: 100%; }
+.ana-interpretation { margin: 18px 0 0; border-left: 3px solid #337db5; padding: 13px 16px; background: var(--ui-soft); border-radius: 0 8px 8px 0; color: var(--ui-text); font-size: 13px; line-height: 1.75; }
+.ana-priority-list { display: grid; gap: 0; }
+.ana-priority-item { display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 12px; padding: 18px 0; border-bottom: 1px solid var(--ui-border); }
+.ana-priority-item:first-child { padding-top: 0; }
+.ana-priority-item:last-child { border-bottom: 0; padding-bottom: 0; }
+.ana-priority-index { display: grid; place-items: center; flex: 0 0 30px; height: 30px; width: 30px; border-radius: 8px; color: var(--ui-text); background: var(--ui-soft); border: 1px solid var(--ui-border); font-size: 13px; font-weight: 750; }
+.ana-priority-item h3 { font-size: 14px; line-height: 1.5; margin: 5px 0 7px; }
+.ana-priority-item p { color: var(--ui-muted); font-size: 12px; line-height: 1.7; margin: 0; }
+.ana-priority-item > button { grid-column: 2; justify-self: start; font-size: 12px; margin-top: 2px; }
+.ana-business .ana-horizontal-chart svg { max-height: none; }
+.ana-business .ana-horizontal-chart .ana-bar-column.is-inspected [data-horizontal-bar] { opacity: .8; }
+.ana-business .admin-table { margin-top: 12px; }
+.ana-business .admin-table .ana-delta { white-space: normal; min-width: 130px; }
+.ana-demo-banner { display: flex; align-items: flex-start; gap: 16px; padding: 16px 20px; border: 1px solid #d1a460; border-radius: 10px; background: color-mix(in srgb,#d1a460 10%,var(--ui-surface)); font-size: 13px; line-height: 1.65; }
+.ana-demo-banner strong { flex-shrink: 0; }
+.ana-decision-flow { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); overflow: hidden; }
+.ana-decision-flow > div { padding: 20px; border-right: 1px solid var(--ui-border); display: grid; gap: 8px; }
+.ana-decision-flow > div:last-child { border-right: 0; }
+.ana-decision-flow strong { color: var(--ui-text); font-size: 14px; }
+.ana-decision-flow span { color: var(--ui-muted); font-size: 12px; line-height: 1.5; }
+.ana-business .ana-action-card { display: flex; flex-direction: column; padding: 26px; gap: 18px; border: 1px solid var(--ui-border); }
+.ana-business .ana-action-card header { display: flex; align-items: center; gap: 10px; }
+.ana-business .ana-action-card h3 { margin: 0; font-size: 19px; }
+.ana-action-framework { display: grid; gap: 10px; margin: 0; }
+.ana-action-framework > div { display: grid; grid-template-columns: 70px minmax(0,1fr); gap: 12px; line-height: 1.6; }
+.ana-action-framework dt { font-size: 12px; color: var(--ui-muted); }
+.ana-action-framework dd { margin: 0; font-size: 13px; color: var(--ui-text); }
+.ana-business .ana-action-card .ana-evidence { margin: 0; padding: 16px; background: var(--ui-soft); border-radius: 9px; }
+.ana-business .ana-action-card .ana-next-step { margin: 0; padding: 0; }
+.ana-business .ana-action-card footer { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--ui-border); display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; justify-content: space-between; }
+.ana-business .ana-action-card footer details { flex: 1 1 210px; }
+.ana-business .ana-action-card footer details summary { font-size: 12px; cursor: pointer; color: var(--ui-muted); }
+.ana-business .ana-action-card footer details p, .ana-business .ana-action-card footer details small { color: var(--ui-muted); font-size: 12px; line-height: 1.65; }
+.ana-target-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.ana-business .ana-disclosure-content { display: grid; gap: 18px; }
+.ana-business .ana-dictionary { margin: 0; display: grid; gap: 18px; }
+.ana-dictionary dt { font-weight: 700; font-size: 14px; }
+.ana-dictionary dd { margin: 6px 0 0; font-size: 13px; color: var(--ui-muted); line-height: 1.7; }
+.ana-business .ana-forecast-toolbar { display: grid; gap: 16px; }
+.ana-business .ana-outlook-panel { align-self: start; }
+.ana-business .ana-forecast-evidence .ana-facts > div { grid-template-columns: minmax(100px,1fr) minmax(0,1.25fr); }
+@media(max-width:1100px) { .ana-overview-grid { grid-template-columns: minmax(0,1fr); } .ana-priority-list { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; } .ana-priority-item { border: 0; padding: 0; } }
+@media(max-width:760px) { .ana-business .ana-tabs { gap: 7px; } .ana-business .ana-tabs button { padding: 12px; } .ana-business .ana-tab-number, .ana-business .ana-tab-body small { display: none; } .ana-business .ana-tab-name { font-size: 13px; } .ana-business .ana-tab-pill { font-size: 10px; } .ana-business .ana-summary { padding: 20px; } .ana-business .ana-panel { padding: 18px; } .ana-decision-flow { grid-template-columns: repeat(2,minmax(0,1fr)); } .ana-decision-flow > div { padding: 16px; border-bottom: 1px solid var(--ui-border); } .ana-target-fields { grid-template-columns: minmax(0,1fr); } .ana-demo-banner { flex-direction: column; gap: 5px; } }
+@media(max-width:520px) { .ana-priority-list { grid-template-columns: minmax(0,1fr); } .ana-business .ana-kpis { grid-template-columns: minmax(0,1fr); } .ana-business .ana-tabs button { padding: 10px 8px; } .ana-business .ana-tab-pill { font-size: 9px; } .ana-business .ana-tab-name { font-size: 11px; } .ana-business .ana-action-card { padding: 20px; } }
+.ana-business .ana-horizontal-chart .ana-plot > svg { width: 100%; height: auto; max-height: none; min-height: 0; }
+.ana-business .ana-facts, .ana-business .ana-action-framework { display: grid; grid-template-columns: minmax(0,1fr); gap: 0; }
+.ana-business .ana-action-framework { gap: 12px; }
+.ana-business .ana-facts > div { display: grid; grid-template-columns: minmax(110px,.9fr) minmax(0,1.1fr); gap: 16px; }
+.ana-business .ana-facts dd, .ana-business .ana-action-framework dd { text-align: left; overflow-wrap: anywhere; }
+.ana-business .admin-table td, .ana-business .admin-table td strong { color: var(--ui-text); opacity: 1; }
+.ana-business .admin-table td small { color: var(--ui-muted); }
+@media(max-width:520px) { .ana-business .ana-action-framework > div { grid-template-columns: 70px minmax(0,1fr); } .ana-business .ana-facts > div { grid-template-columns: minmax(0,1fr); gap: 5px; } }
+@media(max-width:380px) {
+  .ana-business .ana-tabs { grid-template-columns: minmax(0,1fr); }
+  .ana-business .ana-tabs button { grid-column: auto; padding: 12px 14px; }
+  .ana-business .ana-tab-body { width: 100%; grid-template-columns: 1fr 1.2fr; align-items: center; gap: 12px; }
+  .ana-business .ana-tab-pill { font-size: 10px; }
+  .ana-business .ana-tab-name { font-size: 13px; }
+}

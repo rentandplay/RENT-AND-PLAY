@@ -2,7 +2,7 @@ import { collectCsvRecords, serializeCsv, csvNumber, downloadCsv } from './csv-e
 
 import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
-import { calculateDetailedAnalytics, forecastScenario } from './analytics-insights.js';
+import { calculateDetailedAnalytics } from './analytics-insights.js';
 import { bindAnalyticsCharts } from './analytics-charts.js';
 import { updateForecastWorkspace } from './forecast-workspace.js';
 import { renderAnalyticsReport } from './analytics-report.js';
@@ -29,6 +29,7 @@ export function createWorkspaceUI(h) {
   let cacheVersion = 0, modelVersion = -1, loadError = '';
   let searchPage = '', pageSearches = {};
   const pageSize = 5;
+  let customerPageCount = 1, changingRecordPage = false;
   // Page snapshots live only for this signed-in session. Never discard them on navigation.
   const viewModelCache = new Map(), pendingLoads = new Map();
   const snapshotTtlMs = 30000, snapshotLimit = 24;
@@ -40,14 +41,14 @@ export function createWorkspaceUI(h) {
   const defaultRecordStatus = page => page === 'Rentals' || page === 'Maintenance' ? 'OPEN' : page === 'Returns' ? 'RETURN_PENDING_INSPECTION' : 'ALL';
   const financeUI=createFinanceUI({ ...h, openTransaction: id => openTransaction(id) });
   const reportPayments=createReportPayments(h);
-  const planning=createRentalPlanning({...h,refresh:()=>refresh(),redraw:()=>redraw()});
+  const planning=createRentalPlanning({...h,refresh:()=>refresh(),redraw:()=>redraw(),applyResponse:result=>applyResponse(result),transactionDetails:row=>transactionDetails(row,{extensionReview:true})});
   let preferences = readPreferences();
   try { preferences = readPreferences(localStorage); } catch { }
   let settingsTab = 'business', businessDraft = null, businessDirty = false, businessSaving = false, preferencesDraft = null, businessSubTab = 'profile';
   let activeSessions = null, securityAlerts = null, securityLoading = false, securityErrors = {}, securityAttempted = false, securityEpoch = 0;
   const analyticsSelection = { period: preferences.reportPeriod, from: '', to: '', categoryId: '', itemId: '', groupBy: preferences.reportGrouping };
   let demoHistoryBatch = '';
-  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', forecastScenario: 'baseline', forecastModel: 'auto', recommendationType: 'all', details: {} };
+  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', recommendationType: 'all', details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
   const status = value => `<span class="badge ${e(String(value || 'unknown').toLowerCase().replaceAll('_', '-').replaceAll(' ', '-'))}">${e(String(value || 'Unknown').replaceAll('_', ' '))}</span>`;
   const invalidate = () => { cancelPreload(); cacheVersion++; loadError = ''; financeUI.reset(); reportPayments.reset(); };
@@ -165,7 +166,28 @@ export function createWorkspaceUI(h) {
   const empty = (title, text) => `<div class="workspace-empty">${icon('box')}<h3>${e(title)}</h3><p>${e(text)}</p></div>`;
   const table = (heads, rows) => `<div class="admin-table-scroll" role="region" aria-label="Scrollable records" tabindex="0"><table class="admin-table"><thead><tr>${heads.map(v => `<th>${v}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
   const includes = (row, keys) => keys.some(key => String(row[key] || '').toLowerCase().includes(search.trim().toLowerCase()));
-  const paged = (records, key) => { if(model?.page_meta && key===searchPage){const state=remote[key] ||= {cursor:'',previous:[]};return {rows:records,footer:`<div class="module-pagination"><span>${records.length} loaded records · up to ${model.page_meta.limit} per page</span><div><button class="secondary" data-remote-prev ${state.previous.length?'':'disabled'}>← Previous</button><button class="secondary" data-remote-next ${model.page_meta.nextCursor?'':'disabled'}>Next →</button></div></div>`};} const total = Math.max(1, Math.ceil(records.length / pageSize)); pages[key] = Math.min(Math.max(0, pages[key] || 0), total - 1); const start = pages[key] * pageSize; return { rows: records.slice(start, start + pageSize), footer: `<div class="module-pagination"><span>${records.length ? `${start + 1}–${Math.min(start + pageSize, records.length)} of ${records.length}` : '0 records'} · Page ${records.length ? pages[key] + 1 : 0} of ${Math.ceil(records.length / pageSize)}</span><div><button class="secondary" data-pager-prev="${e(key)}" ${pages[key] ? '' : 'disabled'}>← Previous</button><button class="secondary" data-pager-next="${e(key)}" ${start + pageSize < records.length ? '' : 'disabled'}>Next →</button></div></div>` }; };
+  const paged = (records, key) => {
+    if (model?.page_meta && key === searchPage) {
+      const state = remote[key] ||= { cursor: '', previous: [] };
+      if (key === 'Customers') {
+        // The server batch is a cache for directory filters, not a display page.
+        customerPageCount = Math.max(1, Math.ceil(records.length / pageSize));
+        pages[key] = Math.min(Math.max(0, pages[key] || 0), customerPageCount - 1);
+        const start = pages[key] * pageSize;
+        const knownTotal = !state.previous.length && !model.page_meta.nextCursor;
+        const pageNumber = (state.previousPageCounts || []).reduce((sum, count) => sum + count, 0) + pages[key] + 1;
+        const summary = knownTotal
+          ? `${records.length ? `${start + 1}–${Math.min(start + pageSize, records.length)} of ${records.length} customers · Page ${pages[key] + 1} of ${customerPageCount}` : '0 customers'} · 5 per page`
+          : `Page ${pageNumber} · 5 customers per page`;
+        return { rows: records.slice(start, start + pageSize), footer: `<div class="module-pagination"><span>${summary}</span><div><button type="button" class="secondary" data-remote-prev ${pages[key] || state.previous.length ? '' : 'disabled'}>← Previous</button><button type="button" class="secondary" data-remote-next ${pages[key] + 1 < customerPageCount || model.page_meta.nextCursor ? '' : 'disabled'}>Next →</button></div></div>` };
+      }
+      return { rows: records, footer: `<div class="module-pagination"><span>${records.length} loaded records · up to ${model.page_meta.limit} per page</span><div><button class="secondary" data-remote-prev ${state.previous.length ? '' : 'disabled'}>← Previous</button><button class="secondary" data-remote-next ${model.page_meta.nextCursor ? '' : 'disabled'}>Next →</button></div></div>` };
+    }
+    const total = Math.max(1, Math.ceil(records.length / pageSize));
+    pages[key] = Math.min(Math.max(0, pages[key] || 0), total - 1);
+    const start = pages[key] * pageSize;
+    return { rows: records.slice(start, start + pageSize), footer: `<div class="module-pagination"><span>${records.length ? `${start + 1}–${Math.min(start + pageSize, records.length)} of ${records.length}` : '0 records'} · Page ${records.length ? pages[key] + 1 : 0} of ${Math.ceil(records.length / pageSize)}</span><div><button class="secondary" data-pager-prev="${e(key)}" ${pages[key] ? '' : 'disabled'}>← Previous</button><button class="secondary" data-pager-next="${e(key)}" ${start + pageSize < records.length ? '' : 'disabled'}>Next →</button></div></div>` };
+  };
 
   function customers() {
     return customerUI.render(search, { paged, table, status, empty });
@@ -218,7 +240,7 @@ export function createWorkspaceUI(h) {
     return state.period !== "Last 30 days" || date >= new Date(now.getTime() - 30 * 86400000);
   };
 
-  function transactionDetails(row) {
+  function transactionDetails(row, {extensionReview=false} = {}) {
     const requests = ((model?.verification) || []).filter(request => String(request.rental_id) === String(row.id)).map(request => enrichVerification(request, model || {})).sort((a, b) => String(b.requested_at || "").localeCompare(String(a.requested_at || "")));
     const rentalStage = row.confirmed_rental_at ? `<li class="done"><span></span><div><strong>Rental confirmed</strong><small>${e(formatDate(row.confirmed_rental_at))}</small></div></li>` : `<li class="pending"><span></span><div><strong>${row.status === "APPROVED" ? (['PREPARED','OUT_FOR_DELIVERY'].includes(row.delivery_status) ? (row.fulfillment_mode === "SHOP_HANDOVER" ? "Approved · ready for shop handover" : "Approved · ready for delivery") : "Approved · preparing equipment") : row.status === "PENDING_ADMIN_APPROVAL" ? "Waiting for admin review" : row.status === "PENDING_VERIFICATION" ? "Awaiting rental confirmation" : "Rental confirmation not recorded"}</strong><small>${e(formatDate(row.created_at))}</small></div></li>`;
     const returnStage = row.confirmed_return_at ? `<li class="done"><span></span><div><strong>Return confirmed${txIsLate(row) ? " · late" : ""}</strong><small>${e(formatDate(row.confirmed_return_at))}</small></div></li>` : row.received_at ? `<li class="done"><span></span><div><strong>Physically received · inspection pending</strong><small>${e(formatDate(row.received_at))} · rental clock stopped</small></div></li>` : `<li><span></span><div><strong>${txIsReturned(row) ? "Return marked complete" : "Return not yet recorded"}</strong><small>${row.due_at ? `Due ${e(formatDate(row.due_at))}` : "No due date recorded"}</small></div></li>`;
@@ -227,8 +249,11 @@ export function createWorkspaceUI(h) {
     const contact = [row.customer_email, row.customer_phone].filter(Boolean).join(" · ") || "Not provided";
     const review = needsAdminReview ? `<section class="record-section"><h3>Mobile rental request</h3><p>Approval reserves the equipment. The timer starts at resort handoff.</p><dl class="record-fields"><div><dt>Customer contact</dt><dd>${e(contact)}</dd></div><div><dt>Delivery location</dt><dd>${e(row.delivery_location || "Not provided")}</dd></div><div><dt>Payment method</dt><dd>${e(row.payment_method || "Not recorded")}</dd></div><div><dt>Payment confirmed</dt><dd>${row.payment_confirmed_by_admin ? "Yes" : "No"}</dd></div></dl></section>` : '';
     const returnPending = row.latest_return_request_status === 'PENDING_ADMIN_APPROVAL';
-    const isReturnModule = searchPage === 'Returns';
+    const extensionPending = row.status === 'ACTIVE' && !row.received_at && !returnPending && row.extension_request?.status === 'PENDING';
+    const isReturnModule = searchPage === 'Returns' && !extensionPending && !extensionReview;
     const receiving = row.status === 'RETURN_PENDING_INSPECTION' || returnPending || (isReturnModule && row.status === 'ACTIVE');
+    const extension = row.extension_request;
+    const extensionSummary = extension ? `<section class="record-section" aria-label="Rental extension"><h3>Rental extension · ${e(String(extension.status || '').replaceAll('_', ' '))}</h3><dl class="record-fields"><div><dt>Original due time</dt><dd>${e(formatDate(extension.original_due_at))}</dd></div><div><dt>${extension.status === 'APPROVED' ? 'Approved due time' : 'Requested due time'}</dt><dd>${e(formatDate(extension.requested_due_at))}</dd></div><div><dt>Additional time</dt><dd>${e(formatDurationHuman(extension.additional_minutes))}</dd></div><div><dt>Additional charge</dt><dd>${e(money(extension.additional_fee))}</dd></div></dl>${extension.reason ? `<p>${e(extension.reason)}</p>` : ''}${extension.status === 'PENDING' ? '<p>The current due time applies until approval. Equipment remains with the customer.</p>' : ''}</section>` : '';
     const returnRequest = receiving && returnPending ? `<section class="record-section"><h3>Customer return request</h3><p>Reported condition: ${e(row.mobile_return_request?.reported_condition || 'Not recorded')}. ${e(row.mobile_return_request?.notes || '')}</p></section>` : '';
     const extReq = row.extension_request;
     const extPending = row.status === 'ACTIVE' && extReq?.status === 'PENDING';
@@ -254,7 +279,7 @@ export function createWorkspaceUI(h) {
     const receiptActions = canPrintReceipt ? '<button type="button" class="secondary" data-print-walk-in-receipt>Bluetooth receipt</button><button type="button" class="secondary" data-receipt-pdf>PDF receipt</button>' : '';
     const activeReleaseNotice = row.status === 'ACTIVE' && !receiving && !extPending ? `<div class="rental-desk-notice rental-released-notice" role="status"><div class="notice-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg></div><div class="notice-body"><strong>Rental in progress · Handover complete</strong><p>The customer has received the equipment and the rental timer is running. Process the return in the Returns module when the item is brought back.</p></div></div>` : '';
     const footer = row.status === 'APPROVED' ? `<div class="transaction-footer-copy"><strong>${['PREPARED','OUT_FOR_DELIVERY'].includes(row.delivery_status) ? (row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Ready for shop handover' : 'Ready for delivery') : 'Prepare assigned equipment'}</strong><small>Handoff deadline ${e(formatDate(row.handoff_expires_at || row.hold_expires_at))}</small></div><div class="form-actions"><button type="button" class="secondary" data-rental-assignment="${e(row.id)}">Change unit</button>${['PREPARED','OUT_FOR_DELIVERY'].includes(row.delivery_status) ? `<button type="button" class="primary" data-rental-release="${e(row.id)}">${row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Hand over at shop' : 'Deliver / Hand over equipment'}</button>` : `<button type="button" class="primary" data-rental-prepare="${e(row.id)}">${row.fulfillment_mode === 'SHOP_HANDOVER' ? 'Prepare for handover' : 'Prepare for delivery'}</button>`}</div>` : needsAdminReview ? `<div class="transaction-footer-copy"><strong>Review customer request</strong><small>The timer starts after resort handoff.</small></div><div class="form-actions"><button type="button" class="secondary" data-mobile-rental-review="REJECT">Reject request</button><button type="button" class="primary" data-mobile-rental-review="APPROVE">${row.payment_method === 'QR' ? 'Review payment &amp; approve' : 'Approve rental request'}</button></div>` : receiving ? `<div class="transaction-footer-copy"><strong>${row.status === 'RETURN_PENDING_INSPECTION' ? 'Equipment received' : 'Receive returned equipment'}</strong><small>${row.status === 'RETURN_PENDING_INSPECTION' ? 'Complete the condition and accessory checks.' : 'Physical receipt stops the rental timer.'}</small></div><div class="form-actions">${receiptActions}${returnPending ? '<button type="button" class="secondary" data-mobile-return-reject>Reject request</button>' : ''}<button type="button" class="primary" data-mobile-return-confirm>${row.status === 'RETURN_PENDING_INSPECTION' ? 'Complete inspection' : 'Receive equipment'}</button></div>` : extPending ? `<div class="transaction-footer-copy"><strong>Extension awaiting review</strong><small>Approve or reject +${e(formatDurationHuman(extReq.quote?.billed_minutes || extReq.additional_minutes))} (${e(money(extReq.additional_fee))})</small></div><div class="form-actions">${receiptActions}<button type="button" class="secondary" data-close>Close</button><button type="button" class="primary" data-review-extension>Review extension</button></div>` : row.status === 'ACTIVE' ? `<div class="transaction-footer-copy"><strong>Active rental in progress</strong><small>Equipment is with the customer · Return in Returns module when brought back</small></div><div class="form-actions">${receiptActions}<button type="button" class="secondary" data-go-to-returns>Go to Returns page</button><button type="button" class="primary" data-close>Done</button></div>` : `<div class="transaction-footer-copy"><strong>Transaction record</strong><small>Pricing and inspection history are saved with this rental.</small></div><div class="form-actions">${receiptActions}<button type="button" class="secondary" data-close>Done</button></div>`;
-    showModal("Rental details", `<div class="transaction-record-modal"><div class="transaction-detail-overview"><div class="transaction-detail-head"><div><span class="eyebrow">${e(txCode(row))}</span><h3>${e(row.item_name || "Unknown equipment")}</h3><p>Assigned unit · ${e(row.item_code || "No item code")}</p></div>${status(txStatus(row))}</div><div class="transaction-detail-grid"><div><small>Customer</small><strong>${e(row.customer_name || "Unknown customer")}</strong></div><div><small>${row.status === 'APPROVED' || needsAdminReview ? 'Rental starts' : 'Due time'}</small><strong>${row.status === 'APPROVED' || needsAdminReview ? 'At handoff' : e(formatDate(row.due_at))}</strong></div></div></div><div class="transaction-detail-scroll">${activeReleaseNotice}${outcome}${review}${returnRequest}${extBanner}${renderFeeBreakdown(row, h)}<section class="record-section"><h3>Payment</h3>${!Object.hasOwn(row, 'rental_paid_amount') ? '<p>Payment and refund receipts were not recorded for this historical rental.</p>' : `<dl class="record-fields"><div><dt>Payment status</dt><dd>${e(String(row.payment_status || 'Not recorded').replaceAll('_', ' '))}</dd></div><div><dt>Rental payment received</dt><dd>${paymentAmount(row.rental_paid_amount)}</dd></div><div><dt>Outstanding rental balance</dt><dd>${paymentAmount(row.balance_due)}</dd></div>${['COMPLETED','CANCELLED','REJECTED','EXPIRED'].includes(row.status) ? `<div><dt>Refund due</dt><dd>${paymentAmount(row.refund_due)}</dd></div>` : ''}</dl>`}${['COMPLETED','CANCELLED','REJECTED','EXPIRED'].includes(row.status) && Object.hasOwn(row,'rental_paid_amount') ? `<button type="button" class="secondary" data-rental-settlement="${e(row.id)}">Record payment or refund</button>` : ''}</section><details class="record-disclosure"><summary><span>Condition &amp; accessories</span><small>Release and return inspections</small></summary><div class="record-disclosure-body">${renderConditionSnapshots(row, model || {}, h)}</div></details><details class="record-disclosure"><summary><span>Activity &amp; verification</span><small>Timeline and admin confirmations</small></summary><div class="record-disclosure-body"><h3 class="transaction-detail-section-title">Transaction timeline</h3><ol class="transaction-timeline"><li class="done"><span></span><div><strong>Record created</strong><small>${e(formatDate(row.created_at))}</small></div></li>${rentalStage}${extensionTimeline}<li class="${row.confirmed_return_at ? "done" : ""}"><span></span><div><strong>Due date</strong><small>${row.status === 'APPROVED' || needsAdminReview ? 'Set when equipment is released' : e(formatDate(row.due_at))}</small></div></li>${returnStage}</ol>${row.booking_qr_token ? renderAdminHandoff(row, h) : ""}${requests.length || !row.booking_qr_token ? `<section class="record-section"><h3>Full verification history · ${requests.length} attempt(s)</h3>${renderRequestHistory(requests, h)}</section>` : ""}</div></details></div><footer class="transaction-detail-footer">${footer}</footer></div>`);
+    showModal("Rental details", `<div class="transaction-record-modal"><div class="transaction-detail-overview"><div class="transaction-detail-head"><div><span class="eyebrow">${e(txCode(row))}</span><h3>${e(row.item_name || "Unknown equipment")}</h3><p>Assigned unit · ${e(row.item_code || "No item code")}</p></div>${status(txStatus(row))}</div><div class="transaction-detail-grid"><div><small>Customer</small><strong>${e(row.customer_name || "Unknown customer")}</strong></div><div><small>${row.status === 'APPROVED' || needsAdminReview ? 'Rental starts' : 'Due time'}</small><strong>${row.status === 'APPROVED' || needsAdminReview ? 'At handoff' : e(formatDate(row.due_at))}</strong></div></div></div><div class="transaction-detail-scroll">${activeReleaseNotice}${outcome}${review}${extensionPending ? extBanner : extensionSummary}${returnRequest}${renderFeeBreakdown(row, h)}<section class="record-section"><h3>Payment</h3>${!Object.hasOwn(row, 'rental_paid_amount') ? '<p>Payment and refund receipts were not recorded for this historical rental.</p>' : `<dl class="record-fields"><div><dt>Payment status</dt><dd>${e(String(row.payment_status || 'Not recorded').replaceAll('_', ' '))}</dd></div><div><dt>Rental payment received</dt><dd>${paymentAmount(row.rental_paid_amount)}</dd></div><div><dt>Outstanding rental balance</dt><dd>${paymentAmount(row.balance_due)}</dd></div>${['COMPLETED','CANCELLED','REJECTED','EXPIRED'].includes(row.status) ? `<div><dt>Refund due</dt><dd>${paymentAmount(row.refund_due)}</dd></div>` : ''}</dl>`}${['ACTIVE','COMPLETED','CANCELLED','REJECTED','EXPIRED'].includes(row.status) && Object.hasOwn(row,'rental_paid_amount') && (row.status !== 'ACTIVE' || Number(row.balance_due) > 0) ? `<button type="button" class="secondary" data-rental-settlement="${e(row.id)}">${row.status === 'ACTIVE' ? 'Record extension payment' : 'Record payment or refund'}</button>` : ''}</section><details class="record-disclosure"><summary><span>Condition &amp; accessories</span><small>Release and return inspections</small></summary><div class="record-disclosure-body">${renderConditionSnapshots(row, model || {}, h)}</div></details><details class="record-disclosure"><summary><span>Activity &amp; verification</span><small>Timeline and admin confirmations</small></summary><div class="record-disclosure-body"><h3 class="transaction-detail-section-title">Transaction timeline</h3><ol class="transaction-timeline"><li class="done"><span></span><div><strong>Record created</strong><small>${e(formatDate(row.created_at))}</small></div></li>${rentalStage}${extensionTimeline}<li class="${row.confirmed_return_at ? "done" : ""}"><span></span><div><strong>Due date</strong><small>${row.status === 'APPROVED' || needsAdminReview ? 'Set when equipment is released' : e(formatDate(row.due_at))}</small></div></li>${returnStage}</ol>${row.booking_qr_token ? renderAdminHandoff(row, h) : ""}${requests.length || !row.booking_qr_token ? `<section class="record-section"><h3>Full verification history · ${requests.length} attempt(s)</h3>${renderRequestHistory(requests, h)}</section>` : ""}</div></details></div><footer class="transaction-detail-footer">${footer}</footer></div>`);
     workflow.bindInspections(modal); workflow.desk.bind(modal);
     modal.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => modal.close()));
     modal.querySelector('[data-review-extension]')?.addEventListener('click', () => planning.extensionForm(row));
@@ -273,11 +298,10 @@ export function createWorkspaceUI(h) {
       h.navigate?.('Returns');
     });
 
-    if (['ACTIVE','RETURN_PENDING_INSPECTION'].includes(row.status)) {
-      const returnConfirm = modal.querySelector('[data-mobile-return-confirm]');
-      if (returnConfirm) returnConfirm.onclick = () => workflow.mobileReturnForm(row.id);
-      modal.querySelector('[data-mobile-return-reject]')?.addEventListener('click', () => workflow.mobileReturnForm(row.id, true));
-    }
+    modal.querySelector('[data-review-extension]')?.addEventListener('click', () => planning.extensionForm(row));
+    const returnConfirm = modal.querySelector('[data-mobile-return-confirm]');
+    if (returnConfirm) returnConfirm.onclick = () => workflow.mobileReturnForm(row);
+    modal.querySelector('[data-mobile-return-reject]')?.addEventListener('click', () => workflow.mobileReturnForm(row, true));
     modal.querySelectorAll('[data-mobile-rental-review]').forEach(button => button.addEventListener('click', () => mobileRentalReview(row, button.dataset.mobileRentalReview)));
   }
 
@@ -543,17 +567,19 @@ export function createWorkspaceUI(h) {
 
   function maintenance() { return maintenanceUI.render(search, { paged, table, status, empty }); }
 
-  function reports() {
+  let reportUser = null;
+  function reports(user = reportUser) {
+    reportUser = user;
     if (model.demo_data?.active && demoHistoryBatch !== model.demo_data.batch_id) {
       demoHistoryBatch = model.demo_data.batch_id;
       Object.assign(analyticsSelection, { period:'90d', groupBy:'daily' });
     }
-    const isPerformance = !reportView.section || reportView.section === 'performance';
+
     return renderAnalyticsReport(model, analyticsSelection, reportView, {
       escape: e,
       paged,
       table,
-      reportPaymentsHtml: isPerformance ? reportPayments.render(analyticsRange(analyticsSelection)) : ''
+      canManageTargets: user?.role === 'OWNER'
     });
   }
 
@@ -661,7 +687,7 @@ export function createWorkspaceUI(h) {
     if (!model || wrongView || wrongReportRange) return loadError
       ? `<section class="panel module-load-error" role="alert">${icon('chip')}<h3>Couldn’t load this page</h3><p>${e(loadError)}</p>${retry}</section>`
       : `<section class="panel module-loading" role="status" aria-busy="true"><span class="session-spinner" aria-hidden="true"></span><p>Loading ${e(displayPage.toLowerCase())}…</p></section>`;
-    const content = page === 'ESP32 terminal' ? workflow.verificationPage(search, { paged, table, status, empty }) : page === 'Customers' ? customers() : ['Rentals', 'Returns', 'Transaction History'].includes(page) ? transactions(page) : page === 'Rates & Fees' ? rates() : page === 'Maintenance' ? maintenance() : page === 'Reports' ? reports() : page === 'Settings' ? settings(user, appearance) : '';
+    const content = page === 'ESP32 terminal' ? workflow.verificationPage(search, { paged, table, status, empty }) : page === 'Customers' ? customers() : ['Rentals', 'Returns', 'Transaction History'].includes(page) ? transactions(page) : page === 'Rates & Fees' ? rates() : page === 'Maintenance' ? maintenance() : page === 'Reports' ? reports(user) : page === 'Settings' ? settings(user, appearance) : '';
     // Loaded pages refresh in the background without inserting a loading row.
     // Keep visible feedback for failures and the separate initial-load state.
     const notice = loadError
@@ -683,7 +709,34 @@ export function createWorkspaceUI(h) {
     if(page==='Payments'){financeUI.bind(rerender);return;}
     if (!['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings', 'ESP32 terminal'].includes(page)) return;
     redraw = rerender;
-    const moveRemote=async next=>{const state=remote[page] ||= {cursor:'',previous:[]};if(next){if(!model?.page_meta?.nextCursor)return;state.previous.push(state.cursor);state.cursor=model.page_meta.nextCursor;}else state.cursor=state.previous.pop()||'';await load(true).catch(()=>{});rerender();};
+    const moveRemote = async next => {
+      if (changingRecordPage) return;
+      const state = remote[page] ||= { cursor: '', previous: [] };
+      if (page === 'Customers' && (next ? (pages[page] || 0) + 1 < customerPageCount : pages[page] > 0)) {
+        pages[page] = (pages[page] || 0) + (next ? 1 : -1);
+        rerender();
+        return;
+      }
+      if (next ? !model?.page_meta?.nextCursor : !state.previous.length) return;
+      const previousState = { ...state, previous: [...state.previous], previousPageCounts: [...(state.previousPageCounts || [])] };
+      const previousPage = pages[page];
+      changingRecordPage = true;
+      document.querySelectorAll('[data-remote-prev], [data-remote-next]').forEach(button => { button.disabled = true; });
+      if (next) {
+        state.previous.push(state.cursor);
+        state.cursor = model.page_meta.nextCursor;
+        if (page === 'Customers') {
+          (state.previousPageCounts ||= []).push(customerPageCount);
+          pages[page] = 0;
+        }
+      } else {
+        state.cursor = state.previous.pop() || '';
+        if (page === 'Customers') pages[page] = Math.max(0, (state.previousPageCounts?.pop() || 1) - 1);
+      }
+      try { await load(true); }
+      catch { remote[page] = previousState; pages[page] = previousPage; }
+      finally { changingRecordPage = false; rerender(); }
+    };
     document.querySelector('[data-remote-prev]')?.addEventListener('click',()=>moveRemote(false));
     document.querySelector('[data-remote-next]')?.addEventListener('click',()=>moveRemote(true));
     document.querySelector('#history-ranking-period')?.addEventListener('change',async event=>{rankingPeriod=event.target.value;const pending=load(true).catch(()=>{});rerender();await pending;rerender();});
@@ -1078,6 +1131,23 @@ export function createWorkspaceUI(h) {
       } catch (problem) { toast(problem.message); }
       finally { button.disabled = false; }
     });
+    const targetForm = document.querySelector('#analytics-targets-form');
+    targetForm?.addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = targetForm.querySelector('[type="submit"]'), error = targetForm.querySelector('.form-error');
+      if (button.disabled) return;
+      const values = Object.fromEntries(new FormData(targetForm));
+      for (const key of Object.keys(values)) values[key] = values[key].trim() === '' ? null : Number(values[key]);
+      for (const key of ['utilization_goal','overdue_rate_alert']) if (values[key] !== null) values[key] /= 100;
+      button.disabled = true; error.textContent = ''; button.textContent = 'Saving…';
+      try {
+        const response = await api('/settings/analytics', { method:'PATCH', body:JSON.stringify(values) });
+        model = { ...model, settings: response.settings };
+        await refresh();
+        button.disabled = false; button.textContent = 'Save business targets';
+        rerender(); toast('Business targets saved for the workspace.');
+      } catch (problem) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save business targets'; }
+    });
     bindAnalyticsCharts();
     for (const [attribute, property] of [['demand', 'demandView'], ['ranking', 'rankingMetric']]) {
       document.querySelectorAll(`[data-analytics-${attribute}]`).forEach(button => button.onclick = () => {
@@ -1116,23 +1186,22 @@ export function createWorkspaceUI(h) {
       if(chart==='forecast') changeForecast('forecastMetric',button.dataset.analyticsMetric,selector);
       else {reportView.performanceMetric=button.dataset.analyticsMetric;rerender();document.querySelector(selector)?.focus({preventScroll:true});}
     }; });
-    document.querySelectorAll('[data-forecast-scenario]').forEach(button => { button.onclick = () => changeForecast('forecastScenario',button.dataset.forecastScenario,`[data-forecast-scenario="${button.dataset.forecastScenario}"]`); });
-    document.querySelectorAll('[data-forecast-model]').forEach(button => { button.onclick = () => changeForecast('forecastModel',button.dataset.forecastModel,`[data-forecast-model="${button.dataset.forecastModel}"]`); });
     document.querySelectorAll('[data-recommendation-type]').forEach(button => { button.onclick = () => { reportView.recommendationType = button.dataset.recommendationType; rerender(); document.querySelectorAll('[data-recommendation-type]').forEach(next => { if (next.dataset.recommendationType === reportView.recommendationType) next.focus(); }); }; });
     document.querySelectorAll('[data-analytics-history]').forEach(button => { button.onclick = () => { analyticsSelection.period = '90d'; analyticsSelection.groupBy = button.dataset.analyticsHistory; updateAnalytics(); }; });
     document.querySelectorAll('[data-analytics-go-page]').forEach(button => { button.onclick = () => h.navigate?.(button.dataset.analyticsGoPage); });
-    document.querySelectorAll('[data-analytics-go-section]').forEach(button => { button.onclick = () => { if (button.dataset.analyticsCoverage) reportView.details.coverage = true; selectAnalyticsTab(button.dataset.analyticsGoSection); if (button.dataset.analyticsCoverage) document.querySelector('#analytics-data-coverage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }; });
-    document.querySelectorAll('[data-analytics-detail]').forEach(detail => detail.addEventListener('toggle', () => { if (detail.isConnected) reportView.details[detail.dataset.analyticsDetail] = detail.open; }));
+    document.querySelectorAll('[data-analytics-go-section]').forEach(button => { button.onclick = () => { selectAnalyticsTab(button.dataset.analyticsGoSection); if (button.dataset.analyticsCoverage) document.querySelector('#analytics-data-coverage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }; });
     document.querySelector('#report-export')?.addEventListener('click', () => {
       const result = calculateDetailedAnalytics(model, analyticsSelection); if (result.error) { toast(result.error); return; }
-      result.forecast.points = forecastScenario(result.forecast, reportView.forecastScenario, reportView.forecastModel); result.forecast.scenario = reportView.forecastScenario; result.forecast.selectedModel = reportView.forecastModel;
-      const selectedModel = reportView.forecastModel === 'auto' ? (result.forecast.benchmark.recommended || result.forecast.benchmark.models.find(row => row.id === 'seasonal')) : result.forecast.benchmark.models.find(row => row.id === reportView.forecastModel);
-      if (selectedModel) { result.forecast.selectedModel = selectedModel.id; result.forecast.method = selectedModel.description; }
       const csv = analyticsCsv(result, model, analyticsSelection);
       downloadCsv(csv, 'analytics-' + result.range.from + '-to-' + result.range.to); toast('Complete filtered analytics exported.');
     });
   }
   async function openTransaction(id, meta = {}) {
+    const extensionNotification = String(meta.notificationType || '').startsWith('EXTENSION_');
+    const openRecord = rental => {
+      if (meta.notificationType === 'EXTENSION_REQUESTED' && rental.status === 'ACTIVE' && !rental.received_at && rental.latest_return_request_status !== 'PENDING_ADMIN_APPROVAL' && rental.extension_request?.status === 'PENDING') planning.extensionForm(rental);
+      else transactionDetails(rental,{extensionReview:extensionNotification});
+    };
     const matches = row => String(row.id) === String(id) || String(row.rental_code) === String(id);
     let row = meta?.refresh ? null : (model?.transactions?.find(matches) || meta?.rental);
     if (!row && !meta?.refresh) {
@@ -1149,7 +1218,7 @@ export function createWorkspaceUI(h) {
       }
     }
     if (row && !row.customer_name && row.customer) row.customer_name = row.customer;
-    if (row) {
+    if (row && !extensionNotification) {
       if (!model) {
         model = { transactions: [row], verification: [], items: [], customers: [], settings: {} };
       } else if (Array.isArray(model.transactions)) {
@@ -1185,10 +1254,12 @@ export function createWorkspaceUI(h) {
         else model.transactions.push(row);
       } else if (model) {
         model.transactions = [row];
+      } else {
+        model = { transactions: [row], verification: [], items: [], customers: [], settings: {} };
       }
-      if (stillLoading()) transactionDetails(row);
+      if (stillLoading()) openRecord(row);
     } catch (err) {
-      if (meta?.rental) {
+      if (meta?.rental && !extensionNotification) {
         transactionDetails(meta.rental);
         return;
       }

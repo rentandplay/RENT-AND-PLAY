@@ -98,10 +98,11 @@ test('bar inspection works for zero values, keyboard pinning and untrusted label
 });
 
 const helpers = { escape, now: new Date('2026-10-13T03:00:00Z'), paged: rows => ({ rows, footer: '' }), table: (heads, rows) => `<table><tbody>${rows}</tbody></table>` };
-test('overview collapses secondary detail and forecast never fabricates a preview', () => {
+test('overview shows supporting detail and forecast never fabricates a preview', () => {
   const { document } = parseHTML(renderAnalyticsReport({}, { period: '30d' }, {}, helpers));
-  for (const key of ['equipment', 'operations']) assert.equal(document.querySelector(`[data-analytics-detail="${key}"]`).hasAttribute('open'), false);
-  assert.equal(document.querySelectorAll('[data-analytics-ranking]').length, 2);
+  for (const key of ['equipment', 'category', 'targets', 'definitions']) assert.equal(document.querySelector(`[data-analytics-detail="${key}"]`).hasAttribute('hidden'), false);
+  assert.equal(document.querySelectorAll('[data-analytics-ranking]').length, 3);
+  assert.equal(document.querySelector('[data-analytics-detail="operations"]'), null);
   const forecast = renderAnalyticsReport({}, { period: '30d' }, { section: 'forecast' }, helpers);
   assert.doesNotMatch(forecast, /Model preview|weekend surge|forecast-preview/);
   assert.match(forecast, /More history needed/);

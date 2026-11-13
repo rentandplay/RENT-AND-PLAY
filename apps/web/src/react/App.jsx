@@ -28,6 +28,7 @@ import {
 } from '../workspace-navigation.js';
 import { createApiClient } from '../api-client.js';
 import { createRentalNotifications, syncLiveRentalUpdate } from '../notifications.js';
+import { createNotificationSound } from '../notification-sound.js';
 import { initHardwareBarcodeScanner } from '../qr-reader.js';
 import { installFormUX, prepareModalUX } from '../form-ux.js';
 import { requestError } from '../request-errors.js';
@@ -206,6 +207,7 @@ export function App() {
       inventoryController: null,
       workspaceUI: null,
       rentalNotifications: null,
+      notificationSound: createNotificationSound(),
       api: null,
       goTo: null,
       endSession: null
@@ -366,18 +368,21 @@ export function App() {
       showEquipmentDetails: id => c.inventoryController.details(id),
       onMaintenanceSaved: () => c.inventoryController.refresh({ force: true }),
       onReportSectionChange: setReportSection,
-      navigate: (...args) => c.goTo(...args)
+      navigate: (...args) => c.goTo(...args),
+      refreshDashboard: () => c.refreshDashboard?.()
     });
     c.workspaceUI.setReportSection(reportSectionForPath(location.pathname));
     c.rentalNotifications = createRentalNotifications({
       api: (...args) => c.api(...args),
       onChange: () => setNotificationVersion(v => v + 1),
-      onAlert: (notification, count) =>
+      onAlert: (notification, count) => {
+        c.notificationSound.play();
         toast(
           count > 1
             ? `${count} new rental updates. Open notifications to review them.`
             : `${notification.title}: ${notification.message}`
-        )
+        );
+      }
     });
   }
 
@@ -426,6 +431,7 @@ export function App() {
     },
     [api, endSession, triggerRender]
   );
+  controllersRef.current.refreshDashboard = () => refresh({ force: true });
 
   // Only retry reads. A disconnected save must never be repeated automatically.
   useEffect(() => {
@@ -577,6 +583,13 @@ export function App() {
   );
 
   // Sync user account with notifications and SSE stream
+  useEffect(() => {
+    if (!user?.id || user.mustChangePassword) return;
+    const sound = controllersRef.current.notificationSound;
+    sound.start();
+    return () => sound.stop();
+  }, [user?.id, user?.mustChangePassword]);
+
   useEffect(() => {
     const c = controllersRef.current;
     if (!user || user.mustChangePassword) {

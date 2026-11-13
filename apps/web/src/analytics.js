@@ -1,5 +1,4 @@
 import { serializeCsv } from './csv-export.js';
-import { formatPhilippineDateTime } from './date-time.js';
 
 const DAY=86400000,HOUR=3600000;
 const manilaFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'});
@@ -180,7 +179,12 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const onTimeSamples=returns.filter(row=>validDue(row)&&ms(physicalReturn(row))>=ms(row.confirmed_rental_at));
   const onTimeReturns=onTimeSamples.filter(row=>ms(physicalReturn(row))<=ms(row.due_at)).length;
   const dueRentals=settled.filter(row=>validDue(row)&&within(row.due_at)&&(row.status==='ACTIVE'||ms(physicalReturn(row))!==null&&ms(physicalReturn(row))>=ms(row.confirmed_rental_at)));
-  const overdueRentals=dueRentals.filter(row=>row.status==='COMPLETED'?ms(physicalReturn(row))>ms(row.due_at):ms(row.due_at)<asOf);
+  const overdueRentals=dueRentals.filter(row=>{
+    const received=ms(physicalReturn(row));
+    // Physical receipt stops lateness even while the final inspection is pending.
+    // A receipt after the historical cutoff must not change the as-of assessment.
+    return received!==null&&received>=ms(row.confirmed_rental_at)&&received<=asOf?received>ms(row.due_at):ms(row.due_at)<asOf;
+  });
   const overdueNow=settled.filter(row=>row.status==='ACTIVE'&&validDue(row)&&ms(row.due_at)<now.getTime()).length;
   const durations=returns.filter(row=>ms(row.confirmed_rental_at)!==null&&ms(physicalReturn(row))>=ms(row.confirmed_rental_at)).map(row=>(ms(physicalReturn(row))-ms(row.confirmed_rental_at))/HOUR);
   const feeTotalCents=confirmed.reduce((total,row)=>total+cents(row.rental_fee),0);
@@ -293,15 +297,15 @@ export function analyticsCsv(result,data,selection={}) {
   const t=result.totals,number=value=>typeof value !== 'number' || !Number.isFinite(value) ? 'Not enough data' : Math.round(value*10000)/10000;
   const category=(data.categories||[]).find(row=>String(row.id)===String(selection.categoryId)),item=result.groups?.find(row=>row.stockGroupId===String(selection.itemId)||row.id===String(selection.itemId))||(data.items||[]).find(row=>String(row.id)===String(selection.itemId));
   const forecastRows=result.forecast.available
-    ?[['Method',result.forecast.method],['Selected model',result.forecast.selectedModel||'seasonal'],['Scenario',result.forecast.scenario||'baseline'],['Training periods used',result.forecast.trainingPeriods],['Spread basis',result.forecast.points.some(row=>row.rentalSpread)?'One historical sample standard deviation; not a calibrated confidence interval':'No calibrated uncertainty interval for this model'],['From','To','Label','Estimated rental fees (PHP)','Estimated rentals','Rental spread low','Rental spread high','Fee spread low','Fee spread high'],...result.forecast.points.map(row=>[row.from,row.to,row.label,row.fees,row.rentals,row.rentalSpread?.low,row.rentalSpread?.high,row.feeSpread?.low,row.feeSpread?.high])]
+    ?[['Method',result.forecast.method],['Training periods used',result.forecast.trainingPeriods],['Spread basis',result.forecast.points.some(row=>row.rentalSpread)?'One historical sample standard deviation; not a calibrated confidence interval':'No calibrated uncertainty interval for this model'],['From','To','Label','Estimated rental fees (PHP)','Estimated rentals','Rental spread low','Rental spread high','Fee spread low','Fee spread high'],...result.forecast.points.map(row=>[row.from,row.to,row.label,row.fees,row.rentals,row.rentalSpread?.low,row.rentalSpread?.high,row.feeSpread?.low,row.feeSpread?.high])]
     :[['Status','Unavailable'],['Reason',result.forecast.reason],['Complete periods found',result.forecast.completedPeriods],['Complete periods required',result.forecast.requiredPeriods]];
   const recommendationRows=result.recommendations.length
-    ?result.recommendations.map(row=>[row.type,row.priority||'monitor',row.title,row.action,row.basis,row.threshold||'',row.review||''])
+    ?result.recommendations.map(row=>[row.type,row.priority||'monitor',row.title,row.outcome||'',row.measure||'',row.target||'',row.action,row.basis,row.threshold||'',row.ruleKind||'',row.review||''])
     :[['No recommendation thresholds were met for the selected period.']];
   const rows=[
     ['=== RENT & PLAY OPERATIONS & PERFORMANCE ANALYTICS ==='],...((result.confirmed||[]).some(row=>row.is_demo)?[['Dataset notice','PRESENTATION DEMO: synthetic rental history is included; results are not real business performance.'],['Synthetic rentals in this selection',result.confirmed.filter(row=>row.is_demo).length]]:[]),['Period',result.range.from,result.range.to],['Grouping',result.groupBy],['Measured through (UTC)',result.asOf],
     ['Category',category?.name||'All categories'],['Equipment',item?.name||'All equipment'],
-    ['Basis','Confirmed rental fees are grouped in Philippine time.'],[],
+    ['Basis','Confirmed rental fees are grouped in Philippine time.'],['Export scope','Aggregate analytics only. Customer contact details and individual rental logs are excluded.'],[],
     ['=== KEY PERFORMANCE INDICATORS (KPIs) ==='],
     ['Metric','Value','Basis'],
     ['Confirmed rental fees (PHP)',t.fees,'Rental confirmed in period'],['Confirmed rentals',t.rentals,'Rental confirmed in period'],
@@ -317,17 +321,17 @@ export function analyticsCsv(result,data,selection={}) {
     ['Average terminal verification (seconds)',number(t.verificationSeconds),`${t.verificationCount} valid confirmations in period`],
     ['Median terminal verification (seconds)',number(t.verificationMedianSeconds)],['P95 terminal verification (seconds)',number(t.verificationP95Seconds)],[],
     ...(result.comparison?[['=== PREVIOUS MATCHED PERIOD ==='],['From',result.comparison.from],['To',result.comparison.to],['Cutoff (UTC)',result.comparison.cutoff],['Metric','Current','Previous','Percent change'],...['fees','rentals','averageFee','utilization','repeatCustomerRate'].map(key=>[key,result.comparison[key].current,result.comparison[key].previous,number(result.comparison[key].percent===null?null:result.comparison[key].percent*100)]),[]]:[]),
-    ['=== FORECAST (DEMAND & REVENUE PROJECTION) ==='],...forecastRows,[],
-    ...(result.forecast.benchmark?.available?[['=== FORECAST MODEL BENCHMARKING ==='],['Best-fit model',result.forecast.benchmark.recommended?.name||'Seasonal SMA'],['Rank','Model','Algorithm','MAE (Rentals)','RMSE (Rentals)','SMAPE (%)','Historical fit score (%; clipped 1-WAPE)','Next Fee (PHP)','Next Rentals'],...result.forecast.benchmark.models.map(m=>[m.rank,m.name,m.shortName,number(m.maeRentals),number(m.rmseRentals),number(m.smapeRentals===null?null:m.smapeRentals*100),number(m.accuracyRentals===null?null:m.accuracyRentals*100),number(m.points?.[0]?.fees),number(m.points?.[0]?.rentals)]),[]]:[]),
-    ['=== PRESCRIPTIVE RECOMMENDATIONS ==='],['Focus area','Priority','Recommendation','Suggested action','Evidence','Trigger rule','Review timing'],...recommendationRows,[],
+    ...(result.targets?[['=== OWNER DEFINED TARGETS ==='],['Scope',result.targets.scopeReason||'Store-wide'],['Allocation basis',result.targets.basis],['Metric','Actual','Allocated goal','Attainment (%)'],...['fees','rentals','utilization'].map(key=>[key,number(result.targets[key].actual),number(result.targets[key].goal),number(result.targets[key].attainment===null?null:result.targets[key].attainment*100)]),['Overdue rate alert (%)',number(result.targets.overdue.limit===null?null:result.targets.overdue.limit*100)],[]]:[]),
+    ['=== FORECAST (DEMAND & RENTAL FEE PROJECTION) ==='],['Validation status',result.forecast.backtest?.available?'Limited historical backtest available':'Preliminary / not yet validated'],...forecastRows,[],
+    ...(result.forecast.backtest?[['=== HISTORICAL FORECAST REVIEW ==='],['Basis','Reconstructed rolling one-period-ahead estimates; only earlier complete history; not saved issued forecasts or guaranteed future accuracy'],...(result.forecast.backtest.available ? [['Evaluated periods',result.forecast.backtest.periods],['Rental MAE',number(result.forecast.backtest.rentalError)],['Fee MAE (PHP)',number(result.forecast.backtest.feeError)],['From','To','Actual rentals','Estimated rentals','Actual fees (PHP)','Estimated fees (PHP)'],...result.forecast.backtest.rows.map(row=>[row.from,row.to,row.actualRentals,number(row.estimatedRentals),row.actualFees,number(row.estimatedFees)])] : [['Status','More history needed'],['Reason',result.forecast.backtest.reason||`Need ${result.forecast.backtest.required} complete periods; found ${result.forecast.backtest.found}`]]),[]]:[]),
+    ['=== PRESCRIPTIVE RECOMMENDATIONS ==='],['Focus area','Priority','Recommendation','Outcome','Measure','Target','Suggested action','Evidence','Trigger rule','Rule basis','Review timing'],...recommendationRows,[],
     ['=== HISTORICAL DEMAND TREND ==='],['From','To','Label','Rental fees (PHP)','Rentals'],...result.trend.map(row=>[row.from,row.to,row.label,row.fees,row.rentals]),[],
     ['=== EQUIPMENT PERFORMANCE & UTILIZATION ==='],['Equipment','Unit codes','Category','Active now','Active units','Rentals','Rental fees (PHP)','Rented hours','Observed hours','Utilization (%)','Maintenance started','Downtime hours'],
     ...(result.groups||result.performance).map(row=>[row.name,row.unitCodes?.join(' / ')||row.code,row.category,row.active?'Yes':'No',row.unitCount??(row.active?1:0),row.rentals,row.fees,number(row.rentedHours),number(row.observedHours),number(row.utilization===null?null:row.utilization*100),row.maintenanceCount,number(row.downtimeHours)]),[],
-    ['=== CATEGORY FEES BREAKDOWN ==='],['Category','Rental fees (PHP)','Rentals'],...result.categoryRevenue.map(row=>[row.name,row.fees,row.rentals]),[],
+    ['=== EQUIPMENT PERIOD COMPARISON ==='],['Equipment','Current rentals','Previous rentals','Rental change (%)','Current fees (PHP)','Previous fees (PHP)','Fee change (%)'],...(result.groups||[]).filter(row=>row.comparison).map(row=>[row.name,row.rentals,row.comparison.rentals.previous,number(row.comparison.rentals.percent===null?null:row.comparison.rentals.percent*100),row.fees,row.comparison.fees.previous,number(row.comparison.fees.percent===null?null:row.comparison.fees.percent*100)]),[],
+    ['=== CATEGORY FEES BREAKDOWN ==='],['Category','Rental fees (PHP)','Rentals','Previous fees (PHP)','Fee change (%)'],...(result.categoryComparison||result.categoryRevenue).map(row=>[row.name,row.fees,row.rentals,row.comparison?.fees.previous,number(row.comparison?.fees.percent==null?null:row.comparison.fees.percent*100)]),[],
     ['=== TERMINAL VERIFICATION PERFORMANCE ==='],['Terminal','Code','Confirmations','Average seconds','Median seconds','P95 seconds'],...result.terminalPerformance.map(row=>[row.name,row.code,row.count,number(row.averageSeconds),number(row.medianSeconds),number(row.p95Seconds)]),[],
-    ['=== DATA COVERAGE AUDIT ==='],...result.quality.map(row=>[row.count,row.text]),['Linked confirmation timestamps',result.linkedConfirmationTimes],[],
-    ['=== CONFIRMED RENTALS LOG ==='],['Rental code','Equipment','Customer','Confirmed rental (Asia/Manila)','Status','Rental fee (PHP)','Due (Asia/Manila)','Returned (Asia/Manila)'],
-    ...result.confirmed.map(row=>[row.rental_code||row.id,row.item_name||(data.items||[]).find(item=>String(item.id)===String(row.item_id))?.name||'Unknown equipment',row.customer_name||'',formatPhilippineDateTime(row.confirmed_rental_at),row.status,row.rental_fee,formatPhilippineDateTime(row.due_at),formatPhilippineDateTime(row.confirmed_return_at)])
+    ['=== DATA COVERAGE AUDIT ==='],...result.quality.map(row=>[row.count,row.text]),['Linked confirmation timestamps',result.linkedConfirmationTimes]
   ];
   return serializeCsv(rows, { rectangular: false });
 }

@@ -648,7 +648,7 @@ button:disabled { cursor: not-allowed; }
 #modal #close-modal { width: 34px; height: 34px; min-width: 34px; border: 1px solid var(--ui-border); border-radius: 9px; color: var(--ui-muted); background: var(--ui-soft); box-shadow: none; display: grid; place-items: center; cursor: pointer; transition: all 0.15s ease; }
 #modal #close-modal:hover { background: var(--ui-border); color: var(--ui-text); }
 #modal > :not(.modal-heading) { margin: 0; }
-#modal > :is(form,.customer-profile,.inv-details-modal-content,.rental-actions-dialog,.password-reset-flow,.maintenance-detail) { padding: 24px 28px; }
+#modal > :is(form,.customer-profile,.inv-details-modal-content,.rental-actions-dialog,.password-reset-flow,.maintenance-detail,.record-detail-modal,.inv-unit-section,[data-handoff-request],.maintenance-photo-view) { padding: 24px; }
 #modal > p, #modal > .info-box { margin: 20px 24px; }
 #modal[open] > .admin-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px 20px; align-items: start; }
 #modal[open].modal-compact > .admin-form { grid-template-columns: minmax(0,1fr); }
@@ -698,6 +698,51 @@ button:disabled { cursor: not-allowed; }
 #modal .record-fields { gap: 16px 22px; }
 #modal .record-fields dd { font-size: 14px; }
 #modal :is(.form-error,.inv-error):empty { display: none; }
+#modal > :is(.form-actions,.inv-form-actions) { margin: 0; padding: 16px 24px; }
+
+/* The shared dialog owns the shell; preview bodies and footers own their gutters. */
+#modal[open]:has(.inv-print-settings) {
+  --label-border: var(--ui-border);
+  --label-muted: var(--ui-muted);
+  --label-surface: var(--ui-soft);
+  --label-panel: var(--ui-surface);
+  --label-text: var(--ui-text);
+  display: flex;
+  flex-direction: column;
+  width: min(1040px, calc(100vw - 40px));
+  max-height: calc(100dvh - 40px);
+  overflow: hidden;
+}
+#modal:has(.inv-print-settings) > .modal-heading { flex: 0 0 auto; position: static; }
+#modal > .inv-print-settings { padding: 24px; gap: 24px; scrollbar-gutter: stable; }
+#modal .inv-print-preview { top: 0; }
+#modal .inv-print-options h3 { font-size: 14px; }
+#modal .inv-print-basic-settings label, #modal .inv-print-calibration label { margin: 0; }
+#modal > .inv-print-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 0 0 auto;
+  gap: 12px;
+  margin: 0;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--ui-border);
+}
+#modal .inv-print-actions > p { max-width: none; margin: 0; }
+#modal .inv-print-footer-buttons { display: flex; flex-wrap: wrap; min-width: 0; gap: 10px; }
+#modal .inv-print-footer-buttons button { min-height: 42px; min-width: 0; }
+#modal .inv-print-footer-buttons #inv-qr-back { margin-right: auto; }
+#modal .inv-print-actions #inv-qr-print:disabled { color: var(--ui-muted); background: var(--ui-soft); border-color: var(--ui-border); }
+
+@media (max-width: 760px) {
+  #modal > .inv-print-settings { grid-template-columns: minmax(0, 1fr); padding: 18px; gap: 24px; }
+  #modal .inv-print-preview { position: static; }
+  #modal .inv-print-preview-frame { min-height: 0; padding: 24px; }
+  #modal > .inv-print-actions { padding: 14px 18px 18px; gap: 12px; }
+  #modal .inv-print-footer-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #modal .inv-print-footer-buttons button { width: 100%; min-height: 44px; padding: 10px; margin: 0; }
+  #modal .inv-print-footer-buttons #inv-qr-back { margin: 0; }
+  #modal .inv-print-footer-buttons #inv-qr-print { grid-column: auto; }
+}
 :is(.form-error,.inv-error):not(:empty), .field-error { font-size: 13px; line-height: 1.5; color: #af3036; }
 :root[data-theme=dark] :is(.form-error,.inv-error):not(:empty), :root[data-theme=dark] .field-error { color: #ffb4bd; }
 .field-error { display: block; margin-top: 5px; font-weight: 500; }
@@ -755,7 +800,8 @@ dialog::backdrop { background: rgba(15, 23, 42, 0.55); backdrop-filter: blur(4px
   .workspace .inv-item-actions { width: max-content; margin-inline: auto; }
   #modal, #modal[open], #modal.modal-compact { width: calc(100vw - 20px) !important; max-width: calc(100vw - 20px); max-height: calc(100dvh - 24px); border-radius: 13px; }
   #modal > .modal-heading { padding: 15px 18px; min-height: 64px; }
-  #modal > :is(form,.customer-profile,.inv-details-modal-content,.rental-actions-dialog,.password-reset-flow) { padding: 18px; }
+  #modal > :is(form,.customer-profile,.inv-details-modal-content,.rental-actions-dialog,.password-reset-flow,.maintenance-detail,.record-detail-modal,.inv-unit-section,[data-handoff-request],.maintenance-photo-view) { padding: 18px; }
+  #modal > :is(.form-actions,.inv-form-actions) { padding: 14px 18px 18px; }
   #modal > :is(.admin-form.rental-desk-form,.admin-form.rental-release-form) { padding: 0; }
   #modal[open] > .admin-form, #modal :is(.form-grid,.inv-form-grid,.maintenance-form-grid,.customer-form-grid,.rental-inspection-grid,.pricing-edit-grid,.inv-equipment-form) { grid-template-columns: minmax(0,1fr); gap: 16px; }
   #modal .rental-form-scroll { grid-template-columns: minmax(0,1fr); padding: 18px; }

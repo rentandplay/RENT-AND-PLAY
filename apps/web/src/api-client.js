@@ -11,8 +11,9 @@ export function createApiClient({ fetcher = fetch, now = Date.now, timeoutMs = 2
       let response;
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
       let timer = null;
-      if (controller && timeoutMs > 0 && !options.signal) {
-        timer = setTimeout(() => controller.abort(), timeoutMs);
+      const requestTimeoutMs = path.includes('view=Reports') ? Math.max(timeoutMs, 30000) : timeoutMs;
+      if (controller && requestTimeoutMs > 0 && !options.signal) {
+        timer = setTimeout(() => controller.abort(), requestTimeoutMs);
       }
       const signal = options.signal || controller?.signal;
       try {

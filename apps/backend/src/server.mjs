@@ -193,7 +193,17 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     analyticsSummary: () => loadAnalyticsSummary(readDatabase, now()),
     inventoryList: async () => { await verificationSweep.run(); return inventoryList(readDatabase); }, inventoryDetail: id => inventoryDetail(firestore, id), inventoryQr: id => inventoryQr(firestore, id), inventoryQrLabels: () => inventoryQrLabels(firestore),
     createItem: (actor, input) => createItem(firestore, actor, input), updateItem: (actor, id, input) => updateItem(firestore, actor, id, input), setItemQuantity: (actor, id, input) => setItemQuantity(firestore, actor, id, input), itemAction: (actor, id, input) => itemAction(firestore, actor, id, input), createItemCategory: (actor, input) => createItemCategory(firestore, actor, input), deleteItemCategory: (actor, id) => deleteItemCategory(firestore, actor, id), deleteArchivedItem: (actor, id, input) => deleteArchivedItem(firestore, actor, id, input),
-    workspace: async (role,options={}) => { await verificationSweep.run(); return loadWorkspace(readDatabase, role, now(), { ownerUid,...options }); },
+    workspace: async (role,options={}) => {
+      if (options.view === 'Reports') {
+        // Expiring temporary handoff requests is background maintenance. Do
+        // not make the read-only analytics page wait for or compete with its scan.
+        const report = await loadWorkspace(readDatabase, role, now(), { ownerUid,...options });
+        verificationSweep.run().catch(error => console.warn(`Verification expiry sweep failed after report load (${error.code || 'DATABASE_ERROR'}).`));
+        return report;
+      }
+      await verificationSweep.run();
+      return loadWorkspace(readDatabase, role, now(), { ownerUid,...options });
+    },
     mobileAdminWorkspace: async role => {
       await verificationSweep.run();
       const [workspace, dashboard, inventory] = await Promise.all([

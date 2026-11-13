@@ -59,7 +59,9 @@ const server = http.createServer(async (req, res) => {
     const upstream = http.request({ hostname: '127.0.0.1', port: Number(process.env.API_PORT || 3000), path: req.url, method: req.method, headers }, apiRes => {
       res.writeHead(apiRes.statusCode, apiRes.headers); apiRes.pipe(res);
     });
-    upstream.setTimeout(req.url.startsWith('/api/users') || req.url.includes('/registration/email-code') ? 30000 : 10000, () => upstream.destroy());
+    const reportWorkspace = req.url.startsWith('/api/workspace?') && /(?:[?&])view=Reports(?:&|$)/.test(req.url);
+    const timeoutMs = reportWorkspace || req.url.startsWith('/api/users') || req.url.includes('/registration/email-code') ? 30000 : 10000;
+    upstream.setTimeout(timeoutMs, () => upstream.destroy());
     upstream.on('error', () => {
       if (process.env.NODE_ENV !== 'production') {
         console.warn(`[Proxy] Cannot reach backend on 127.0.0.1:${process.env.API_PORT || 3000}. Make sure apps/backend is running.`);

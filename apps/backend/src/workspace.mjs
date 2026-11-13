@@ -38,6 +38,10 @@ const businessFields = [
   'reservation_hold_minutes', 'max_active_rentals_per_customer',
   'announcement_enabled', 'announcement_text'
 ];
+const reportCollections = new Set([
+  'rentals', 'items', 'item_categories', 'maintenance_records',
+  'terminals', 'verification_requests', 'item_status_history'
+]);
 
 export function validateCustomer(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Customer details are required.');
@@ -69,6 +73,9 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
   const pagePromise = kind ? recordPage(db,kind,{...filters,limit:filters.limit || (kind==='customers'?100:undefined),status:filters.status || (view==='Rentals'?'OPEN':view==='Returns'?'RETURN_PENDING_INSPECTION':undefined)}) : Promise.resolve(null);
   const viewCollections = view === 'Settings' ? new Set() : view === 'Rates & Fees' ? new Set(['items', 'item_categories', 'item_rates']) : null;
   const readCollection = async name => {
+    // Analytics only needs these records. Avoid pulling customer directories,
+    // item rates, condition snapshots, and their photos into a report payload.
+    if (view === 'Reports' && !reportCollections.has(name)) return { docs: [] };
     if (viewCollections && !viewCollections.has(name)) return { docs: [] };
     if (kind && name === {customers:'customers',rentals:'rentals',maintenance:'maintenance_records'}[kind]) {
       const page = await pagePromise;
@@ -98,7 +105,7 @@ export async function loadWorkspace(db, role = 'OPERATOR', now = new Date(), { o
     Promise.all(names.map(name => !mobile || mobileCollections.has(name) ? readCollection(name) : Promise.resolve({ docs: [] }))),
     !mobile && isStaffRole(role) && (!view || view === 'Reports') ? auditQuery.get() : Promise.resolve({ docs: [] }),
     db.collection('settings').doc('business').get(),
-    mobile ? Promise.resolve({}) : loadPricing(db, { allowInvalidFallback: true }),
+    mobile || view === 'Reports' ? Promise.resolve({}) : loadPricing(db, { allowInvalidFallback: true }),
     role === 'OWNER' && !mobile && (!view || view === 'Settings') ? db.collection('users').get() : Promise.resolve({ docs: [] }),
     pagePromise,
     !mobile && view === 'Reports' ? db.collection('report_summary_state').doc('presentation_demo').get() : Promise.resolve({ exists:false })

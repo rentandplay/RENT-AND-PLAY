@@ -117,7 +117,7 @@ test('openTransaction renders pending extension review CTA and refresh option by
   await ui.load();
   await ui.openTransaction(stale.id, { rentalCode: stale.rental_code, refresh: true });
   assert.equal(lookups, 1);
-  assert.match(modalHtml, /Extension request pending/);
+  assert.match(modalHtml, /Rental extension · PENDING/);
   assert.match(modalHtml, /data-review-extension/);
   assert.match(modalHtml, /Review extension/);
 });

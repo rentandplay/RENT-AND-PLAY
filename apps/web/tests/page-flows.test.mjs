@@ -14,12 +14,18 @@ function handoffFixture(extra = {}) {
   const error = { textContent: '' }, button = { disabled: false, isConnected: true, textContent: '', addEventListener() {}, setAttribute() {}, removeAttribute() {} };
   const panel = { innerHTML: '', querySelector: selector => selector === '[data-handoff-error]' ? error : button };
   const title = { textContent: '' };
-  const modal = { open: false, activePanel: null, querySelector: selector => selector === '[data-handoff-request]' ? modal.activePanel : selector === 'h2' ? title : button, querySelectorAll: () => [], setAttribute() {} };
+  const modal = { open: false, activePanel: null, querySelector: selector => selector === '[data-handoff-request]' ? modal.activePanel : selector === 'h2' ? title : button, querySelectorAll: () => [], setAttribute() {}, close() { this.open = false; } };
+  const navigations = [];
+  const toastMessages = [];
+  let dashboardRefreshes = 0;
   let sync = async () => {}, refreshes = 0;
   const workflow = createTransactionWorkflow({ ...helpers, ...extra, modal, model: () => current,
     showModal: (heading, body) => { modal.open = true; modal.activePanel = panel; title.textContent = heading; panel.innerHTML = body; },
-    refresh: async () => { refreshes++; await sync(); }, redraw() {} });
-  return { workflow, modal, panel, title, error, button, setModel: value => { current = value; }, setSync: value => { sync = value; }, model: () => current, refreshes: () => refreshes };
+    refresh: async () => { refreshes++; await sync(); }, redraw() {},
+    toast: extra.toast ?? (message => toastMessages.push(message)),
+    navigate: extra.navigate ?? (page => navigations.push(page)),
+    refreshDashboard: extra.refreshDashboard ?? (() => { dashboardRefreshes++; }) });
+  return { workflow, modal, panel, title, error, button, navigations, toastMessages, dashboardRefreshes: () => dashboardRefreshes, setModel: value => { current = value; }, setSync: value => { sync = value; }, model: () => current, refreshes: () => refreshes };
 }
 
 test('an open handoff dialog refreshes terminal confirmation and final fees without resubmitting', async () => {
@@ -29,9 +35,10 @@ test('an open handoff dialog refreshes terminal confirmation and final fees with
   assert.match(s.panel.innerHTML, /PHP 50/); assert.match(s.panel.innerHTML, /Missing piece/); assert.match(s.panel.innerHTML, /A damaged piece/);
   s.setSync(async () => s.setModel({ ...s.model(), transactions: [{ id: 'rental', status: 'COMPLETED', fee_breakdown: { rental_fee: 150, penalty_amount: 50, final_rental_charges: 200 } }], verification: [{ ...s.model().verification[0], status: 'CONFIRMED', confirmed_terminal_id: 'terminal', confirmed_at: '2026-10-05T13:00:00Z' }] }));
   assert.equal(await s.workflow.refreshPendingHandoff(), true);
-  assert.equal(s.title.textContent, 'Return confirmed');
-  assert.match(s.panel.innerHTML, /PHP 200/); assert.match(s.panel.innerHTML, /CONFIRMED/);
-  assert.ok(!s.panel.innerHTML.includes('Check confirmation'));
+  assert.equal(s.modal.open, false);
+  assert.deepEqual(s.navigations, ['Dashboard']);
+  assert.equal(s.dashboardRefreshes(), 1);
+  assert.deepEqual(s.toastMessages, ['Return confirmed. Returning to Dashboard.']);
   assert.equal(await s.workflow.refreshPendingHandoff(), false);
   assert.equal(s.refreshes(), 1);
 });
@@ -153,7 +160,7 @@ test('pricing editor preserves saved service hours when changing unrelated price
 });
 
 
-test('terminal confirmation displays the success screen with action buttons and stops polling', async () => {
+test('terminal return confirmation returns to dashboard and refreshes it once', async () => {
   const opened = [];
   const s = handoffFixture({ transactionDetails: rental => opened.push(rental) });
   s.workflow.verificationDetails('request');
@@ -163,10 +170,9 @@ test('terminal confirmation displays the success screen with action buttons and 
     verification: [{ ...s.model().verification[0], status: 'CONFIRMED' }]
   }));
   await s.workflow.refreshPendingHandoff();
-  assert.equal(s.title.textContent, 'Return confirmed');
-  assert.match(s.panel.innerHTML, /Return confirmed at counter!/);
-  assert.match(s.panel.innerHTML, /data-handoff-details/);
-  assert.match(s.panel.innerHTML, /data-handoff-done/);
+  assert.equal(s.modal.open, false);
+  assert.deepEqual(s.navigations, ['Dashboard']);
+  assert.equal(s.dashboardRefreshes(), 1);
   assert.equal(await s.workflow.refreshPendingHandoff(), false);
 });
 

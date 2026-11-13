@@ -6,7 +6,7 @@ import { inventoryList, inventoryDetail, itemAction, createItem } from '../src/i
 import { saveRate } from '../src/workspace.mjs';
 import { localDateTime } from '../src/firebase.mjs';
 import { mobileCatalog, mobileProfile, mobileRentalList, resolveMobileItem } from '../src/mobile.mjs';
-import { createMobileRentalRequest, quoteEquipmentRental, reviewMobileRental, cancelMobileRentalRequest, requestMobileReturn, reviewMobileReturn } from '../src/transactions.mjs';
+import { createMobileRentalRequest, quoteEquipmentRental, reviewMobileRental, cancelMobileRentalRequest, requestMobileReturn, reviewMobileReturn, dispatchRentalToTerminal } from '../src/transactions.mjs';
 import { prepareRentalDelivery, releaseBooking, recordRentalReceipt, MOBILE_RENTAL_TERMS_VERSION } from '../src/rental-flow.mjs';
 import { memoryFirestore } from './support/memory-firestore.mjs';
 
@@ -305,4 +305,134 @@ test('HTTP connects public catalog, Firebase customer rentals, web cookie review
     assert.equal((await request(`/mobile/rentals/${rental.id}/return/review`, 'POST', { action: 'APPROVE', requestKey: 'c'.repeat(32), penaltyAmount: 0, inspection }, staff)).status, 200);
     assert.equal(db.data('rentals', rental.id).status, 'COMPLETED'); assert.equal(db.data('items', input.itemId).status, 'AVAILABLE');
   } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+test('mobileRentalList enriches return fee breakdown and inspection while waiting for ESP32 confirmation', async () => {
+  const db = fixture();
+  await db.collection('terminals').doc('term-1').set({
+    name: 'Front desk ESP32',
+    is_active: true,
+    auth_token_hash: 'a'.repeat(64),
+    updated_at: now,
+  });
+  const rentalId = await released(db, now);
+  const returnAt = new Date('2026-10-06T06:00:00Z');
+  await requestMobileReturn(db, customer, rentalId, { condition: 'GOOD' }, returnAt);
+  await recordRentalReceipt(db, admin, rentalId, {
+    requestKey: 'd'.repeat(32),
+    inventoryCode: 'rp-qr-actual-bike',
+    physicalReceiptConfirmed: true,
+  }, returnAt);
+
+  const pendingInspection = {
+    condition: 'FAIR',
+    notes: 'Minor wear',
+    result: 'AVAILABLE',
+    accessoriesChecked: true,
+  };
+  await dispatchRentalToTerminal(db, admin, rentalId, {
+    terminalId: 'term-1',
+    terminalMode: 'RETURN',
+    penaltyAmount: 50,
+    penaltyReason: 'Missing strap',
+    inspection: pendingInspection,
+  }, returnAt);
+
+  const { rental } = await mobileRentalList(db, customer, rentalId);
+  assert.equal(rental.status, 'RETURN_PENDING_INSPECTION');
+  assert.equal(rental.latest_return_request_status, 'PENDING');
+  assert.equal(rental.latest_terminal_request_status, 'PENDING');
+  assert.ok(rental.fee_breakdown);
+  assert.ok(rental.fee_breakdown.overtime_fee > 0);
+  assert.equal(rental.overtime_fee, rental.fee_breakdown.overtime_fee);
+  assert.equal(rental.penalty_amount, 50);
+  assert.equal(rental.penalty_reason, 'Missing strap');
+  assert.equal(rental.fee_breakdown.penalty_amount, 50);
+  assert.equal(rental.fee_breakdown.penalty_reason, 'Missing strap');
+  assert.equal(
+    rental.final_rental_charges,
+    rental.fee_breakdown.rental_fee + rental.fee_breakdown.overtime_fee + 50,
+  );
+  assert.equal(rental.fee_breakdown.final_rental_charges, rental.final_rental_charges);
+  assert.equal(
+    rental.balance_due,
+    rental.final_rental_charges - rental.rental_paid_amount,
+  );
+  assert.equal(rental.return_condition?.condition, 'FAIR');
+  assert.equal(rental.return_condition?.notes, 'Minor wear');
+  assert.equal(rental.return_condition?.result, 'AVAILABLE');
+  assert.equal(rental.return_condition?.inspected_by, admin.id);
+});
+
+test('HTTP mobile extension quote, request, and admin review update mobileRentalList due_at and extension_history', async () => {
+  const db = fixture();
+  const services = createFirebaseServices({
+    db,
+    now: () => now,
+    auth: {
+      verifyIdToken: async token => {
+        if (token === 'customer-token') return { uid: customer.id, email: customer.email };
+        if (token === 'admin-token') return { uid: admin.id };
+        throw Error('Invalid token');
+      },
+    },
+  });
+  const server = createApi({ services, expiryWorker: false });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const req = (path, method = 'GET', data, token = 'customer-token') =>
+    fetch(origin + '/api' + path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      ...(data ? { body: JSON.stringify(data) } : {}),
+    });
+  try {
+    const id = await released(db, now);
+    const originalDue = db.data('rentals', id).due_at.getTime();
+    const requestKey = 'f'.repeat(32);
+    const quoteResp = await req(`/mobile/rentals/${id}/extension-quote`, 'POST', {
+      requestKey,
+      additionalMinutes: 180,
+    });
+    assert.equal(quoteResp.status, 200);
+    const { quote } = await quoteResp.json();
+    assert.ok(quote.additional_fee > 0);
+    assert.equal(quote.billed_minutes, 180);
+
+    const submitResp = await req(`/mobile/rentals/${id}/extension`, 'POST', {
+      requestKey,
+      additionalMinutes: 180,
+      expectedAdditionalFee: quote.additional_fee,
+    });
+    assert.equal(submitResp.status, 200);
+
+    const pendingList = await (await req('/mobile/rentals')).json();
+    const pendingRow = pendingList.rentals.find(r => r.id === id);
+    assert.equal(pendingRow.extension_request?.status, 'PENDING');
+
+    const reviewResp = await req(
+      `/rentals/${id}/extension-review`,
+      'POST',
+      { action: 'APPROVE', requestKey },
+      'admin-token',
+    );
+    assert.equal(reviewResp.status, 200);
+
+    const updatedList = await (await req('/mobile/rentals')).json();
+    const updatedRow = updatedList.rentals.find(r => r.id === id);
+    assert.equal(updatedRow.extension_request?.status, 'APPROVED');
+    assert.equal(updatedRow.extension_history?.length, 1);
+    assert.equal(updatedRow.total_extended_minutes, 180);
+    assert.equal(
+      new Date(updatedRow.due_at).getTime(),
+      originalDue + 180 * 60000,
+    );
+    assert.equal(updatedRow.fee_breakdown.extension_minutes, 180);
+    assert.ok(updatedRow.balance_due >= quote.additional_fee);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });

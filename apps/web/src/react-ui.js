@@ -759,6 +759,9 @@ function DashboardView({
       return;
     }
     const showReceive = r.status === "RETURN_PENDING_INSPECTION" || r.latest_return_request_status === "PENDING_ADMIN_APPROVAL" || r.displayStatus === "Return requested" || r.displayStatus === "Overdue";
+    const extReq = r.extension_request;
+    const extPending = r.status === "ACTIVE" && extReq?.status === "PENDING";
+    const extSection = extPending ? `<section class="record-section"><h3>Extension request pending</h3><p>Customer requested more time (+${Math.round(Number(extReq.quote?.billed_minutes || extReq.additional_minutes || 0))} mins \xB7 ${money(extReq.additional_fee)}). Open Transactions or notification details to review and approve.</p></section>` : "";
     const dueInfo = getDueInfo(r);
     const overdueLabel = dueInfo.isOverdue ? `Overdue by ${Math.max(1, Math.ceil((Date.now() - new Date(r.due_at).getTime()) / 36e5))}h` : "";
     showModal(
@@ -794,6 +797,7 @@ function DashboardView({
               <div><dt>Status</dt><dd>${escape(r.displayStatus || r.status || "Active")}</dd></div>
             </dl>
           </section>
+          ${extSection}
           <div class="info-box" style="margin-top:16px">Use Returns to record physical receipt and inspect the unit. Physical receipt stops the timer; completing inspection updates availability or maintenance.</div>
         </div>
         <footer class="transaction-detail-footer">
@@ -1056,7 +1060,7 @@ function DashboardView({
       },
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "item-cell" }, /* @__PURE__ */ React.createElement("span", { className: "item-symbol" }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: itemCategory })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, r.item_name), /* @__PURE__ */ React.createElement("small", null, r.rental_code)))),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "customer-cell-wrap" }, /* @__PURE__ */ React.createElement("span", { className: "mini-avatar" }, initials(r.customer)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, r.customer), isResort ? /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag resort", title: r.delivery_location || "Resort delivery" }, r.delivery_location ? r.delivery_location.split(",")[0].trim() : "Resort delivery") : /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag shop", title: "Shop counter handover" }, "Store pickup")))),
-      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("strong", null, formatDate(r.due_at)), /* @__PURE__ */ React.createElement("small", { className: dueInfo.isOverdue ? "due-overdue-alert" : dueInfo.isDueSoon ? "due-soon-alert" : "" }, dueInfo.badge)),
+      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("strong", null, formatDate(r.due_at)), /* @__PURE__ */ React.createElement("small", { className: dueInfo.isOverdue ? "due-overdue-alert" : dueInfo.isDueSoon || r.extension_request?.status === "PENDING" ? "due-soon-alert" : "" }, r.extension_request?.status === "PENDING" ? "Extension requested" : Array.isArray(r.extension_history) && r.extension_history.length > 0 && dueInfo.badge === "Philippine time" ? `Extended (${r.extension_history.length}x)` : dueInfo.badge)),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(StatusBadge, { status: r.displayStatus })),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(
         "button",
@@ -2369,7 +2373,8 @@ function WorkspaceShell({
           onNavigate("Messages");
         } else if (entry.dataset.notificationRental) {
           await workspaceUI.openTransaction(entry.dataset.notificationRental, {
-            rentalCode: entry.dataset.rentalCode
+            rentalCode: entry.dataset.rentalCode,
+            refresh: true
           });
         } else if (entry.dataset.notificationPage) {
           onNavigate(entry.dataset.notificationPage);

@@ -16,11 +16,38 @@ const messages = (db, key) => db.collection(`notification_inboxes/${key}/message
 const validId = id => typeof id === 'string' && /^n_[a-f0-9]{40}$/.test(id);
 const iso = value => value && asDate(value)?.toISOString() || null;
 
+const manilaDateTime = value => {
+  const date = asDate(value);
+  if (!date || !Number.isFinite(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).format(date);
+};
+const formatExtensionDuration = minutes => {
+  const value = Number(minutes || 0);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value % 60 === 0) {
+    const hours = value / 60;
+    return hours === 1 ? '1 hour' : `${hours} hours`;
+  }
+  return `${value} mins`;
+};
+
 function content(type, rental = {}, reason = '') {
   const item = rental.item_name || rental.itemName || 'Equipment';
   const customer = rental.customer_name || rental.customerName || 'A customer';
   const location = rental.delivery_location ? ` Location: ${rental.delivery_location}.` : '';
   const extra = reason ? ` Reason: ${reason}` : '';
+  const ext = rental.extension_request || {};
+  const extDuration = formatExtensionDuration(ext.quote?.billed_minutes ?? ext.additional_minutes);
+  const extDue = manilaDateTime(ext.requested_due_at || rental.due_at || rental.dueDate);
+  const extFee = Number.isFinite(Number(ext.additional_fee)) ? `₱${Number(ext.additional_fee).toFixed(2)}` : '';
+  const extSummary = [extDuration && `+${extDuration}`, extFee, extDue && `new due ${extDue}`].filter(Boolean).join(' · ');
   return ({
     BOOKING_REQUESTED: ['New rental request', rental.payment_method === 'QR'
       ? `${customer} requested ${item} and uploaded an InstaPay screenshot.${location} Review the payment proof and rental request.`
@@ -36,8 +63,8 @@ function content(type, rental = {}, reason = '') {
     DELIVERY_DEPART: ['Equipment on the way', `${item} is on its way within Lakewood Subdivision.${location} Keep your rental QR and physical ID ready.`],
     DELIVERY_FAIL: ['Delivery needs attention', `The operator could not hand over ${item}.${extra} Contact the operator to arrange the next step.`],
     DELIVERY_RETURN_TO_SHOP: ['Delivery closed', `${item} is back at the shop. This rental was cancelled. Any verified payment remains recorded for refund.`],
-    EXTENSION_REQUESTED: ['Rental extension requested', `${customer} requested more time for ${item}. Review the price and next reservation before approval.`],
-    EXTENSION_APPROVE: ['Rental extension approved', `Your additional time for ${item} was approved. Review the new due time and additional balance in My Rentals.`],
+    EXTENSION_REQUESTED: ['Rental extension requested', `${customer} requested more time for ${item}${extSummary ? ` (${extSummary})` : ''}. Review the price and next reservation before approval.`],
+    EXTENSION_APPROVE: ['Rental extension approved', `Your additional time for ${item}${extSummary ? ` (${extSummary})` : ''} was approved. Your rental timer and balance in My Rentals are updated.`],
     EXTENSION_REJECT: ['Rental extension rejected', `The original return time for ${item} still applies.${extra}`],
     RETURN_REQUESTED: ['New return request', `${customer} requested to return ${item}. Arrange collection or receive the equipment at the desk. The timer stops at physical receipt.`],
     RETURN_REQUEST_REJECTED: ['Return request rejected', `Your return request for ${item} was rejected.${extra} The rental remains active until the admin physically receives the equipment.`],

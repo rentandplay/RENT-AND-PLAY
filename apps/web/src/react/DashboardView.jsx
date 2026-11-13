@@ -232,6 +232,11 @@ export function DashboardView({
       return;
     }
     const showReceive = r.status === 'RETURN_PENDING_INSPECTION' || r.latest_return_request_status === 'PENDING_ADMIN_APPROVAL' || r.displayStatus === 'Return requested' || r.displayStatus === 'Overdue';
+    const extReq = r.extension_request;
+    const extPending = r.status === 'ACTIVE' && extReq?.status === 'PENDING';
+    const extSection = extPending
+      ? `<section class="record-section"><h3>Extension request pending</h3><p>Customer requested more time (+${Math.round(Number(extReq.quote?.billed_minutes || extReq.additional_minutes || 0))} mins · ${money(extReq.additional_fee)}). Open Transactions or notification details to review and approve.</p></section>`
+      : '';
     const dueInfo = getDueInfo(r);
     const overdueLabel = dueInfo.isOverdue
       ? `Overdue by ${Math.max(1, Math.ceil((Date.now() - new Date(r.due_at).getTime()) / 3600000))}h`
@@ -269,6 +274,7 @@ export function DashboardView({
               <div><dt>Status</dt><dd>${escape(r.displayStatus || r.status || 'Active')}</dd></div>
             </dl>
           </section>
+          ${extSection}
           <div class="info-box" style="margin-top:16px">Use Returns to record physical receipt and inspect the unit. Physical receipt stops the timer; completing inspection updates availability or maintenance.</div>
         </div>
         <footer class="transaction-detail-footer">
@@ -615,8 +621,12 @@ export function DashboardView({
                           </td>
                           <td>
                             <strong>{formatDate(r.due_at)}</strong>
-                            <small className={dueInfo.isOverdue ? 'due-overdue-alert' : dueInfo.isDueSoon ? 'due-soon-alert' : ''}>
-                              {dueInfo.badge}
+                            <small className={dueInfo.isOverdue ? 'due-overdue-alert' : (dueInfo.isDueSoon || r.extension_request?.status === 'PENDING') ? 'due-soon-alert' : ''}>
+                              {r.extension_request?.status === 'PENDING'
+                                ? 'Extension requested'
+                                : (Array.isArray(r.extension_history) && r.extension_history.length > 0 && dueInfo.badge === 'Philippine time')
+                                  ? `Extended (${r.extension_history.length}x)`
+                                  : dueInfo.badge}
                             </small>
                           </td>
                           <td>

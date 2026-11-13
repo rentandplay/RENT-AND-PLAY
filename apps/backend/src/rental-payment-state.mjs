@@ -1,6 +1,20 @@
+import { asDate } from './firebase.mjs';
+
 const round = value => Math.round(value * 100) / 100;
 const known = value => value != null && Number.isFinite(Number(value)) && Number(value) >= 0;
 const validMoney = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 9999999999.99 && Math.abs(value * 100 - Math.round(value * 100)) < .0001;
+
+export function finalCharges(rental, request) {
+  const saved = rental.fee_breakdown || {};
+  const actual = asDate(request.actual_return_at), due = asDate(saved.due_at || rental.due_at);
+  const knownQuote = validMoney(saved.rental_fee) && validMoney(saved.overtime_rate) && Number.isFinite(saved.overtime_unit_minutes) && saved.overtime_unit_minutes > 0 && Number.isFinite(saved.grace_minutes) && actual && due && Number.isFinite(actual.getTime()) && Number.isFinite(due.getTime());
+  const lateMinutes = knownQuote ? Math.max(0, Math.ceil((actual - due) / 60000) - saved.grace_minutes) : null;
+  const units = knownQuote ? Math.ceil(lateMinutes / saved.overtime_unit_minutes) : null;
+  const overtime = knownQuote ? round(units * saved.overtime_rate) : null;
+  const penalty = request.penalty_amount ?? null;
+  const total = knownQuote && validMoney(penalty) ? round(saved.rental_fee + overtime + penalty) : null;
+  return { ...saved, snapshot_version: saved.snapshot_version || null, pricing_source: saved.pricing_source || 'LEGACY_INCOMPLETE', rental_fee: validMoney(saved.rental_fee) ? saved.rental_fee : validMoney(rental.rental_fee) ? rental.rental_fee : null, due_at: saved.due_at || rental.due_at || null, actual_return_at: request.actual_return_at, overtime_units: units, overtime_fee: overtime, penalty_amount: penalty, penalty_reason: request.penalty_reason || null, final_rental_charges: total, finalized_at: null };
+}
 
 export function rentalPaymentSummary(rental, extra = {}) {
   const value = { ...rental, ...extra };

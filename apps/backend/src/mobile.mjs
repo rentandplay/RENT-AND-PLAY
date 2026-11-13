@@ -6,6 +6,7 @@ import { nameError, phoneError, validationFailure } from './account-validation.m
 import { pageLimit } from './query-validation.mjs';
 import { DEFAULT_TERMS_AND_CONDITIONS, DEFAULT_RENTAL_TERMS, DEFAULT_PRIVACY_POLICY, DEFAULT_REFUND_POLICY, DEFAULT_ACCEPTED_IDS, DEFAULT_TERMS_VERSION, DEFAULT_RENTAL_TERMS_VERSION } from './terms-constants.mjs';
 import { allocateCustomerCode } from './customer-codes.mjs';
+import { finalCharges, rentalPaymentSummary } from './rental-payment-state.mjs';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const money = amount => `₱${Number(amount).toFixed(2)}`;
@@ -289,8 +290,29 @@ export async function mobileRentalList(db, actor, rentalId = '', options = {}) {
   const itemIds = [...new Set(rentals.map(rental => rental.item_id ?? rental.itemId).filter(Boolean))];
   const itemDocs = await Promise.all(itemIds.map(id => db.collection('items').doc(String(id)).get()));
   const items = new Map(itemDocs.filter(doc => doc.exists).map(doc => [doc.id, doc.data()]));
+  const pendingReturnRequestIds = [...new Set(rentals.flatMap(rental => {
+    const terminalPending = String(rental.latest_terminal_request_status || '').toUpperCase() === 'PENDING' &&
+      String(rental.latest_return_request_status || '').toUpperCase() === 'PENDING';
+    if (!terminalPending || rental.fee_breakdown?.final_rental_charges != null) return [];
+    const reqId = rental.latest_terminal_request_id || rental.latest_return_request_id;
+    return reqId ? [String(reqId)] : [];
+  }))];
+  const requestDocs = await Promise.all(pendingReturnRequestIds.map(reqId => db.collection('verification_requests').doc(reqId).get()));
+  const pendingRequests = new Map(requestDocs.filter(doc => doc.exists).map(doc => [doc.id, doc.data()]));
   const result = rentals.map(rental => {
     const item = items.get(String(rental.item_id ?? rental.itemId));
+    const reqId = String(rental.latest_terminal_request_id || rental.latest_return_request_id || '');
+    const pendingReq = reqId ? pendingRequests.get(reqId) : null;
+    const isReturnReq = pendingReq && String(pendingReq.transaction_type || pendingReq.type || '').toUpperCase() === 'RETURN';
+    const feePreview = isReturnReq
+      ? finalCharges(
+          { ...rental, rental_fee: rental.rental_fee ?? rental.rateFee, due_at: rental.due_at ?? rental.dueDate },
+          { ...pendingReq, actual_return_at: rental.received_at || pendingReq.actual_return_at || rental.updated_at || new Date() }
+        )
+      : rental.fee_breakdown;
+    const previewPayment = isReturnReq && Object.hasOwn(rental, 'rental_paid_amount')
+      ? rentalPaymentSummary(rental, { fee_breakdown: feePreview })
+      : {};
     return {
       ...rental, id: rental.id, item_id: rental.item_id ?? rental.itemId,
       stock_group_id:rental.stock_group_id||item?.stock_group_id||item?.id||rental.item_id||rental.itemId,
@@ -306,6 +328,16 @@ export async function mobileRentalList(db, actor, rentalId = '', options = {}) {
       rental_fee: rental.rental_fee ?? rental.rateFee,
       delivery_location: rental.delivery_location || rental.deliveryLocation,
       payment_method: rental.payment_method || rental.paymentMethod,
+      fee_breakdown: feePreview ?? rental.fee_breakdown ?? null,
+      ...(isReturnReq ? {
+        overtime_fee: feePreview.overtime_fee,
+        penalty_amount: feePreview.penalty_amount,
+        penalty_reason: feePreview.penalty_reason,
+        final_rental_charges: feePreview.final_rental_charges,
+        actual_return_at: pendingReq.actual_return_at || rental.received_at || null,
+        return_condition: rental.return_condition || pendingReq.inspection || null,
+        ...previewPayment,
+      } : {}),
       can_request_return: String(rental.status).toUpperCase() === 'ACTIVE' && isMobileRental(rental) && rental.latest_return_request_status !== 'PENDING_ADMIN_APPROVAL' && !rental.received_at
     };
   }).sort((a, b) => (asDate(b.created_at || b.start_at)?.getTime() || 0) - (asDate(a.created_at || a.start_at)?.getTime() || 0));

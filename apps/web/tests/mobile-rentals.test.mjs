@@ -74,3 +74,51 @@ test('approved and received bookings stay visible without reporting a running ti
   assert.doesNotMatch(returns, /Awaiting terminal/);
 });
 
+test('openTransaction renders pending extension review CTA and refresh option bypasses stale cache', async () => {
+  let modalHtml = '';
+  let lookups = 0;
+  const stale = {
+    ...active,
+    latest_return_request_status: null,
+    mobile_return_request: null,
+    extension_request: null,
+  };
+  const fresh = {
+    ...stale,
+    extension_request: {
+      status: 'PENDING',
+      request_key: 'a'.repeat(32),
+      additional_minutes: 180,
+      additional_fee: 500,
+      original_due_at: '2026-10-06T06:00:00Z',
+      requested_due_at: '2026-10-06T09:00:00Z',
+      requested_at: '2026-10-06T05:00:00Z',
+      quote: { billed_minutes: 180 },
+    },
+  };
+  const modal = {
+    open: false,
+    close() { this.open = false; },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const ui = createWorkspaceUI({
+    ...helpers,
+    modal,
+    showModal: (_title, html) => { modalHtml = html; modal.open = true; },
+    api: async path => {
+      if (path === '/rentals/lookup') {
+        lookups++;
+        return { rental: fresh };
+      }
+      return { ...fixture(), transactions: [stale] };
+    },
+  });
+  await ui.load();
+  await ui.openTransaction(stale.id, { rentalCode: stale.rental_code, refresh: true });
+  assert.equal(lookups, 1);
+  assert.match(modalHtml, /Extension request pending/);
+  assert.match(modalHtml, /data-review-extension/);
+  assert.match(modalHtml, /Review extension/);
+});
+

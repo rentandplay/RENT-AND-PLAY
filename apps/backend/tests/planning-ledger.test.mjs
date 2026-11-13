@@ -140,3 +140,26 @@ test('a real legacy deposit refund is journaled without adding deposit charges t
  await settleRentalPayment(db,staff,rental.id,{requestKey:k('e'),depositRefundAmount:20,notes:'Historical cash deposit physically returned'},at(5));
  assert.equal((await financeSummary(db,{from:'2026-10-14',to:'2026-10-14'})).totals.refunds,20);assert.equal(db.data('items','bike').status,'RENTED');
 });
+
+test('extension approval recovers cleanly from missing fee_breakdown fields and records total_extended_minutes',async()=>{
+ const db=fixture(),rental=await active(db);
+ const legacy=db.data('rentals',rental.id);
+ await db.collection('rentals').doc(rental.id).update({fee_breakdown:null});
+ const req=await requestRentalExtension(db,customer,rental.id,{requestKey:k('f'),additionalMinutes:180,expectedAdditionalFee:300},at(5));
+ assert.equal(req.rental.extension_request.status,'PENDING');
+ const reviewed=await reviewRentalExtension(db,staff,rental.id,{action:'APPROVE',requestKey:k('f')},at(6));
+ const saved=db.data('rentals',rental.id);
+ assert.equal(reviewed.rental.due_at,saved.due_at.toISOString());
+ assert.equal(saved.rental_fee,400);
+ assert.equal(saved.balance_due,300);
+ assert.equal(saved.total_extended_minutes,180);
+ assert.ok(Number.isFinite(saved.fee_breakdown.requested_minutes));
+ assert.ok(Number.isFinite(saved.fee_breakdown.billed_minutes));
+ assert.equal(saved.fee_breakdown.extension_minutes,180);
+ assert.equal(saved.extension_history.length,1);
+ const customerInbox=db.records(`notification_inboxes/customer_${customer.id}/messages`);
+ const approveNote=customerInbox.find(row=>row.type==='EXTENSION_APPROVE');
+ assert.ok(approveNote);
+ assert.match(approveNote.message,/\+3 hours/);
+ assert.notEqual(legacy.due_at.getTime(),saved.due_at.getTime());
+});

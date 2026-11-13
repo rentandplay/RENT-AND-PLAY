@@ -533,7 +533,8 @@ export function WorkspaceShell({
           onNavigate('Messages');
         } else if (entry.dataset.notificationRental) {
           await workspaceUI.openTransaction(entry.dataset.notificationRental, {
-            rentalCode: entry.dataset.rentalCode
+            rentalCode: entry.dataset.rentalCode,
+            refresh: true
           });
         } else if (entry.dataset.notificationPage) {
           onNavigate(entry.dataset.notificationPage);

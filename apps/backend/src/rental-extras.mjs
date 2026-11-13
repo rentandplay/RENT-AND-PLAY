@@ -12,6 +12,7 @@ const ref = (db,id) => db.collection('rentals').doc(String(id));
 const rows = snapshot => snapshot.docs.map(docData);
 const key = value => { if (!/^[a-f0-9]{32}$/.test(value || '')) fail(400,'A valid request key is required.'); return value; };
 const actorId = actor => String(actor.id || actor);
+const idValue = value => typeof value === 'object' && value !== null ? String(value.id ?? value.docId ?? '') : String(value ?? '');
 const audit = (tx,db,actor,id,action,now) => { tx.create(db.collection('audit_logs').doc(),{actor_type:'USER',user_id:actorId(actor),action,entity_type:'RENTAL',entity_id:id,rental_id:id,created_at:now}); tx.set(db.collection('report_jobs').doc(id),{rental_id:id,queued_at:now}); };
 
 export async function updateLocalDelivery(db, actor, id, input, now = new Date()) {
@@ -68,48 +69,85 @@ export async function requestRentalExtension(db, actor, id, input, now = new Dat
     if(staff && !quoteOnly && input.customerRequestedExtension!==true)fail(400,'Confirm that the customer requested and agreed to the additional rental time and charge.');
     const operationRef=db.collection('rental_extension_operations').doc(`${id}_${operation}`),saved=await tx.get(operationRef);
     const previous=saved.exists?saved.data():rental.extension_request?.request_key===operation?rental.extension_request:(rental.extension_history||[]).find(row=>row.request_key===operation);
-    if(previous){if(previous.additional_minutes!==minutes || !quoteOnly && previous.additional_fee!==input.expectedAdditionalFee)fail(409,'This key belongs to another extension.');return quoteOnly?{quote:{additional_fee:previous.additional_fee,billed_minutes:previous.quote.billed_minutes,due_at:previous.requested_due_at},duplicate:true}:{rental,duplicate:true};}
-    if (rental.status !== 'ACTIVE' || rental.received_at || rental.latest_return_request_status === 'PENDING_ADMIN_APPROVAL' || asDate(rental.due_at) <= now) fail(409,'Request an extension before the due time and before arranging a return.');
-    if (rental.extension_request?.status === 'PENDING') fail(409,'The operator is already reviewing your extension.');
-    const item = await tx.get(db.collection('items').doc(String(rental.item_id))), related = await rentalsForItem(tx,db,rental.item_id);
-    if (!item.exists) fail(409,'The assigned unit needs review.');
-    const quote = await frozenQuote(tx,db,docData(item),{mode:'TIMED',durationMinutes:minutes,startAt:asDate(rental.due_at).toISOString()},now,true);
-    assertCalendarFree(rows(related),asDate(rental.due_at),asDate(quote.due_at),now,id);
-    if (quoteOnly) return {quote:{additional_fee:quote.rental_fee,billed_minutes:quote.billed_minutes,due_at:quote.due_at}};
-    if (input.expectedAdditionalFee !== quote.rental_fee) fail(409,'Review and agree to the extension price before submitting the request.');
-    const request = {request_key:operation,status:'PENDING',additional_minutes:minutes,original_due_at:asDate(rental.due_at),requested_due_at:asDate(quote.due_at),additional_fee:quote.rental_fee,quote,requested_at:now,requested_by:actorId(actor)};
-    tx.create(operationRef,{...request,rental_id:id});
-    tx.update(doc.ref,{extension_request:request,updated_at:now});
+    if (previous) { if (previous.additional_minutes !== minutes || !quoteOnly && previous.additional_fee !== input.expectedAdditionalFee) fail(409, 'This key belongs to another extension.'); return quoteOnly ? { quote: { additional_fee: previous.additional_fee, billed_minutes: previous.quote.billed_minutes, due_at: previous.requested_due_at }, duplicate: true } : { rental, duplicate: true }; }
+    const currentDue = asDate(rental.due_at ?? rental.dueDate);
+    if (rental.status !== 'ACTIVE' || rental.received_at || rental.latest_return_request_status === 'PENDING_ADMIN_APPROVAL' || !currentDue || currentDue <= now) fail(409, 'Request an extension before the due time and before arranging a return.');
+    if (rental.extension_request?.status === 'PENDING') fail(409, 'The operator is already reviewing your extension.');
+    const itemId = idValue(rental.item_id ?? rental.itemId);
+    const item = await tx.get(db.collection('items').doc(itemId)), related = await rentalsForItem(tx, db, itemId);
+    if (!item.exists) fail(409, 'The assigned unit needs review.');
+    const quote = await frozenQuote(tx, db, docData(item), { mode: 'TIMED', durationMinutes: minutes, startAt: currentDue.toISOString() }, now, true);
+    assertCalendarFree(rows(related), currentDue, asDate(quote.due_at), now, id);
+    if (quoteOnly) return { quote: { additional_fee: quote.rental_fee, billed_minutes: quote.billed_minutes, due_at: quote.due_at } };
+    if (input.expectedAdditionalFee !== quote.rental_fee) fail(409, 'Review and agree to the extension price before submitting the request.');
+    const request = { request_key: operation, status: 'PENDING', additional_minutes: minutes, original_due_at: currentDue, requested_due_at: asDate(quote.due_at), additional_fee: quote.rental_fee, quote, requested_at: now, requested_by: actorId(actor) };
+    tx.create(operationRef, { ...request, rental_id: id });
+    tx.update(doc.ref, { extension_request: request, updated_at: now });
     // Lock calendar writers for this physical unit; the request alone does not reserve the extra time.
-    tx.update(item.ref,{schedule_revision:Number(item.data().schedule_revision || 0)+1});
-    queueRentalNotification(tx,db,rental,'EXTENSION_REQUESTED',now,{audience:'STAFF',revision:operation});
-    audit(tx,db,actor,id,'RENTAL_EXTENSION_REQUESTED',now);
-    return {rental:{...rental,extension_request:request}};
+    tx.update(item.ref, { schedule_revision: Number(item.data().schedule_revision || 0) + 1 });
+    queueRentalNotification(tx, db, { ...rental, extension_request: request }, 'EXTENSION_REQUESTED', now, { audience: 'STAFF', revision: operation });
+    audit(tx, db, actor, id, 'RENTAL_EXTENSION_REQUESTED', now);
+    return { rental: { ...rental, extension_request: request } };
   }));
 }
 
 export async function reviewRentalExtension(db, actor, id, input, now = new Date()) {
   const action = String(input.action || '').toUpperCase();
-  if (!['APPROVE','REJECT'].includes(action)) fail(400,'Choose approve or reject.');
+  if (!['APPROVE', 'REJECT'].includes(action)) fail(400, 'Choose approve or reject.');
   return serializeLedger(await db.runTransaction(async tx => {
-    const doc = await tx.get(ref(db,id)); if (!doc.exists) fail(404,'Rental not found.');
+    const doc = await tx.get(ref(db, id)); if (!doc.exists) fail(404, 'Rental not found.');
     const rental = docData(doc), request = rental.extension_request;
-    if (!request || input.requestKey !== request.request_key) fail(409,'Refresh the current extension request before reviewing it.');
-    if (request.status !== 'PENDING') { if (request.status === (action === 'APPROVE' ? 'APPROVED' : 'REJECTED')) return {rental,duplicate:true}; fail(409,'This extension was already reviewed.'); }
-    if (action === 'APPROVE' && (rental.status !== 'ACTIVE' || rental.received_at || rental.latest_return_request_status==='PENDING_ADMIN_APPROVAL' || asDate(rental.due_at) <= now || asDate(rental.due_at).getTime() !== asDate(request.original_due_at).getTime())) fail(409,'The rental is no longer eligible for this extension.');
-    const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0,1000) : '';
-    if (action === 'REJECT' && !reason) fail(400,'Explain why the extension is rejected.');
-    const changes = {extension_request:{...request,status:action === 'APPROVE' ? 'APPROVED' : 'REJECTED',reviewed_at:now,reviewed_by:actorId(actor),reason:reason || null},updated_at:now};
+    if (!request || input.requestKey !== request.request_key) fail(409, 'Refresh the current extension request before reviewing it.');
+    if (request.status !== 'PENDING') { if (request.status === (action === 'APPROVE' ? 'APPROVED' : 'REJECTED')) return { rental, duplicate: true }; fail(409, 'This extension was already reviewed.'); }
+    const currentDue = asDate(rental.due_at ?? rental.dueDate), originalDue = asDate(request.original_due_at);
+    if (action === 'APPROVE' && (rental.status !== 'ACTIVE' || rental.received_at || rental.latest_return_request_status === 'PENDING_ADMIN_APPROVAL' || !currentDue || !originalDue || currentDue <= now || currentDue.getTime() !== originalDue.getTime())) fail(409, 'The rental is no longer eligible for this extension.');
+    const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 1000) : '';
+    if (action === 'REJECT' && !reason) fail(400, 'Explain why the extension is rejected.');
+    const changes = { extension_request: { ...request, status: action === 'APPROVE' ? 'APPROVED' : 'REJECTED', reviewed_at: now, reviewed_by: actorId(actor), reason: reason || null }, updated_at: now };
     if (action === 'APPROVE') {
-      const item = await tx.get(db.collection('items').doc(String(rental.item_id))), related = await rentalsForItem(tx,db,rental.item_id);
-      assertCalendarFree(rows(related),asDate(rental.due_at),asDate(request.requested_due_at),now,id);
-      const fee = Math.round((Number(rental.rental_fee)+Number(request.additional_fee))*100)/100;
-      Object.assign(changes,{due_at:asDate(request.requested_due_at),rental_fee:fee,balance_due:Math.max(0,fee-Number(rental.rental_paid_amount || 0)),payment_status:fee>Number(rental.rental_paid_amount || 0)?'BALANCE_DUE':'PAID',fee_breakdown:{...rental.fee_breakdown,rental_fee:fee,due_at:asDate(request.requested_due_at),requested_minutes:Number(rental.fee_breakdown.requested_minutes)+request.additional_minutes,billed_minutes:Number(rental.fee_breakdown.billed_minutes)+Number(request.quote.billed_minutes),rate_components:[...(rental.fee_breakdown.rate_components || []),...(request.quote.rate_components || []).map(component=>({...component,label:`Extension · ${component.label}`}))]},extension_history:[...(rental.extension_history || []),changes.extension_request]});
-      tx.update(item.ref,{schedule_revision:Number(item.data().schedule_revision || 0)+1});
+      const itemId = idValue(rental.item_id ?? rental.itemId);
+      const item = await tx.get(db.collection('items').doc(itemId)), related = await rentalsForItem(tx, db, itemId);
+      const nextDue = asDate(request.requested_due_at);
+      assertCalendarFree(rows(related), currentDue, nextDue, now, id);
+      const prevFee = rental.fee_breakdown && typeof rental.fee_breakdown === 'object' ? rental.fee_breakdown : {};
+      const fee = Math.round((Number(rental.rental_fee ?? rental.rateFee ?? 0) + Number(request.additional_fee || 0)) * 100) / 100;
+      const addedMinutes = Number(request.quote?.billed_minutes || request.additional_minutes || 0);
+      const startAt = asDate(rental.confirmed_rental_at ?? rental.start_at ?? rental.startDate);
+      const fallbackPrevMinutes = Number.isFinite(Number(prevFee.billed_minutes)) && Number(prevFee.billed_minutes) > 0
+        ? Number(prevFee.billed_minutes)
+        : (startAt ? Math.max(0, Math.round((currentDue.getTime() - startAt.getTime()) / 60000)) : 0);
+      const prevRequestedMinutes = Number.isFinite(Number(prevFee.requested_minutes)) && Number(prevFee.requested_minutes) > 0
+        ? Number(prevFee.requested_minutes)
+        : fallbackPrevMinutes;
+      const settled = Number(rental.rental_paid_amount || 0) + Number(rental.deposit_applied_amount || 0);
+      const balanceDue = Math.max(0, Math.round((fee - settled) * 100) / 100);
+      const nextHistory = [...(Array.isArray(rental.extension_history) ? rental.extension_history : []), changes.extension_request];
+      Object.assign(changes, {
+        due_at: nextDue,
+        rental_fee: fee,
+        balance_due: balanceDue,
+        payment_status: balanceDue > 0 ? 'BALANCE_DUE' : 'PAID',
+        total_extended_minutes: Number(rental.total_extended_minutes || 0) + addedMinutes,
+        fee_breakdown: {
+          ...prevFee,
+          rental_fee: fee,
+          due_at: nextDue,
+          requested_minutes: prevRequestedMinutes + Number(request.additional_minutes || 0),
+          billed_minutes: fallbackPrevMinutes + addedMinutes,
+          extension_fee: Math.round((Number(prevFee.extension_fee || 0) + Number(request.additional_fee || 0)) * 100) / 100,
+          extension_minutes: Number(prevFee.extension_minutes || 0) + addedMinutes,
+          rate_components: [
+            ...(Array.isArray(prevFee.rate_components) ? prevFee.rate_components : []),
+            ...(Array.isArray(request.quote?.rate_components) ? request.quote.rate_components : []).map(component => ({ ...component, label: `Extension · ${component.label}` }))
+          ]
+        },
+        extension_history: nextHistory
+      });
+      if (item.exists) tx.update(item.ref, { schedule_revision: Number(item.data().schedule_revision || 0) + 1 });
     }
-    tx.update(doc.ref,changes); audit(tx,db,actor,id,`RENTAL_EXTENSION_${action}`,now);
-    tx.set(db.collection('rental_extension_operations').doc(`${id}_${request.request_key}`),{...changes.extension_request,rental_id:id},{merge:true});
-    queueRentalNotification(tx,db,{...rental,...changes},`EXTENSION_${action}`,now,{revision:request.request_key,reason});
-    return {rental:{...rental,...changes}};
+    tx.update(doc.ref, changes); audit(tx, db, actor, id, `RENTAL_EXTENSION_${action}`, now);
+    tx.set(db.collection('rental_extension_operations').doc(`${id}_${request.request_key}`), { ...changes.extension_request, rental_id: id }, { merge: true });
+    queueRentalNotification(tx, db, { ...rental, ...changes }, `EXTENSION_${action}`, now, { revision: request.request_key, reason });
+    return { rental: { ...rental, ...changes } };
   }));
 }

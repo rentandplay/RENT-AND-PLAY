@@ -34,6 +34,12 @@ import { projectRentalSummary, processReportJobs, rentalDailySummary } from './r
 import { updateLocalDelivery, requestRentalExtension, reviewRentalExtension } from './rental-extras.mjs';
 
 const webRoot = nodePath.resolve(fileURLToPath(new URL('../../web/dist/', import.meta.url)));
+const publicPageAliases = new Map([
+  ['/privacy-policy', '/public/privacy-policy.html'],
+  ['/privacy-policy.html', '/public/privacy-policy.html'],
+  ['/delete-account', '/public/delete-account.html'],
+  ['/delete-account.html', '/public/delete-account.html']
+]);
 const contentTypes = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
 
 function explicitRefreshCollections(path) {
@@ -52,7 +58,8 @@ async function serveWeb(req, res, requestPath) {
   if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405).end(); return; }
   let pathname;
   try { pathname = decodeURIComponent(requestPath); } catch { res.writeHead(400).end(); return; }
-  let target = nodePath.resolve(webRoot, `.${pathname === '/' ? '/index.html' : pathname}`);
+  const cleanPath = publicPageAliases.get(pathname) || (pathname === '/' ? '/index.html' : pathname);
+  let target = nodePath.resolve(webRoot, `.${cleanPath}`);
   if (!target.startsWith(webRoot + nodePath.sep)) { res.writeHead(403).end(); return; }
   try {
     let content;

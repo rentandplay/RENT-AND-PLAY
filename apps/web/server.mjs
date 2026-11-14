@@ -11,6 +11,12 @@ const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascrip
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 const appRoutes = new Set(['/', '/equipment', '/customers', '/messages', '/rates', '/rentals', '/returns', '/transactions', '/maintenance', '/verification', '/reports', '/reports/equipment', '/reports/operations', '/reports/forecast', '/reports/recommendations', '/reports/audit', '/settings', '/payments', '/profile']);
+const publicPageAliases = new Map([
+  ['/privacy-policy', '/public/privacy-policy.html'],
+  ['/privacy-policy.html', '/public/privacy-policy.html'],
+  ['/delete-account', '/public/delete-account.html'],
+  ['/delete-account.html', '/public/delete-account.html']
+]);
 const browserHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host;
 
 let reactBuild = null, reactInputStamp = '';
@@ -76,10 +82,11 @@ const server = http.createServer(async (req, res) => {
     if (process.env.NODE_ENV !== 'production' && pathname === '/src/react-ui.js') {
       await buildReactUiDev().catch(() => {});
     }
-    const target = path.resolve(root, '.' + (appRoutes.has(pathname) ? '/index.html' : pathname));
+    const resolvedPath = publicPageAliases.get(pathname) || pathname;
+    const target = path.resolve(root, '.' + (appRoutes.has(resolvedPath) ? '/index.html' : resolvedPath));
     if (!target.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
-    const browserModule = /^\/src\/[A-Za-z0-9_-]+\.js$/.test(pathname);
-    if (!(appRoutes.has(pathname) || pathname === '/index.html' || browserModule || ['/src/styles.css', '/src/workspace-design.css', '/src/analytics-layout.css'].includes(pathname) || pathname.startsWith('/public/')) || pathname.split('/').some(part => part.startsWith('.'))) { res.writeHead(404).end(); return; }
+    const browserModule = /^\/src\/[A-Za-z0-9_-]+\.js$/.test(resolvedPath);
+    if (!(appRoutes.has(resolvedPath) || resolvedPath === '/index.html' || browserModule || ['/src/styles.css', '/src/workspace-design.css', '/src/analytics-layout.css'].includes(resolvedPath) || resolvedPath.startsWith('/public/')) || resolvedPath.split('/').some(part => part.startsWith('.'))) { res.writeHead(404).end(); return; }
     const body = await readFile(target);
     const etag = '"' + createHash('sha256').update(body).digest('base64url') + '"';
     const headers = { 'Content-Type': types[path.extname(target)] || 'application/octet-stream', 'Cache-Control': path.extname(target) === '.html' ? 'no-store' : 'private, no-cache', ETag: etag };

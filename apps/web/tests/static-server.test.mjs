@@ -81,6 +81,15 @@ test('VS Code can open the ready web server and every browser module loads', asy
           assert.equal(await response.text(), probeSource);
         } finally { await unlink(probeFile).catch(() => {}); }
       }
+      for (const [pagePath, marker] of [
+        ['/privacy-policy', /Privacy Policy/],
+        ['/delete-account', /Delete Account/]
+      ]) {
+        const response = await fetch(`${origin}${pagePath}`);
+        assert.equal(response.status, 200, `${mode}: ${pagePath} must load`);
+        assert.match(response.headers.get('content-type') || '', /text\/html/);
+        assert.match(await response.text(), marker);
+      }
       assert.equal((await fetch(`${origin}/server.mjs`)).status, 404);
       assert.equal((await fetch(`${origin}/.env`)).status, 404);
       assert.equal((await fetch(`${origin}/src/services/api/client.ts`)).status, 404);

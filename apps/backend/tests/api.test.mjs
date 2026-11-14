@@ -60,5 +60,14 @@ test('API protects dashboard, uses Firebase session cookies, checks profiles, an
     assert.equal((await fetch(base + '/api/auth/logout', { method: 'POST', headers: { Cookie: nextCookie } })).status, 200);
     assert.equal((await fetch(base + '/api/auth/me', { headers: { Cookie: nextCookie } })).status, 401);
     assert.ok(signedIn.some(entry => entry.email === row.email));
+    for (const [pagePath, marker] of [
+      ['/privacy-policy', /Privacy Policy/],
+      ['/delete-account', /Delete Account/]
+    ]) {
+      const pageRes = await fetch(base + pagePath);
+      assert.equal(pageRes.status, 200);
+      assert.match(pageRes.headers.get('content-type') || '', /text\/html/);
+      assert.match(await pageRes.text(), marker);
+    }
   } finally { await new Promise(resolve => server.close(resolve)); }
 });

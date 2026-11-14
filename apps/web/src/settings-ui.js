@@ -133,13 +133,15 @@ export function renderActiveSessionsList(sessions = [], { escape: e, formatDate 
   }
   return `<div class="active-sessions-list">${sessions.map(session => {
     const current = session.is_current === true;
+    const remembered = session.remember === true;
     return `<div class="active-session-row ${current ? 'is-current is-current-session' : ''}" data-session-row="${e(session.id)}">
       <div class="active-session-info">
         <div class="active-session-header">
           <strong>${e(session.device_label || 'Web Browser')}</strong>
           ${current ? '<span class="session-badge current-session-badge">Current session</span>' : '<span class="session-badge">Signed in</span>'}
+          ${remembered ? '<span class="session-badge remembered-session-badge">Remembered (14 days)</span>' : ''}
         </div>
-        <small>IP: ${e(session.ip || 'Local')} · Last active: ${e(formatDate(session.last_active_at || session.created_at))}</small>
+        <small>IP: ${e(session.ip || 'Local')} · Last active: ${e(formatDate(session.last_active_at || session.created_at))}${session.expires_at ? ` · Expires: ${e(formatDate(session.expires_at))}` : ''}</small>
       </div>
       ${current ? '' : `<button type="button" class="secondary danger-outline" data-revoke-session="${e(session.id)}">Revoke</button>`}
     </div>`;

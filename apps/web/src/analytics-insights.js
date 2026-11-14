@@ -1,5 +1,20 @@
 import { calculateAnalytics, manilaDateKey, recordDate } from './analytics.js';
 import { calculateAnalyticsTargets } from './analytics-targets.js';
+import {
+  DURATION_BINS,
+  VERIFICATION_SPEED_BINS,
+  buildParetoAnalysis,
+  buildWaterfallAnalysis,
+  buildChannelAndPaymentTrends,
+  computeHistogramStats,
+  buildCategoryChannelPivot,
+  buildMaintenanceTextMining,
+  buildForecastComparison,
+  buildLateReturnDecisionTree,
+  buildCustomerSegmentsAndChurn,
+  buildOutlierAlerts,
+  buildMarketBasketBundles
+} from './analytics-models.js';
 
 const DAY = 86400000;
 const sum = (rows, key) => rows.reduce((total, row) => total + Number(row[key] || 0), 0);
@@ -94,10 +109,11 @@ function recommendationsFor(result, groups, comparison, targets) {
   const add = (id, type, priority, title, action, basis, threshold, extra = {}) => actions.push({ target: 'Management target not set', ruleKind: ruleKindFor(id), ...contextFor(id), id, type, priority, title, action, basis, threshold,
     diagnostic: id === 'handoff-delay' || id === 'repeat-customers' || id.startsWith('service-'), ...extra });
   if (t.overdueNow > 0) add('overdue-now', 'Operations', 'high', 'Follow up on overdue equipment', 'Review overdue rentals, confirm their return arrangements, and keep their units unavailable until the return is recorded.', `${t.overdueNow} active rental${t.overdueNow === 1 ? '' : 's'} currently past the due time. This is current activity across all dates in your equipment filters.`, 'Appears when at least one active rental is overdue now.', { page: 'Rentals', review: 'Today' });
-  else if (t.dueRentals >= 5 && t.overdueRentals > 0 && t.overdueRate >= (targets.overdue.limit ?? .2)) add('late-returns', 'Operations', 'medium', 'Improve return reminders', 'Review reminder timing and the return handoff process. Start with rentals that were returned late.', `${t.overdueRentals} of ${t.dueRentals} rentals due in this period were late (${Math.round(t.overdueRate * 100)}%).`, `At least 5 due rentals and a late rate of ${Math.round((targets.overdue.limit ?? .2) * 100)}% or higher, with at least one late rental. ${targets.overdue.limit === null ? 'The 20% default is a review heuristic, not an owner-approved target.' : 'Alert rate set by the owner.'}`, { page: 'Returns', review: 'This week', ruleKind: targets.overdue.limit === null ? 'Review heuristic; confirm suitability with the owner' : 'Owner-defined alert rate with a 5-rental minimum sample' });
+  if (t.dueRentals >= 5 && t.overdueRentals > 0 && t.overdueRate >= (targets.overdue.limit ?? .2)) add('late-returns', 'Operations', 'medium', 'Improve return reminders', 'Review reminder timing and the return handoff process. Start with rentals that were returned late.', `${t.overdueRentals} of ${t.dueRentals} rentals due in this period were late (${Math.round(t.overdueRate * 100)}%).`, `At least 5 due rentals and a late rate of ${Math.round((targets.overdue.limit ?? .2) * 100)}% or higher, with at least one late rental. ${targets.overdue.limit === null ? 'The 20% default is a review heuristic, not an owner-approved target.' : 'Alert rate set by the owner.'}`, { page: 'Returns', review: 'This week', ruleKind: targets.overdue.limit === null ? 'Review heuristic; confirm suitability with the owner' : 'Owner-defined alert rate with a 5-rental minimum sample' });
   if (t.verificationCount >= 5 && t.verificationP95Seconds >= 60) add('handoff-delay', 'Operations', 'medium', 'Check slow counter confirmations', 'Compare the operator queue with terminal connectivity, then test a complete handoff. Timing includes operator and queue wait.', `${t.verificationCount} confirmations measured; the 95th percentile was ${Math.round(t.verificationP95Seconds)} seconds.`, 'At least 5 timed confirmations and a P95 of 60 seconds or more.', { page: 'ESP32 terminal', review: 'This week' });
   for (const row of groups.filter(row => row.known && row.repeatServiceUnits > 0).slice(0, 2)) add(`service-${row.stockGroupId}`, 'Reliability', 'medium', `Review service patterns for ${row.name}`, 'Read the unit maintenance notes to distinguish preventive inspections from recurring repairs. Prioritize units that repeatedly need service.', `${row.maintenanceCount} service records across ${row.totalUnits} unit${row.totalUnits === 1 ? '' : 's'}; ${row.downtimeHours.toFixed(1)} hours of downtime. Inspections are included.`, 'At least one physical unit had 2 or more service records in this period.', { itemId: row.id, itemName: row.name, review: 'This week' });
-  for (const row of groups.filter(row => row.known && row.active && row.rentals >= 5 && row.utilization >= .5).slice(0, 2)) add(`capacity-${row.stockGroupId}`, 'Equipment', 'medium', `Review capacity for ${row.name}`, 'Check rental overlaps and the availability of each unit before considering more stock. Use the forecast to plan busy periods.', `${row.rentals} confirmed rentals; ${Math.round(row.utilization * 100)}% of observed calendar unit-hours rented across ${row.unitCount} active unit${row.unitCount === 1 ? '' : 's'}.`, 'At least 5 rentals and 50% calendar-hour utilization. This alone does not prove unmet demand.', { itemId: row.id, itemName: row.name, review: 'Before the next busy period' });
+  const capLimit = targets.utilization?.goal ? Math.min(0.5, Math.max(0.03, targets.utilization.goal * 0.35)) : 0.5;
+  for (const row of groups.filter(row => row.known && row.active && row.rentals >= 5 && row.utilization >= capLimit).slice(0, 2)) add(`capacity-${row.stockGroupId}`, 'Equipment', 'medium', `Review capacity for ${row.name}`, 'Check rental overlaps and the availability of each unit before considering more stock. Use the forecast to plan busy periods.', `${row.rentals} confirmed rentals; ${Math.round(row.utilization * 100)}% of observed calendar unit-hours rented across ${row.unitCount} active unit${row.unitCount === 1 ? '' : 's'}.`, `At least 5 rentals and ${Math.round(capLimit * 100)}% calendar-hour utilization. This alone does not prove unmet demand.`, { itemId: row.id, itemName: row.name, review: 'Before the next busy period', ...(targets.utilization?.goal != null ? { target: `Owner utilization goal ${Math.round(targets.utilization.goal * 100)}%` } : {}) });
   if (result.range.days >= 30 && t.rentals >= 5) for (const row of groups.filter(row => row.known && row.active && row.rentals === 0 && row.observedHours > 0 && row.unitRows.some(unit => unit.active && unit.status !== 'UNDER_MAINTENANCE')).slice(0, 2)) add(`idle-${row.stockGroupId}`, 'Equipment', 'medium', `Review the listing for ${row.name}`, 'Check its photo, description, relevance, and rate options. Try a small listing improvement and compare rentals in the next equal period.', `No confirmed rentals in ${result.range.days} days, with ${Math.round(row.observedHours)} observed calendar unit-hours.`, 'At least a 30-day view and 5 fleet rentals, while this active equipment has zero rentals.', { itemId: row.id, itemName: row.name, review: 'This week' });
   if (t.uniqueCustomers >= 10 && t.repeatCustomerRate < .25) add('repeat-customers', 'Customers', 'medium', 'Make repeat rentals easier', 'Review the customer experience and how equipment options are presented. Compare repeat activity in another period before treating this as a retention issue.', `${t.repeatCustomers} of ${t.uniqueCustomers} customers rented twice or more in this selected period (${Math.round(t.repeatCustomerRate * 100)}%).`, 'At least 10 customers and repeat activity below 25% within the selected period; lifetime retention is not measured.', { page: 'Customers', review: 'Next reporting period' });
   if (comparison.previous.totals.rentals >= 10 && comparison.rentals.percent <= -.2) add('demand-decrease', 'Performance', 'medium', 'Investigate the drop in rental activity', 'Compare the weekday demand pattern and equipment rankings. Check seasonality and availability before changing prices.', `${t.rentals} rentals versus ${comparison.previous.totals.rentals} in the previous matched window (${Math.round(Math.abs(comparison.rentals.percent) * 100)}% lower).`, 'A previous sample of at least 10 rentals and a decline of 20% or more.', { section: 'performance', review: 'This week' });
@@ -108,7 +124,7 @@ function recommendationsFor(result, groups, comparison, targets) {
     const goal = targets[metric];
     if (goal.goal !== null && goal.attainment < 1) add('below-target-' + metric, 'Performance', 'medium', 'Review the gap to the ' + label + ' goal', 'Compare equipment contribution, availability, and rental timing before adjusting rates or stock. Agree one change with the owner and review the next equal period.', `${goal.actual.toFixed(2)} actual versus ${goal.goal.toFixed(2)} allocated goal (${Math.round(goal.attainment * 100)}% attained).`, 'A completed selected period is below its owner-defined calendar-day allocated goal.', { section: 'performance', review: 'Next planning review', ruleKind: 'Owner-defined goal; completed periods only' });
   }
-  if (!actions.some(row => !row.diagnostic)) add('monitor', 'Performance', 'monitor', 'Keep monitoring the current pattern', 'Review this dashboard after the next reporting period and watch for changes in rental demand, returns, and service load.', `${t.rentals} confirmed rentals reviewed. No supported action thresholds were triggered; this does not establish that every business issue is resolved.`, 'No other rule matched the selected records.', { section: 'performance', review: 'Next reporting period' });
+  if (!actions.length) add('monitor', 'Performance', 'monitor', 'Keep monitoring the current pattern', 'Review this dashboard after the next reporting period and watch for changes in rental demand, returns, and service load.', `${t.rentals} confirmed rentals reviewed. No supported action thresholds were triggered; this does not establish that every business issue is resolved.`, 'No other rule matched the selected records.', { section: 'performance', review: 'Next reporting period' });
   const order = { high: 0, medium: 1, monitor: 2 };
   return actions.sort((a, b) => order[a.priority] - order[b.priority]);
 }
@@ -159,9 +175,122 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   const demandMix = groups.filter(row => mix.has(row.stockGroupId)).map(row => ({ ...row, historyRentals: mix.get(row.stockGroupId), share: mixTotal ? mix.get(row.stockGroupId) / mixTotal : 0, expectedRentals: mixTotal ? expectedRentals * mix.get(row.stockGroupId) / mixTotal : 0 })).sort((a, b) => b.expectedRentals - a.expectedRentals);
   const bt = backtest(result.trend, result.groupBy, manilaDateKey(now), result.forecast.coverageStart);
   const actions = recommendationsFor(result, groups, comparison, targets);
-  return { ...result, comparison, groups, categoryComparison, targets, weekdays, peakWeekday, hours, peakHour, demandMatrix, fleetUnits, topEquipment, idleEquipment, demandMix,
-    forecast: { ...result.forecast, backtest: bt, retrospective: result.range.to < manilaDateKey(now) },
-    recommendations: actions.filter(row => !row.diagnostic), diagnosticRecommendations: actions.filter(row => row.diagnostic) };
+
+  // Per-equipment trend series across trend buckets for in-table sparklines.
+  const trendSeriesByGroup = new Map();
+  for (const row of groups) trendSeriesByGroup.set(row.stockGroupId, Array(result.trend.length).fill(0));
+  for (const rental of result.confirmed) {
+    const day = manilaDateKey(rental.confirmed_rental_at);
+    if (!day) continue;
+    const bIdx = result.trend.findIndex(b => day >= b.from && day <= b.to);
+    if (bIdx === -1) continue;
+    const gKey = String(itemMap.get(String(rental.item_id))?.stock_group_id || rental.item_id);
+    if (trendSeriesByGroup.has(gKey)) trendSeriesByGroup.get(gKey)[bIdx]++;
+  }
+  const sparkGroups = groups.map(row => ({ ...row, id: row.id || row.stockGroupId, sparkline: trendSeriesByGroup.get(row.stockGroupId) || [] }));
+
+  // Duration and counter-verification speed samples for module Histograms + Mean/Median/Mode/SD.
+  const durationHoursList = (result.returns || []).map(row => {
+    const start = recordDate(row.confirmed_rental_at);
+    const end = recordDate(row.received_at || row.confirmed_return_at);
+    return start && end && end >= start ? (end - start) / 3600000 : null;
+  }).filter(v => v !== null);
+  const rentalById = new Map((data.transactions || []).map(t => [String(t.id), t]));
+  const scopeItemIds = new Set(
+    (data.items || [])
+      .filter(it => (!selection.categoryId || String(it.category_id) === String(selection.categoryId)) && (!selection.itemId || String(it.id) === String(selection.itemId) || String(it.stock_group_id || it.id) === String(selection.itemId)))
+      .map(it => String(it.id))
+  );
+  const speedSecondsList = (data.verification || []).map(v => {
+    if (v.status !== 'CONFIRMED' || !v.terminal_id) return null;
+    const req = recordDate(v.requested_at);
+    const linked = v.rental_id ? rentalById.get(String(v.rental_id)) : null;
+    const rawConf = v.confirmed_at || (v.transaction_type === 'RENTAL' ? linked?.confirmed_rental_at : v.transaction_type === 'RETURN' ? (linked?.received_at || linked?.confirmed_return_at) : null);
+    const conf = recordDate(rawConf);
+    if (!req || !conf || conf < req) return null;
+    const day = manilaDateKey(rawConf);
+    if (!day || day < result.range.from || day > result.range.to) return null;
+    if ((selection.categoryId || selection.itemId) && (!linked || !scopeItemIds.has(String(linked.item_id)))) return null;
+    return (conf - req) / 1000;
+  }).filter(v => v !== null);
+
+  const durationHistogram = computeHistogramStats(durationHoursList, DURATION_BINS);
+  const speedHistogram = computeHistogramStats(speedSecondsList, VERIFICATION_SPEED_BINS);
+  const pareto = { fees: buildParetoAnalysis(sparkGroups, 'fees'), rentals: buildParetoAnalysis(sparkGroups, 'rentals') };
+  const waterfall = buildWaterfallAnalysis({
+    financeSummary: data.financeSummary || null,
+    confirmed: result.confirmed,
+    scopeFiltered: Boolean(selection.categoryId || selection.itemId)
+  });
+  const channelTrends = buildChannelAndPaymentTrends(result.trend, result.confirmed);
+  const pivot = buildCategoryChannelPivot(result.confirmed, data.items || [], data.categories || []);
+  const maintenanceIssues = buildMaintenanceTextMining(data.maintenance || [], result.range);
+  const forecastComparison = buildForecastComparison(result);
+  const lateRiskTree = buildLateReturnDecisionTree(data.transactions || [], data.items || [], data.categories || [], now);
+  const customerSegments = buildCustomerSegmentsAndChurn(data.transactions || [], now);
+  const outlierAlerts = buildOutlierAlerts({
+    confirmed: result.confirmed,
+    transactions: data.transactions || [],
+    items: data.items || [],
+    verification: data.verification || [],
+    durationStats: durationHistogram,
+    speedStats: speedHistogram,
+    now
+  });
+  const marketBasket = buildMarketBasketBundles(result.confirmed, data.items || []);
+
+  const prevTotals = comparison.previous?.totals || {};
+  const outcomeDelta = (curr, prev, higherBetter = true) => {
+    if (curr == null || prev == null) return { status: 'Insufficient baseline', tone: 'neutral', diff: null };
+    const diff = curr - prev;
+    if (Math.abs(diff) < 1e-6) return { status: 'Steady', tone: 'neutral', diff: 0 };
+    const good = higherBetter ? diff > 0 : diff < 0;
+    return { status: good ? 'Improved' : 'Needs review', tone: good ? 'up' : 'down', diff };
+  };
+  const beforeAfter = [
+    { key: 'rentals', label: 'Confirmed rentals', current: result.totals.rentals, previous: prevTotals.rentals ?? null, format: 'count', ...outcomeDelta(result.totals.rentals, prevTotals.rentals, true) },
+    { key: 'fees', label: 'Rental fees', current: result.totals.fees, previous: prevTotals.fees ?? null, format: 'currency', ...outcomeDelta(result.totals.fees, prevTotals.fees, true) },
+    { key: 'onTime', label: 'On-time return rate', current: result.totals.onTimeRate, previous: prevTotals.onTimeRate ?? null, format: 'percent', ...outcomeDelta(result.totals.onTimeRate, prevTotals.onTimeRate, true) },
+    { key: 'repeat', label: 'Repeat customer rate', current: result.totals.repeatCustomerRate, previous: prevTotals.repeatCustomerRate ?? null, format: 'percent', ...outcomeDelta(result.totals.repeatCustomerRate, prevTotals.repeatCustomerRate, true) },
+    { key: 'speed', label: 'Counter verification speed (sec)', current: result.totals.verificationSeconds, previous: prevTotals.verificationSeconds ?? null, format: 'seconds', ...outcomeDelta(result.totals.verificationSeconds, prevTotals.verificationSeconds, false) }
+  ];
+
+  return {
+    ...result,
+    comparison,
+    groups: sparkGroups,
+    categoryComparison,
+    targets,
+    weekdays,
+    peakWeekday,
+    hours,
+    peakHour,
+    demandMatrix,
+    fleetUnits,
+    topEquipment: sparkGroups.filter(row => row.rentals > 0).slice(0, 5),
+    idleEquipment: sparkGroups.filter(row => row.known && row.active && row.rentals === 0),
+    demandMix,
+    pareto,
+    waterfall,
+    channelTrends,
+    durationHistogram,
+    speedHistogram,
+    pivot,
+    maintenanceIssues,
+    lateRiskTree,
+    customerSegments,
+    outlierAlerts,
+    marketBasket,
+    beforeAfter,
+    forecast: {
+      ...result.forecast,
+      backtest: bt,
+      comparison: forecastComparison,
+      retrospective: result.range.to < manilaDateKey(now)
+    },
+    recommendations: actions,
+    diagnosticRecommendations: actions.filter(row => row.diagnostic)
+  };
 }
 
 export function forecastEquipmentMix(mix, points) {

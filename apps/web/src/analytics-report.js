@@ -14,7 +14,16 @@ export const analyticsDefinitions=[
   ['Repeat customer rate','Customers with at least two confirmed rentals ÷ customers with at least one confirmed rental in the period × 100. Measures repeat activity within the chosen period.'],
   ['Maintenance frequency','Number of maintenance records started per item in the period. Includes inspections and preventive care; it is not a count of equipment failures.'],
   ['Maintenance downtime','Hours under maintenance within the period, merged per item to avoid double counting. Ongoing work stops at the period cutoff or current time. Fleet downtime is item-hours: two items unavailable for one hour equal two item-hours.'],
-  ['Terminal verification time','Average elapsed time from request to confirmation for CONFIRMED terminal requests completed in the period. Includes queue and operator wait time. If the request has no confirmation timestamp, a matching rental/return confirmation is used when available. Missing or inconsistent times are excluded. Median is the middle value; P95 is the interpolated 95th percentile.']
+  ['Terminal verification time','Average elapsed time from request to confirmation for CONFIRMED terminal requests completed in the period. Includes queue and operator wait time. If the request has no confirmation timestamp, a matching rental/return confirmation is used when available. Missing or inconsistent times are excluded. Median is the middle value; P95 is the interpolated 95th percentile.'],
+  ['Pareto 80–20 equipment rule','Ranks equipment types from highest to lowest fees or rentals and plots the running cumulative percentage against the 80% line to spotlight vital revenue or demand drivers.'],
+  ['Revenue to net cash waterfall','Shows step-by-step additions and deductions from starting fees or ledger collections minus refunds and expenses to ending net cash or collected fees.'],
+  ['Histograms and spread stats','Groups completed rental durations or ESP32 confirmation times into contiguous bins and reports Mean (average), Median (midpoint), Mode bin (most common range), and Standard Deviation (typical spread).'],
+  ['Category × Channel matrix','Interactive cross-tab comparing Shop counter versus Resort delivery across equipment categories using switchable Fees, Rentals, Average Fee, and % Share metrics.'],
+  ['Forecasting methods and MAE','Compares three plain-language methods on complete periods: Same-weekday Moving Average, Exponential Smoothing (recent weight α = 0.35), and Linear Regression Trend, checked by Average Error (MAE).'],
+  ['Model pattern drift check','Monitors whether recent completed periods shifted meaningfully compared with earlier history so forecasts can be reviewed promptly when demand changes.'],
+  ['Late-return IF–THEN rules','Pruned interpretable Decision Tree rules using only channel, schedule, and package type (never personal info) to highlight bookings that benefit from a timely return reminder.'],
+  ['Customer groups and churn watch','Anonymized aggregate grouping using normalized booking frequency, spend, and days since last rental to summarize repeat renters and churn watch counts without exposing customer details.'],
+  ['Market basket bundles and What-If simulator','Finds equipment pairs frequently rented together by the same customer on one booking day, and provides an interactive What-If calculator to test extra units or rate shifts without changing live data.']
 ];
 
 export function renderAnalyticsReport(model, selection, view, h) {

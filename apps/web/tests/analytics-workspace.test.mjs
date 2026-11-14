@@ -148,13 +148,19 @@ test('default displayed filters and computed reporting dates describe the same a
   assert.match(document.querySelector('.ana-scope').textContent,/Oct 14, 2025.*Oct 13, 2026/);
 });
 
-test('forecast uses one explainable average with no benchmark picker or legacy scenario override',()=>{
+test('forecast exposes three plain-language models and interactive model selection',()=>{
  const model={items:[{id:'bike',name:'Bicycle',status:'AVAILABLE',is_active:true,created_at:'2026-07-01'}],transactions:Array.from({length:4},(_,i)=>({id:'r'+i,item_id:'bike',status:'COMPLETED',confirmed_rental_at:'2026-10-12 10:00:00',rental_fee:100}))};
  const html=renderAnalyticsReport(model,selection,{section:'forecast'},helpers);
  assert.match(html,/Same-weekday moving average/);
- assert.match(html,/last 4 Saturdays/);
- assert.doesNotMatch(html,/data-forecast-model|data-forecast-scenario|Historical model validation|Best fit|SES|Regression/);
- assert.equal(renderAnalyticsReport(model,selection,{section:'forecast',forecastModel:'linear',forecastScenario:'higher'},helpers),html);
+ assert.match(html,/Exponential smoothing/);
+ assert.match(html,/Linear trend/);
+ assert.match(html,/data-forecast-model="ma"/);
+ assert.match(html,/data-forecast-model="ses"/);
+ assert.match(html,/data-forecast-model="linear"/);
+ assert.doesNotMatch(html,/NaN|Infinity|undefined/);
+ const linearOnly=renderAnalyticsReport(model,selection,{section:'forecast',forecastModel:'linear'},helpers);
+ assert.match(linearOnly,/data-forecast-model="linear" aria-pressed="true"/);
+ assert.notEqual(linearOnly,html);
 });
 
 test('all analytics sections expose their evidence without expand or collapse controls',()=>{

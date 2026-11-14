@@ -519,7 +519,29 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     if (!row || at - row.startedAt >= 900000) registrationAttempts.set(key, { startedAt: at, count: 1 });
     else registrationAttempts.set(key, { ...row, count: row.count + 1 });
   }
-  function buildSessionCookie(value, seconds, persistent = false, req = null) { const secure = Boolean(req?.socket?.encrypted || req?.headers?.['x-forwarded-proto'] === 'https' || process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production'); return `rent_play_session=${value}; HttpOnly; SameSite=Strict; Path=/${persistent ? `; Max-Age=${seconds}` : ''}${secure ? '; Secure' : ''}`; }
+  function isSecureCookieRequest(req = null) {
+    if (req?.socket?.encrypted || req?.headers?.['x-forwarded-proto'] === 'https') return true;
+    if (process.env.COOKIE_SECURE === 'true') return true;
+    if (process.env.COOKIE_SECURE === 'false') return false;
+    if (process.env.NODE_ENV === 'production') {
+      const origin = String(req?.headers?.origin || '');
+      const referer = String(req?.headers?.referer || '');
+      const host = String(req?.headers?.host || '').split(':')[0].toLowerCase();
+      if (origin.startsWith('http://') || referer.startsWith('http://') || host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return false;
+      return true;
+    }
+    return false;
+  }
+  function buildSessionCookie(value, seconds, persistent = false, req = null) {
+    const secure = isSecureCookieRequest(req);
+    const maxAge = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+    const persistence = !persistent
+      ? ''
+      : maxAge > 0
+        ? `; Max-Age=${maxAge}; Expires=${new Date(Date.now() + maxAge * 1000).toUTCString()}`
+        : '; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    return `rent_play_session=${value}; HttpOnly; SameSite=Strict; Path=/${persistence}${secure ? '; Secure' : ''}`;
+  }
   function cookie(value, seconds, persistent = false) { return buildSessionCookie(value, seconds, persistent); }
   async function body(req, maxBytes = 8192) {
     if (!(req.headers['content-type'] || '').startsWith('application/json')) throw Object.assign(new Error('JSON body required.'), { status: 415 });
@@ -623,8 +645,10 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         if (!user?.is_active || !isStaffRole(user.role)) return send(res, 403, { error: 'Only active Owner or Operator accounts can use this password-change flow.' });
         limitRegistrationRequests(req, 'password-change', 10);
         const input = await body(req), updated = await services.changeStaffPassword(user, input, sessions);
-        const session = !bearer ? await sessions.signIn(user.email, input.newPassword, input.remember === true).catch(() => null) : null;
-        return send(res, 200, { user: publicUser(updated), signInAgain: !bearer && !session }, session ? { 'Set-Cookie': cookie(session.cookie, session.seconds, input.remember === true) } : !bearer ? { 'Set-Cookie': cookie('', 0, true) } : {});
+        const remember = input.remember === true;
+        const session = !bearer ? await sessions.signIn(user.email, input.newPassword, remember).catch(() => null) : null;
+        if (session) sessions.recordSession?.(user.id, session.cookie, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress, remember, seconds: session.seconds });
+        return send(res, 200, { user: publicUser(updated), signInAgain: !bearer && !session, rememberSession: Boolean(session && remember) }, session ? { 'Set-Cookie': cookie(session.cookie, session.seconds, remember) } : !bearer ? { 'Set-Cookie': cookie('', 0, true) } : {});
       }
       if (['/api/mobile/registration/email-code', '/api/mobile/registration/verify-email-code', '/api/mobile/registration/complete'].includes(path)) {
         if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed.' });
@@ -759,7 +783,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         const entry = attempts.get(ip) || { since: now, count: 0 }; if (entry.count >= 10) return send(res, 429, { error: 'Too many attempts. Try again in 15 minutes.' }); attempts.set(ip, { ...entry, count: entry.count + 1 });
         const input = await body(req); if (typeof input?.email !== 'string' || typeof input?.password !== 'string' || input.email.length > 254 || input.password.length > 1024 || !input.password) return send(res, 400, { error: 'Enter your email and password.' });
         const email = validateEmailFormat(input.email);
-        const session = await sessions.signIn(email, input.password, input.remember === true);
+        const remember = input.remember === true;
+        const session = await sessions.signIn(email, input.password, remember);
         if (!session) {
           if (entry.count + 1 >= 3) {
             Promise.resolve(services.recordSecurityAlert?.('SECURITY_BRUTE_FORCE_LOGIN', { ip: ip || 'unknown', reason: `Multiple failed sign-in attempts (${entry.count + 1}) for ${email} from IP ${String(ip || 'unknown').replace(/^::ffff:/, '')}.`, dedupeKey: `brute:${email}:${ip}:${Math.floor(now / 900000)}` })).then(() => rentalEvents.publishDataChange('security.alert', { type: 'SECURITY_BRUTE_FORCE_LOGIN' })).catch(() => {});
@@ -772,8 +797,8 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         user.role = normalizeRole(user.role);
         if (!isStaffRole(user.role)) return send(res, 403, { error: 'Only operator or owner accounts can access the staff workspace. Customer accounts use the mobile app.' });
         await services.touchLogin(user.id); attempts.delete(ip);
-        sessions.recordSession?.(user.id, session.cookie, { userAgent: req.headers['user-agent'], ip, remember: input.remember === true, seconds: session.seconds });
-        return send(res, 200, { user: publicUser(user) }, { 'Set-Cookie': cookie(session.cookie, session.seconds, input.remember === true) });
+        sessions.recordSession?.(user.id, session.cookie, { userAgent: req.headers['user-agent'], ip, remember, seconds: session.seconds });
+        return send(res, 200, { user: publicUser(user), rememberSession: remember }, { 'Set-Cookie': cookie(session.cookie, session.seconds, remember) });
       }
       const terminalRoute = path.match(/^\/api\/terminals\/([A-Za-z0-9_-]{1,128})\/(pending|confirm)$/);
       const mobileReviewRoute = path.match(/^\/api\/mobile\/rentals\/([A-Za-z0-9_-]{1,128})\/review$/);
@@ -853,11 +878,11 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
         }
         if (rentalFlowRoute || rentalLookupRoute || counterBookingRoute || inspectionPhotoRoute) return send(res, 405, { error: 'Method not allowed.' });
         if (path === '/api/auth/me') {
-          if (token) sessions.recordSession?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress });
-          return send(res, 200, { user: publicUser(user), firebaseProjectId: services.firebaseProjectId });
+          const sessionEntry = token ? sessions.recordSession?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress, claims }) : null;
+          return send(res, 200, { user: publicUser(user), rememberSession: Boolean(sessionEntry?.remember), firebaseProjectId: services.firebaseProjectId });
         }
         if (path === '/api/auth/sessions' && req.method === 'GET') {
-          const list = sessions.listSessions?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress }) || [];
+          const list = sessions.listSessions?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress, claims }) || [];
           return send(res, 200, { sessions: list });
         }
         if (path === '/api/auth/sessions/revoke' && req.method === 'POST') {
@@ -866,13 +891,13 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
             const revoked = sessions.revokeOtherSessions?.(user.id, token) || { revoked: true, revoked_count: 0 };
             await services.recordSecurityAlert?.('SECURITY_SESSIONS_REVOKED', { actor_id: user.id, ip: req.socket.remoteAddress, reason: `${user.full_name || user.name || user.email} signed out of ${revoked.revoked_count} other active device session(s).` });
             rentalEvents.publishDataChange('security.alert', { type: 'SECURITY_SESSIONS_REVOKED' });
-            return send(res, 200, { ok: true, ...revoked, sessions: sessions.listSessions?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress }) || [] });
+            return send(res, 200, { ok: true, ...revoked, sessions: sessions.listSessions?.(user.id, token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress, claims }) || [] });
           }
           if (typeof input?.sessionId === 'string' && input.sessionId.trim()) {
             const revoked = sessions.revokeSessionById?.(user.id, input.sessionId.trim(), token);
             if (!revoked) return send(res, 404, { error: 'Active session not found or already signed out.' });
             const headers = revoked.revokedCurrent ? { 'Set-Cookie': cookie('', 0, true) } : {};
-            return send(res, 200, { ok: true, ...revoked, sessions: sessions.listSessions?.(user.id, revoked.revokedCurrent ? null : token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress }) || [] }, headers);
+            return send(res, 200, { ok: true, ...revoked, sessions: sessions.listSessions?.(user.id, revoked.revokedCurrent ? null : token, { userAgent: req.headers['user-agent'], ip: req.socket.remoteAddress, claims }) || [] }, headers);
           }
           return send(res, 400, { error: 'Specify a sessionId or allOthers to revoke.' });
         }

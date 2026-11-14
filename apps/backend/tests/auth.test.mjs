@@ -28,3 +28,25 @@ test('Firebase rejects invalid credentials without creating a session',async()=>
 test('user response exposes profile fields only',()=>{
   assert.deepEqual(publicUser({id:'uid',full_name:'Owner',email:'owner@example.test',role:'OWNER',password_hash:'secret'}),{id:'uid',name:'Owner',email:'owner@example.test',role:'OWNER',mustChangePassword:false});
 });
+
+test('remembered Firebase sessions reconstruct remember status and expiry from token claims across restarts', async () => {
+  const iat = Math.floor(Date.now() / 1000);
+  const rememberedExp = iat + 14 * 86400;
+  const standardExp = iat + 8 * 3600;
+  const auth = {
+    verifySessionCookie: async token => token === 'remembered-token'
+      ? { uid: 'owner-1', iat, exp: rememberedExp }
+      : { uid: 'owner-1', iat, exp: standardExp }
+  };
+  const sessions = new FirebaseSessions(auth);
+  const rememberedClaims = await sessions.verify('remembered-token');
+  const rememberedEntry = sessions.recordSession('owner-1', 'remembered-token', { userAgent: 'Chrome/130.0 Windows', ip: '127.0.0.1', claims: rememberedClaims });
+  assert.equal(rememberedEntry.remember, true);
+  assert.equal(rememberedEntry.expiresAt, new Date(rememberedExp * 1000).toISOString());
+
+  const list = sessions.listSessions('owner-1', 'standard-token', { claims: await sessions.verify('standard-token') });
+  const rememberedRow = list.find(s => !s.is_current);
+  const currentRow = list.find(s => s.is_current);
+  assert.equal(rememberedRow.remember, true);
+  assert.equal(currentRow.remember, false);
+});

@@ -3,9 +3,11 @@ import { collectCsvRecords, serializeCsv, csvNumber, downloadCsv } from './csv-e
 import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
 import { calculateDetailedAnalytics } from './analytics-insights.js';
+import { simulateWhatIfScenario } from './analytics-models.js';
 import { bindAnalyticsCharts } from './analytics-charts.js';
 import { updateForecastWorkspace } from './forecast-workspace.js';
 import { renderAnalyticsReport } from './analytics-report.js';
+import { renderWhatIfContent } from './analytics-workspace.js';
 import { renderSettings, settingsTabs, bindBusinessSettingsNavigation, bindReceiptSettingsPreview, bindAnnouncementSettingsPreview, defaultTermsAndConditions, defaultRentalTerms, defaultPrivacyPolicy, defaultRefundPolicy, defaultAcceptedIds, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
 import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
@@ -48,7 +50,7 @@ export function createWorkspaceUI(h) {
   let activeSessions = null, securityAlerts = null, securityLoading = false, securityErrors = {}, securityAttempted = false, securityEpoch = 0;
   const analyticsSelection = { period: preferences.reportPeriod, from: '', to: '', categoryId: '', itemId: '', groupBy: preferences.reportGrouping };
   let demoHistoryBatch = '';
-  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', forecastMetric: 'rentals', recommendationType: 'all', details: {} };
+  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', rankingMetric: 'rentals', equipmentLimit: '5', paretoMetric: 'fees', stackedMode: 'channel', histogramKind: 'duration', pivotMetric: 'fees', forecastMetric: 'rentals', forecastModel: 'all', forecastMixExpanded: false, recommendationType: 'all', recommendationPriority: 'all', whatIf: { targetGroupId: 'ALL', extraUnits: 0, rateChangePct: 0, demandShiftPct: 0 }, details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
   const status = value => `<span class="badge ${e(String(value || 'unknown').toLowerCase().replaceAll('_', '-').replaceAll(' ', '-'))}">${e(String(value || 'Unknown').replaceAll('_', ' '))}</span>`;
   const invalidate = () => { cancelPreload(); cacheVersion++; loadError = ''; financeUI.reset(); reportPayments.reset(); };
@@ -575,11 +577,16 @@ export function createWorkspaceUI(h) {
       Object.assign(analyticsSelection, { period:'90d', groupBy:'daily' });
     }
 
-    return renderAnalyticsReport(model, analyticsSelection, reportView, {
+    const selectedRange = analyticsRange(analyticsSelection);
+    const financeState = reportPayments.summaryFor(selectedRange);
+    const reportModel = financeState.summary && !model.financeSummary ? { ...model, financeSummary: financeState.summary } : model;
+    return renderAnalyticsReport(reportModel, analyticsSelection, reportView, {
       escape: e,
       paged,
       table,
-      canManageTargets: user?.role === 'OWNER'
+      canManageTargets: user?.role === 'OWNER',
+      hasFinanceLoader: true,
+      financeState
     });
   }
 
@@ -686,7 +693,9 @@ export function createWorkspaceUI(h) {
     const wrongReportRange = model?.view_meta?.view === 'Reports' && reportRange && !reportRange.error && (model.view_meta.from !== reportRange.from || model.view_meta.to !== reportRange.to);
     if (!model || wrongView || wrongReportRange) return loadError
       ? `<section class="panel module-load-error" role="alert">${icon('chip')}<h3>Couldn’t load this page</h3><p>${e(loadError)}</p>${retry}</section>`
-      : `<section class="panel module-loading" role="status" aria-busy="true"><span class="session-spinner" aria-hidden="true"></span><p>Loading ${e(displayPage.toLowerCase())}…</p></section>`;
+      : page === 'Reports'
+        ? `<section class="panel module-loading ana-loading-skeleton" role="status" aria-busy="true"><span class="sr-only">Loading ${e(displayPage.toLowerCase())}…</span><div class="ana-skel-tabs" aria-hidden="true"><span></span><span></span><span></span></div><div class="ana-skel-bar" aria-hidden="true"></div><div class="ana-skel-kpis" aria-hidden="true"><div></div><div></div><div></div><div></div></div><div class="ana-skel-grid" aria-hidden="true"><div class="is-main"></div><div class="is-side"></div></div></section>`
+        : `<section class="panel module-loading" role="status" aria-busy="true"><span class="session-spinner" aria-hidden="true"></span><p>Loading ${e(displayPage.toLowerCase())}…</p></section>`;
     const content = page === 'ESP32 terminal' ? workflow.verificationPage(search, { paged, table, status, empty }) : page === 'Customers' ? customers() : ['Rentals', 'Returns', 'Transaction History'].includes(page) ? transactions(page) : page === 'Rates & Fees' ? rates() : page === 'Maintenance' ? maintenance() : page === 'Reports' ? reports(user) : page === 'Settings' ? settings(user, appearance) : '';
     // Loaded pages refresh in the background without inserting a loading row.
     // Keep visible feedback for failures and the separate initial-load state.
@@ -1186,7 +1195,136 @@ export function createWorkspaceUI(h) {
       if(chart==='forecast') changeForecast('forecastMetric',button.dataset.analyticsMetric,selector);
       else {reportView.performanceMetric=button.dataset.analyticsMetric;rerender();document.querySelector(selector)?.focus({preventScroll:true});}
     }; });
-    document.querySelectorAll('[data-recommendation-type]').forEach(button => { button.onclick = () => { reportView.recommendationType = button.dataset.recommendationType; rerender(); document.querySelectorAll('[data-recommendation-type]').forEach(next => { if (next.dataset.recommendationType === reportView.recommendationType) next.focus(); }); }; });
+    document.querySelectorAll('[data-recommendation-type]').forEach(button => { button.onclick = () => { reportView.recommendationType = button.dataset.recommendationType; rerender(); document.querySelectorAll('[data-recommendation-type]').forEach(next => { if (next.dataset.recommendationType === reportView.recommendationType) next.focus({ preventScroll: true }); }); }; });
+    document.querySelectorAll('[data-recommendation-priority]').forEach(button => {
+      button.onclick = () => {
+        reportView.recommendationPriority = button.dataset.recommendationPriority;
+        rerender();
+        document.querySelector(`#analytics-prio-${reportView.recommendationPriority}`)?.focus({ preventScroll: true });
+      };
+    });
+    document.querySelectorAll('[data-recommendation-clear]').forEach(button => {
+      button.onclick = () => {
+        reportView.recommendationType = 'all';
+        reportView.recommendationPriority = 'all';
+        rerender();
+        document.querySelector('#analytics-focus-all')?.focus({ preventScroll: true });
+      };
+    });
+    document.querySelectorAll('[data-equipment-limit]').forEach(button => {
+      button.onclick = () => {
+        reportView.equipmentLimit = button.dataset.equipmentLimit || '5';
+        rerender();
+        document.querySelector(`#analytics-equip-limit-${reportView.equipmentLimit}`)?.focus({ preventScroll: true });
+      };
+    });
+    document.querySelectorAll('[data-forecast-mix-toggle]').forEach(button => {
+      button.onclick = () => {
+        reportView.forecastMixExpanded = !reportView.forecastMixExpanded;
+        const root = document.querySelector('.analytics-workspace');
+        if (!root || !updateForecastWorkspace(root, reports())) rerender();
+        document.querySelector('#analytics-forecast-mix-toggle')?.focus({ preventScroll: true });
+      };
+    });
+    document.querySelectorAll('[data-ana-collapse]').forEach(button => {
+      button.onclick = () => {
+        const open = button.getAttribute('aria-expanded') === 'true';
+        const nextOpen = !open;
+        button.setAttribute('aria-expanded', String(nextOpen));
+        const body = document.getElementById(button.getAttribute('aria-controls'));
+        if (body) body.toggleAttribute('hidden', open);
+        const hint = button.querySelector('.ana-collapse-hint');
+        if (hint) {
+          const noun = button.classList.contains('is-section') ? 'insights' : 'notes';
+          hint.textContent = `${nextOpen ? 'Hide' : 'Show'} ${noun}`;
+        }
+      };
+    });
+    document.querySelectorAll('[data-ana-glossary-search]').forEach(input => {
+      input.addEventListener('input', () => {
+        const query = input.value.trim().toLowerCase();
+        const container = input.closest('[data-analytics-detail="definitions"]');
+        container?.querySelectorAll('[data-ana-glossary-item]').forEach(item => {
+          const text = item.dataset.searchText || item.textContent.toLowerCase();
+          item.toggleAttribute('hidden', Boolean(query) && !text.includes(query));
+        });
+      });
+    });
+    for (const [attr, prop, prefix] of [
+      ['pareto-metric', 'paretoMetric', '#analytics-pareto-'],
+      ['stacked-mode', 'stackedMode', '#analytics-stacked-'],
+      ['histogram-kind', 'histogramKind', '#analytics-hist-'],
+      ['pivot-metric', 'pivotMetric', '#analytics-pivot-']
+    ]) {
+      document.querySelectorAll(`[data-${attr}]`).forEach(button => {
+        button.onclick = () => {
+          const val = button.getAttribute(`data-${attr}`);
+          reportView[prop] = val;
+          rerender();
+          document.querySelector(`${prefix}${val}`)?.focus({ preventScroll: true });
+        };
+      });
+    }
+    document.querySelectorAll('[data-forecast-model]').forEach(button => {
+      button.onclick = () => {
+        reportView.forecastModel = button.dataset.forecastModel;
+        const root = document.querySelector('.analytics-workspace');
+        if (!root || !updateForecastWorkspace(root, reports())) rerender();
+        document.querySelector(`#analytics-forecast-model-${reportView.forecastModel}`)?.focus({ preventScroll: true });
+      };
+    });
+    const whatIfForm = document.querySelector('#analytics-whatif-form');
+    if (whatIfForm) {
+      const clampNum = (raw, min, max, fallback = 0) => {
+        const val = Number(raw);
+        return Number.isFinite(val) ? Math.min(max, Math.max(min, val)) : fallback;
+      };
+      const updateWhatIf = (event) => {
+        const unitsEl = whatIfForm.querySelector('[name="extraUnits"]');
+        const rateEl = whatIfForm.querySelector('[name="rateChangePct"]');
+        const demandEl = whatIfForm.querySelector('[name="demandShiftPct"]');
+        const extraUnits = clampNum(unitsEl?.value ?? 0, 0, 5, 0);
+        const rateChangePct = clampNum(rateEl?.value ?? 0, -30, 30, 0);
+        const demandShiftPct = clampNum(demandEl?.value ?? 0, -25, 50, 0);
+        if (event?.type === 'change') {
+          if (unitsEl && Number(unitsEl.value) !== extraUnits) unitsEl.value = String(extraUnits);
+          if (rateEl && Number(rateEl.value) !== rateChangePct) rateEl.value = String(rateChangePct);
+          if (demandEl && Number(demandEl.value) !== demandShiftPct) demandEl.value = String(demandShiftPct);
+        }
+        reportView.whatIf = {
+          targetGroupId: whatIfForm.querySelector('[name="targetGroupId"]')?.value || 'ALL',
+          extraUnits,
+          rateChangePct,
+          demandShiftPct
+        };
+        const out = whatIfForm.querySelector('#analytics-whatif-output');
+        if (!out) return;
+        const detail = calculateDetailedAnalytics(model, analyticsSelection);
+        if (detail.error) return;
+        const sim = simulateWhatIfScenario(detail, reportView.whatIf);
+        const { outputHtml, visualHtml } = renderWhatIfContent(sim, e);
+        out.innerHTML = outputHtml;
+        const visual = whatIfForm.querySelector('.ana-whatif-visual');
+        if (visual) visual.innerHTML = visualHtml;
+      };
+      whatIfForm.addEventListener('input', updateWhatIf);
+      whatIfForm.addEventListener('change', updateWhatIf);
+      whatIfForm.querySelector('[data-whatif-reset]')?.addEventListener('click', () => {
+        const item = whatIfForm.querySelector('[name="targetGroupId"]');
+        const units = whatIfForm.querySelector('[name="extraUnits"]');
+        const rate = whatIfForm.querySelector('[name="rateChangePct"]');
+        const demand = whatIfForm.querySelector('[name="demandShiftPct"]');
+        if (item) {
+          item.querySelectorAll('option').forEach(opt => { opt.selected = opt.value === 'ALL'; });
+          try { item.value = 'ALL'; } catch {}
+        }
+        if (units) units.value = '0';
+        if (rate) rate.value = '0';
+        if (demand) demand.value = '0';
+        updateWhatIf({ type: 'change' });
+        item?.focus?.({ preventScroll: true });
+      });
+    }
     document.querySelectorAll('[data-analytics-history]').forEach(button => { button.onclick = () => { analyticsSelection.period = '90d'; analyticsSelection.groupBy = button.dataset.analyticsHistory; updateAnalytics(); }; });
     document.querySelectorAll('[data-analytics-go-page]').forEach(button => { button.onclick = () => h.navigate?.(button.dataset.analyticsGoPage); });
     document.querySelectorAll('[data-analytics-go-section]').forEach(button => { button.onclick = () => { selectAnalyticsTab(button.dataset.analyticsGoSection); if (button.dataset.analyticsCoverage) document.querySelector('#analytics-data-coverage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }; });

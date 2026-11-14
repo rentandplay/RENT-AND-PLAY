@@ -29,7 +29,19 @@ export function describeUserAgent(ua = '') {
 }
 
 export class FirebaseSessions {
-  constructor(auth=firebaseAuth,fetcher=fetch){this.auth=auth;this.fetcher=fetcher;this.revoked=new Set();this.activeSessions=new Map();}
+  constructor(auth=firebaseAuth,fetcher=fetch){this.auth=auth;this.fetcher=fetcher;this.revoked=new Set();this.activeSessions=new Map();this.verifiedClaims=new Map();}
+  sessionMetaFromClaims(claims, nowMs = Date.now()) {
+    const exp = Number(claims?.exp);
+    const iat = Number.isFinite(Number(claims?.iat)) ? Number(claims.iat) : Number(claims?.auth_time);
+    const expiresAtMs = Number.isFinite(exp) && exp > 0 ? exp * 1000 : null;
+    let remember = false;
+    if (Number.isFinite(exp) && Number.isFinite(iat) && exp > iat) {
+      remember = (exp - iat) > 8 * 3600 + 60;
+    } else if (Number.isFinite(expiresAtMs)) {
+      remember = (expiresAtMs - nowMs) > 8 * 3600 * 1000 + 60000;
+    }
+    return { remember, expiresAtMs };
+  }
   async verifyPassword(email,password) {
     requireFirebaseConfig();
     const response=await this.fetcher(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`,{
@@ -50,15 +62,24 @@ export class FirebaseSessions {
     try{
       const claims = await this.auth.verifySessionCookie(cookie,true);
       const id = sessionFingerprint(cookie);
+      if (claims && typeof claims === 'object') this.verifiedClaims.set(id, claims);
       const tracked = this.activeSessions.get(id);
-      if (tracked) tracked.lastActiveAt = new Date().toISOString();
+      if (tracked) {
+        const now = new Date();
+        tracked.lastActiveAt = now.toISOString();
+        const fromClaims = this.sessionMetaFromClaims(claims, now.getTime());
+        if (Number.isFinite(fromClaims.expiresAtMs)) tracked.expiresAt = new Date(fromClaims.expiresAtMs).toISOString();
+        if (fromClaims.remember) tracked.remember = true;
+      }
       return claims;
     }catch{return null;}
   }
   revoke(cookie){
     if(cookie){
+      const id = sessionFingerprint(cookie);
       this.revoked.add(cookie);
-      this.activeSessions.delete(sessionFingerprint(cookie));
+      this.activeSessions.delete(id);
+      this.verifiedClaims.delete(id);
     }
   }
   recordSession(uid, cookie, meta = {}) {
@@ -66,6 +87,10 @@ export class FirebaseSessions {
     const id = sessionFingerprint(cookie);
     const now = meta.now instanceof Date ? meta.now : new Date();
     const nowIso = now.toISOString();
+    const claims = meta.claims || this.verifiedClaims.get(id);
+    const fromClaims = this.sessionMetaFromClaims(claims, now.getTime());
+    const explicitRemember = typeof meta.remember === 'boolean' ? meta.remember : null;
+    const explicitSeconds = Number(meta.seconds) > 0 ? Number(meta.seconds) : null;
     const existing = this.activeSessions.get(id);
     if (existing) {
       existing.lastActiveAt = nowIso;
@@ -74,9 +99,21 @@ export class FirebaseSessions {
         existing.userAgent = String(meta.userAgent).slice(0, 300);
         existing.deviceLabel = describeUserAgent(meta.userAgent);
       }
+      if (explicitRemember !== null) existing.remember = explicitRemember;
+      else if (fromClaims.remember) existing.remember = true;
+      if (explicitSeconds !== null) existing.expiresAt = new Date(now.getTime() + explicitSeconds * 1000).toISOString();
+      else if (Number.isFinite(fromClaims.expiresAtMs)) existing.expiresAt = new Date(fromClaims.expiresAtMs).toISOString();
       return { ...existing, isNew: false };
     }
-    const seconds = Number(meta.seconds) > 0 ? Number(meta.seconds) : (meta.remember ? 14 * 86400 : 8 * 3600);
+    const remember = explicitRemember !== null
+      ? explicitRemember
+      : explicitSeconds !== null
+        ? explicitSeconds > 8 * 3600 + 60
+        : fromClaims.remember;
+    const seconds = explicitSeconds !== null ? explicitSeconds : (remember ? 14 * 86400 : 8 * 3600);
+    const expiresAt = explicitSeconds === null && Number.isFinite(fromClaims.expiresAtMs)
+      ? new Date(fromClaims.expiresAtMs).toISOString()
+      : new Date(now.getTime() + seconds * 1000).toISOString();
     const entry = {
       id,
       uid: String(uid),
@@ -86,8 +123,8 @@ export class FirebaseSessions {
       ip: String(meta.ip || '127.0.0.1').replace(/^::ffff:/, ''),
       createdAt: nowIso,
       lastActiveAt: nowIso,
-      expiresAt: new Date(now.getTime() + seconds * 1000).toISOString(),
-      remember: Boolean(meta.remember)
+      expiresAt,
+      remember
     };
     this.activeSessions.set(id, entry);
     return { ...entry, isNew: true };
@@ -104,6 +141,7 @@ export class FirebaseSessions {
     for (const [id, entry] of this.activeSessions.entries()) {
       if (this.revoked.has(entry.cookie) || new Date(entry.expiresAt).getTime() <= nowMs) {
         this.activeSessions.delete(id);
+        this.verifiedClaims.delete(id);
         continue;
       }
       if (entry.uid !== userId) continue;
@@ -125,6 +163,7 @@ export class FirebaseSessions {
     if (!entry || entry.uid !== String(uid)) return null;
     this.revoked.add(entry.cookie);
     this.activeSessions.delete(entry.id);
+    this.verifiedClaims.delete(entry.id);
     return {
       revoked: true,
       id: entry.id,
@@ -139,6 +178,7 @@ export class FirebaseSessions {
       if (entry.uid === userId && entry.cookie !== currentCookie) {
         this.revoked.add(entry.cookie);
         this.activeSessions.delete(id);
+        this.verifiedClaims.delete(id);
         revokedCount++;
       }
     }

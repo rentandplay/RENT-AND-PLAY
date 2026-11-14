@@ -37,6 +37,7 @@ export function LoginView({
   setPasswordResetCountdown
 }) {
   const [showPassword, setShowPassword] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [errorMsg, setErrorMsg] = useState(cleanErrorMessage(initialError));
   const formRef = useRef(null);
   const validationRef = useRef(null);
@@ -275,7 +276,7 @@ export function LoginView({
     const form = formRef.current;
     const button = form.querySelector('[type="submit"]');
     if (button.disabled) return;
-    const rememberChecked = form.querySelector('#remember').checked;
+    const rememberChecked = Boolean(form.querySelector('#remember')?.checked ?? remember);
     const body = {
       email: form.querySelector('#email').value,
       password: form.querySelector('#password').value,
@@ -394,7 +395,14 @@ export function LoginView({
               </button>
             </div>
             <label className="checkbox">
-              <input id="remember" type="checkbox" /> Remember me on this device
+              <input
+                id="remember"
+                name="remember"
+                type="checkbox"
+                checked={remember}
+                onChange={e => setRemember(e.target.checked)}
+              />{' '}
+              Remember me on this device
             </label>
             <p id="login-error" role="alert">
               {errorMsg}

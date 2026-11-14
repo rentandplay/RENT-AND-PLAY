@@ -10,9 +10,9 @@ const helpers={
 const view={sort:'rentals',details:{}};
 const selection={period:'custom',from:'2020-01-01',to:'2020-02-29',groupBy:'monthly',categoryId:'',itemId:''};
 
-test('report renders all 14 definitions and safe empty states',()=>{
+test('report renders all definitions and safe empty states',()=>{
   const html=renderAnalyticsReport({},selection,view,helpers);
-  assert.equal(analyticsDefinitions.length,14);
+  assert.equal(analyticsDefinitions.length,23);
   for(const [name] of analyticsDefinitions)assert.ok(html.includes(name),name);
   assert.ok(html.includes('No matching equipment'));
   assert.ok(html.includes('No confirmed rentals'));

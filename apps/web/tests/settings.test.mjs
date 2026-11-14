@@ -114,8 +114,8 @@ test('account & security tab renders active sessions management and real-time se
   const html = render({
     tab: 'account',
     activeSessions: [
-      { id: 'sess-1', device_label: 'Chrome on Windows', ip: '203.0.113.10', last_active_at: '2026-10-07T02:00:00Z', is_current: true },
-      { id: 'sess-2', device_label: 'Safari on iOS', ip: '203.0.113.25', last_active_at: '2026-10-07T01:40:00Z', is_current: false }
+      { id: 'sess-1', device_label: 'Chrome on Windows', ip: '203.0.113.10', last_active_at: '2026-10-07T02:00:00Z', expires_at: '2026-10-21T02:00:00Z', remember: true, is_current: true },
+      { id: 'sess-2', device_label: 'Safari on iOS', ip: '203.0.113.25', last_active_at: '2026-10-07T01:40:00Z', remember: false, is_current: false }
     ],
     securityAlerts: [
       { id: 'alert-1', title: 'Flagged payment proof', message: 'Duplicate reference detected on R-009.', severity: 'HIGH', rental_id: 'r-9', rental_code: 'R-009', created_at: '2026-10-07T02:05:00Z' }
@@ -124,6 +124,8 @@ test('account & security tab renders active sessions management and real-time se
   assert.ok(html.includes('id="settings-active-sessions-card"'));
   assert.ok(html.includes('Chrome on Windows'));
   assert.ok(html.includes('Current session'));
+  assert.ok(html.includes('Remembered (14 days)'));
+  assert.ok(html.includes('Expires: 2026-10-21T02:00:00Z'));
   assert.ok(html.includes('data-revoke-session="sess-2"'));
   assert.ok(html.includes('id="settings-revoke-other-sessions"'));
   assert.ok(html.includes('id="settings-security-alerts-card"'));

@@ -1,11 +1,57 @@
 // Retain small geometry snapshots across report rerenders, never DOM nodes.
 const snapshots = new Map();
+const kpiValues = new Map();
 const running = new WeakMap();
 const pending = new WeakMap();
 const generations = new WeakMap();
 const SVG = 'http://www.w3.org/2000/svg';
 const number = (node, name) => Number(node.getAttribute(name));
 const reduced = view => Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+
+export function animateAnalyticsKPIs(root = document) {
+  const nodes = [...root.querySelectorAll('[data-ana-count-target]')];
+  if (!nodes.length) return;
+  const view = root.ownerDocument?.defaultView || nodes[0].ownerDocument?.defaultView;
+  if (reduced(view) || !view?.requestAnimationFrame) return;
+
+  nodes.forEach(node => {
+    const target = Number(node.dataset.anaCountTarget);
+    const fmt = node.dataset.anaCountFmt || 'number';
+    const key = node.dataset.anaCountKey || node.closest('.ana-kpi')?.querySelector('.ana-kpi-top')?.textContent?.trim() || '';
+    const finalText = node.dataset.anaCountText ?? node.textContent;
+    if (!Number.isFinite(target) || target === 0) {
+      if (key) kpiValues.set(key, 0);
+      return;
+    }
+    const previous = key && kpiValues.has(key) ? kpiValues.get(key) : null;
+    if (previous !== null && Math.abs(previous - target) < 1e-6) return;
+    const from = previous === null ? 0 : previous;
+    kpiValues.set(key, target);
+
+    const decimals = fmt === 'currency' ? 2 : fmt === 'percent' ? (Number.isInteger(target) ? 0 : 1) : (Number.isInteger(target) ? 0 : 1);
+    const formatNum = val => {
+      if (fmt === 'currency') return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(val);
+      if (fmt === 'percent') return `${new Intl.NumberFormat('en-PH', { maximumFractionDigits: decimals }).format(val)}%`;
+      return new Intl.NumberFormat('en-PH', { maximumFractionDigits: decimals }).format(val);
+    };
+
+    const duration = previous === null ? 540 : 380;
+    let started = null;
+    const step = time => {
+      if (!node.isConnected) return;
+      started ??= time;
+      const progress = Math.min(1, (time - started) / duration);
+      if (progress >= 1) {
+        node.textContent = finalText;
+        return;
+      }
+      const eased = 1 - (1 - progress) ** 3;
+      node.textContent = formatNum(from + (target - from) * eased);
+      view.requestAnimationFrame(step);
+    };
+    view.requestAnimationFrame(step);
+  });
+}
 
 export function settleChartMotion(chart) {
   pending.get(chart)?.disconnect(); pending.delete(chart);
@@ -85,7 +131,7 @@ function snapshot(chart) {
   if (!svg || !source.options) return null;
   const [, , width, height] = svg.getAttribute('viewBox').split(' ').map(Number);
   return { key:source.options.id,width,height,presented:Boolean(chart.dataset.anaMotion),
-    signature:JSON.stringify([source.type,source.labels,source.series,source.rows,source.options.currency,source.options.forecastStart]),
+    signature:JSON.stringify([source.type,source.labels,source.series,source.rows,source.steps,source.bins,source.options.currency,source.options.forecastStart]),
     paths:[...chart.querySelectorAll('[data-ana-stroke]')].map(node => ({key:node.dataset.anaStroke,d:node.getAttribute('d'),bottom:Number(node.dataset.anaBottom)})),
     bars:[...chart.querySelectorAll('[data-ana-bar]')].map(node => ({key:node.dataset.anaBar,y:number(node,'y'),height:number(node,'height')}))
   };

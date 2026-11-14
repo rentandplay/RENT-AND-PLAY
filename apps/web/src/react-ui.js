@@ -42,6 +42,8 @@ var icons = {
   users: '<circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M18 15a5 5 0 0 1 3 5"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   chart: '<path d="M4 3v17h17M8 16v-5M13 16V7M18 16v-8"/>',
+  trend: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
   chip: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v5M15 1v5M9 18v5M15 18v5M1 9h5M1 15h5M18 9h5M18 15h5"/><rect x="10" y="10" width="4" height="4"/>',
   settings: '<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>',
   arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
@@ -172,6 +174,7 @@ function LoginView({
   setPasswordResetCountdown
 }) {
   const [showPassword, setShowPassword] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [errorMsg, setErrorMsg] = useState(cleanErrorMessage(initialError));
   const formRef = useRef(null);
   const validationRef = useRef(null);
@@ -384,7 +387,7 @@ function LoginView({
     const form = formRef.current;
     const button = form.querySelector('[type="submit"]');
     if (button.disabled) return;
-    const rememberChecked = form.querySelector("#remember").checked;
+    const rememberChecked = Boolean(form.querySelector("#remember")?.checked ?? remember);
     const body = {
       email: form.querySelector("#email").value,
       password: form.querySelector("#password").value,
@@ -446,7 +449,16 @@ function LoginView({
       onClick: () => setShowPassword((prev) => !prev)
     },
     /* @__PURE__ */ React.createElement(Icon, { name: "eye" })
-  )), /* @__PURE__ */ React.createElement("label", { className: "checkbox" }, /* @__PURE__ */ React.createElement("input", { id: "remember", type: "checkbox" }), " Remember me on this device"), /* @__PURE__ */ React.createElement("p", { id: "login-error", role: "alert" }, errorMsg), /* @__PURE__ */ React.createElement("button", { className: "primary login-submit", type: "submit" }, "Sign in")), /* @__PURE__ */ React.createElement("p", { className: "login-foot" }, "Your account. Your equipment. Your workspace.")), /* @__PURE__ */ React.createElement("footer", null, "\xA9 ", (/* @__PURE__ */ new Date()).getFullYear(), " Rent & Play ", /* @__PURE__ */ React.createElement("span", null, "Built for more play."))));
+  )), /* @__PURE__ */ React.createElement("label", { className: "checkbox" }, /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      id: "remember",
+      name: "remember",
+      type: "checkbox",
+      checked: remember,
+      onChange: (e) => setRemember(e.target.checked)
+    }
+  ), " ", "Remember me on this device"), /* @__PURE__ */ React.createElement("p", { id: "login-error", role: "alert" }, errorMsg), /* @__PURE__ */ React.createElement("button", { className: "primary login-submit", type: "submit" }, "Sign in")), /* @__PURE__ */ React.createElement("p", { className: "login-foot" }, "Your account. Your equipment. Your workspace.")), /* @__PURE__ */ React.createElement("footer", null, "\xA9 ", (/* @__PURE__ */ new Date()).getFullYear(), " Rent & Play ", /* @__PURE__ */ React.createElement("span", null, "Built for more play."))));
 }
 
 // src/react/PasswordChangeView.jsx
@@ -2009,7 +2021,15 @@ function PageHeading({ page, reportSection }) {
   }[reportSection] || "Performance" : pageLabels[page] || page;
   const displayCaption = page === "Reports" && reportInfo ? reportInfo[0] : caption;
   const displayDesc = page === "Reports" && reportInfo ? reportInfo[1] : description;
-  return /* @__PURE__ */ React.createElement("div", { className: "page-heading", title: displayDesc }, /* @__PURE__ */ React.createElement("div", { className: "page-heading-copy" }, /* @__PURE__ */ React.createElement("span", { className: "sr-only" }, displayCaption), /* @__PURE__ */ React.createElement("h1", null, title)));
+  const headingGlyph = page === "Reports" ? reportSection === "forecast" ? "trend" : reportSection === "recommendations" ? "zap" : "chart" : glyph;
+  return /* @__PURE__ */ React.createElement("div", { className: "page-heading", title: displayDesc }, /* @__PURE__ */ React.createElement(
+    "span",
+    {
+      className: `page-heading-icon${page === "Reports" ? " is-analytics" : ""}`,
+      "aria-hidden": "true"
+    },
+    /* @__PURE__ */ React.createElement(Icon, { name: headingGlyph })
+  ), /* @__PURE__ */ React.createElement("div", { className: "page-heading-copy" }, /* @__PURE__ */ React.createElement("span", { className: "sr-only" }, displayCaption), /* @__PURE__ */ React.createElement("h1", null, title), /* @__PURE__ */ React.createElement("p", { className: "page-heading-sub" }, displayDesc)));
 }
 var SKELETON_HTML = `<div class="inv-loading-copy"><span class="inv-loading-spinner" aria-hidden="true"></span><div><strong>Loading your equipment</strong><small>Getting your collection and availability ready\u2026</small></div></div>
   <div class="inv-loading-stats" aria-hidden="true">${Array.from(
@@ -2933,18 +2953,9 @@ function App() {
       return false;
     }
   });
-  const [navGroupExpanded, setNavGroupExpanded] = useState(() => {
-    const initial = Object.fromEntries(navGroups.map((group) => [group.id, false]));
-    try {
-      const saved = JSON.parse(localStorage.getItem("rent-play-nav-groups-pinned") || "{}");
-      const savedGroup = navGroups.find((group) => saved[group.id] === true);
-      if (savedGroup) {
-        initial[savedGroup.id] = true;
-      }
-    } catch {
-    }
-    return initial;
-  });
+  const [navGroupExpanded, setNavGroupExpanded] = useState(
+    () => Object.fromEntries(navGroups.map((group) => [group.id, false]))
+  );
   const [notificationVersion, setNotificationVersion] = useState(0);
   const [renderTick, setRenderTick] = useState(0);
   const userRef = useRef(user);
@@ -3075,6 +3086,7 @@ function App() {
       refreshingRef.current = null;
       dataRef.current = null;
       setUser(null);
+      setRememberSession(false);
       setData(null);
       setConnectionError("");
       stopRentalEventStream();
@@ -3133,19 +3145,6 @@ function App() {
       const route = next === "Reports" ? reportPathForSection(resolvedSection) : pageRoutes[next] || "/";
       if (location.pathname !== route) {
         history[replace ? "replaceState" : "pushState"]({ page: next }, "", route);
-      }
-      const group = navGroups.find((grp) => grp.items.some(([, target]) => target === next));
-      if (group) {
-        setNavGroupExpanded(() => {
-          const updated = Object.fromEntries(
-            navGroups.map((g) => [g.id, g.id === group.id])
-          );
-          try {
-            localStorage.setItem("rent-play-nav-groups-pinned", JSON.stringify(updated));
-          } catch {
-          }
-          return updated;
-        });
       }
       triggerRender();
       window.scrollTo(0, 0);
@@ -3589,6 +3588,7 @@ function App() {
       try {
         const result = await api("/auth/me");
         if (!active) return;
+        setRememberSession(Boolean(result.rememberSession));
         userRef.current = result.user;
         setUser(result.user);
         setBooting(false);
@@ -3675,6 +3675,7 @@ function App() {
       userRef.current = null;
       dataRef.current = null;
       setUser(null);
+      setRememberSession(false);
       setData(null);
       setConnectionError("");
       stopRentalEventStream();
@@ -3693,14 +3694,9 @@ function App() {
   const handleToggleNavGroup = (groupId) => {
     setNavGroupExpanded((prev) => {
       const willOpen = !prev[groupId];
-      const next = Object.fromEntries(
+      return Object.fromEntries(
         navGroups.map((group) => [group.id, group.id === groupId ? willOpen : false])
       );
-      try {
-        localStorage.setItem("rent-play-nav-groups-pinned", JSON.stringify(next));
-      } catch {
-      }
-      return next;
     });
     requestAnimationFrame(() => {
       document.getElementById(`nav-group-toggle-${groupId}`)?.focus();

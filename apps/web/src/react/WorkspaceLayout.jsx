@@ -110,12 +110,27 @@ export function PageHeading({ page, reportSection }) {
 
   const displayCaption = page === 'Reports' && reportInfo ? reportInfo[0] : caption;
   const displayDesc = page === 'Reports' && reportInfo ? reportInfo[1] : description;
+  const headingGlyph =
+    page === 'Reports'
+      ? reportSection === 'forecast'
+        ? 'trend'
+        : reportSection === 'recommendations'
+          ? 'zap'
+          : 'chart'
+      : glyph;
 
   return (
     <div className="page-heading" title={displayDesc}>
+      <span
+        className={`page-heading-icon${page === 'Reports' ? ' is-analytics' : ''}`}
+        aria-hidden="true"
+      >
+        <Icon name={headingGlyph} />
+      </span>
       <div className="page-heading-copy">
         <span className="sr-only">{displayCaption}</span>
         <h1>{title}</h1>
+        <p className="page-heading-sub">{displayDesc}</p>
       </div>
     </div>
   );

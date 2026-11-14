@@ -33,6 +33,8 @@ test('React SessionLoadingView and LoginView render accessible markup and theme 
   assert.match(loginHtml, /class="login"/);
   assert.match(loginHtml, /OWNER \/ OPERATOR WORKSPACE/);
   assert.match(loginHtml, /id="login-theme"/);
+  assert.match(loginHtml, /id="remember"/);
+  assert.match(loginHtml, /Remember me on this device/);
   assert.match(loginHtml, /Switch to light mode/);
   assert.match(loginHtml, /temporarily unavailable/);
   assert.doesNotMatch(loginHtml, /ECONNREFUSED|127\.0\.0\.1|database|backend/i);

@@ -14753,6 +14753,14 @@ details[open] .chevron-arrow {
   vertical-align: middle;
 }
 
+.session-badge.remembered-session-badge {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .current-session-badge {
   display: inline-flex;
   align-items: center;
@@ -14998,6 +15006,12 @@ details[open] .chevron-arrow {
   background: #1e293b;
   color: #94a3b8;
   border-color: #334155;
+}
+
+[data-theme="dark"] .session-badge.remembered-session-badge {
+  background: rgba(30, 58, 138, 0.35);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.4);
 }
 
 

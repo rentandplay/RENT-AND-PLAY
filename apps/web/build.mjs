@@ -110,6 +110,7 @@ const sourceFiles = [
   'analytics-report.js',
   'analytics-workspace.js',
   'analytics-insights.js',
+  'analytics-models.js',
   'analytics-targets.js',
   'dashboard-analytics.js',
   'analytics-charts.js',

@@ -73,17 +73,9 @@ export function App() {
       return false;
     }
   });
-  const [navGroupExpanded, setNavGroupExpanded] = useState(() => {
-    const initial = Object.fromEntries(navGroups.map(group => [group.id, false]));
-    try {
-      const saved = JSON.parse(localStorage.getItem('rent-play-nav-groups-pinned') || '{}');
-      const savedGroup = navGroups.find(group => saved[group.id] === true);
-      if (savedGroup) {
-        initial[savedGroup.id] = true;
-      }
-    } catch {}
-    return initial;
-  });
+  const [navGroupExpanded, setNavGroupExpanded] = useState(() =>
+    Object.fromEntries(navGroups.map(group => [group.id, false]))
+  );
   const [notificationVersion, setNotificationVersion] = useState(0);
   const [renderTick, setRenderTick] = useState(0);
 
@@ -233,6 +225,7 @@ export function App() {
       refreshingRef.current = null;
       dataRef.current = null;
       setUser(null);
+      setRememberSession(false);
       setData(null);
       setConnectionError('');
       stopRentalEventStream();
@@ -309,18 +302,6 @@ export function App() {
         next === 'Reports' ? reportPathForSection(resolvedSection) : pageRoutes[next] || '/';
       if (location.pathname !== route) {
         history[replace ? 'replaceState' : 'pushState']({ page: next }, '', route);
-      }
-      const group = navGroups.find(grp => grp.items.some(([, target]) => target === next));
-      if (group) {
-        setNavGroupExpanded(() => {
-          const updated = Object.fromEntries(
-            navGroups.map(g => [g.id, g.id === group.id])
-          );
-          try {
-            localStorage.setItem('rent-play-nav-groups-pinned', JSON.stringify(updated));
-          } catch {}
-          return updated;
-        });
       }
       triggerRender();
       window.scrollTo(0, 0);
@@ -838,6 +819,7 @@ export function App() {
       try {
         const result = await api('/auth/me');
         if (!active) return;
+        setRememberSession(Boolean(result.rememberSession));
         userRef.current = result.user;
         setUser(result.user);
         setBooting(false);
@@ -930,6 +912,7 @@ export function App() {
       userRef.current = null;
       dataRef.current = null;
       setUser(null);
+      setRememberSession(false);
       setData(null);
       setConnectionError('');
       stopRentalEventStream();
@@ -949,13 +932,9 @@ export function App() {
   const handleToggleNavGroup = groupId => {
     setNavGroupExpanded(prev => {
       const willOpen = !prev[groupId];
-      const next = Object.fromEntries(
+      return Object.fromEntries(
         navGroups.map(group => [group.id, group.id === groupId ? willOpen : false])
       );
-      try {
-        localStorage.setItem('rent-play-nav-groups-pinned', JSON.stringify(next));
-      } catch {}
-      return next;
     });
     requestAnimationFrame(() => {
       document.getElementById(`nav-group-toggle-${groupId}`)?.focus();

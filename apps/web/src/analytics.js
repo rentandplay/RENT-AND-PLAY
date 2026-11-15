@@ -144,12 +144,19 @@ const intersect=(intervals,windows)=>intervals.flatMap(([start,end])=>windows.ma
 function collectionWindows(item,history,start,end) {
   const created=ms(item.created_at),left=Math.max(start,created??start);
   if(left>=end)return {windows:[],assumed:created===null};
-  const events=history.filter(row=>ms(row.changed_at)!==null).sort((a,b)=>ms(a.changed_at)-ms(b.changed_at));
-  const previous=events.filter(row=>ms(row.changed_at)<=left).at(-1),next=events.find(row=>ms(row.changed_at)>left);
+  // Status history is grouped and sorted once when the report is calculated.
+  let previous=null,next=null;const transitions=[];
+  for(const event of history){
+    const at=ms(event.changed_at);if(at===null)continue;
+    if(at<=left){previous=event;continue;}
+    next ||= event;
+    if(at>=end)break;
+    transitions.push(event);
+  }
   if(item.is_active===false&&!previous&&!next?.old_status)return {windows:null,assumed:created===null};
   let active=previous?!['INACTIVE','RETIRED'].includes(previous.new_status):next?.old_status?!['INACTIVE','RETIRED'].includes(next.old_status):item.is_active!==false;
   let cursor=left;const windows=[];
-  for(const event of events.filter(row=>ms(row.changed_at)>left&&ms(row.changed_at)<end)){
+  for(const event of transitions){
     const at=ms(event.changed_at);if(active)windows.push([cursor,at]);cursor=at;active=!['INACTIVE','RETIRED'].includes(event.new_status);
   }
   if(active)windows.push([cursor,end]);
@@ -167,6 +174,9 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const stockCatalog=new Map();
   for(const item of items){const key=String(item.stock_group_id||item.id),current=stockCatalog.get(key);if(!current||current.is_active===false&&item.is_active!==false||(current.is_active!==false)===(item.is_active!==false)&&String(item.id)===key)stockCatalog.set(key,item);}
   const categoryFor=id=>{const item=itemMap.get(String(id));return stockCatalog.get(String(item?.stock_group_id||id))?.category_id??item?.category_id;};
+  const statusHistoryByItem=new Map();
+  for(const event of data.statusHistory||[]){if(ms(event.changed_at)===null)continue;const key=String(event.item_id);if(!statusHistoryByItem.has(key))statusHistoryByItem.set(key,[]);statusHistoryByItem.get(key).push(event);}
+  for(const events of statusHistoryByItem.values())events.sort((a,b)=>ms(a.changed_at)-ms(b.changed_at));
   const selectedGroup=selection.itemId?String(itemMap.get(String(selection.itemId))?.stock_group_id||selection.itemId):'';
   const allowed=id=>{const item=itemMap.get(String(id));return (!selection.itemId||String(id)===String(selection.itemId)||String(item?.stock_group_id||id)===selectedGroup)&&(!selection.categoryId||String(categoryFor(id))===String(selection.categoryId));};
   const selectedItems=items.filter(item=>allowed(item.id));
@@ -227,7 +237,7 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   let assumedCollectionStart=0,unknownCollectionTime=0;
   for(const row of performanceMap.values()){
     const item=itemMap.get(row.id),rentals=rentalIntervals.get(row.id)||[],care=maintenanceIntervals.get(row.id)||[];
-    const observation=item?collectionWindows(item,(data.statusHistory||[]).filter(event=>String(event.item_id)===row.id),start,asOf):{windows:null,assumed:false};
+    const observation=item?collectionWindows(item,statusHistoryByItem.get(row.id)||[],start,asOf):{windows:null,assumed:false};
     row.fees/=100;row.downtimeHours=intervalHours(care);
     row.rentedHours=intervalHours(observation.windows?intersect(rentals,observation.windows):rentals);
     row.observedHours=observation.windows?intervalHours(observation.windows):null;
@@ -244,7 +254,9 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const categoryRevenue=[...categoryTotals.values()].map(row=>({...row,fees:row.fees/100})).sort((a,b)=>b.fees-a.fees||b.rentals-a.rentals||a.name.localeCompare(b.name));
   const groupBy=['daily','weekly','monthly'].includes(selection.groupBy)?selection.groupBy:range.days>90?'monthly':range.days>31?'weekly':'daily';
   const trend=trendBuckets(range,groupBy);
-  for(const row of confirmed){const key=manilaDateKey(row.confirmed_rental_at),bucket=trend.find(value=>key>=value.from&&key<=value.to);if(bucket){bucket.rentals++;bucket.fees+=cents(row.rental_fee);}}
+  const trendByDate=new Map();
+  trend.forEach((bucket,index)=>{for(let day=bucket.from;day<=bucket.to;day=shiftDate(day,1))trendByDate.set(day,index);});
+  for(const row of confirmed){const index=trendByDate.get(manilaDateKey(row.confirmed_rental_at)),bucket=index===undefined?null:trend[index];if(bucket){bucket.rentals++;bucket.fees+=cents(row.rental_fee);}}
   for(const bucket of trend)bucket.fees/=100;
   const reserved=new Set(selectedTransactions.filter(row=>['PENDING_VERIFICATION','PENDING_ADMIN_APPROVAL','APPROVED'].includes(row.status)).map(row=>String(row.item_id)));
   const equipmentStatus={Available:0,Rented:0,Pending:0,Maintenance:0,Archived:0};

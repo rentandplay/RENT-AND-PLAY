@@ -1051,25 +1051,30 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
 
   // Compute compact Silhouette check internally (Modeling Mod 6).
   let silSum = 0;
-  let silCount = 0;
+  const silhouetteSampleSize = Math.min(totalCustomers, 400);
+  let silhouetteSamples = 0;
   if (rawClusters.length >= 2) {
-    for (let i = 0; i < totalCustomers; i++) {
+    const clusterMembers = centroids.map((_, cluster) => vectors.map((_, index) => index).filter(index => assign[index] === cluster));
+    // Evenly spaced records give a deterministic bounded cost for large customer bases.
+    for (let sample = 0; sample < silhouetteSampleSize; sample++) {
+      const i = Math.floor((sample + .5) * totalCustomers / silhouetteSampleSize);
       const ci = assign[i];
-      const samePts = vectors.filter((_, j) => j !== i && assign[j] === ci);
+      const sameIndices = clusterMembers[ci];
+      const samePts = sameIndices.length > 1 ? sameIndices : [];
       // A singleton has no within-cluster comparison: its silhouette is zero, not one.
-      if (!samePts.length) { silCount++; continue; }
-      const a = samePts.length ? samePts.reduce((s, p) => s + Math.sqrt(dist2(vectors[i], p)), 0) / samePts.length : 0;
+      if (!samePts.length) { silhouetteSamples++; continue; }
+      const a = samePts.reduce((s, index) => s + (index === i ? 0 : Math.sqrt(dist2(vectors[i], vectors[index]))), 0) / (samePts.length - 1);
       let b = Infinity;
       for (let c = 0; c < centroids.length; c++) {
         if (c === ci) continue;
-        const otherPts = vectors.filter((_, j) => assign[j] === c);
+        const otherPts = clusterMembers[c];
         if (!otherPts.length) continue;
-        const meanDist = otherPts.reduce((s, p) => s + Math.sqrt(dist2(vectors[i], p)), 0) / otherPts.length;
+        const meanDist = otherPts.reduce((s, index) => s + Math.sqrt(dist2(vectors[i], vectors[index])), 0) / otherPts.length;
         if (meanDist < b) b = meanDist;
       }
       if (Number.isFinite(b)) {
         silSum += Math.max(a, b) > 0 ? (b - a) / Math.max(a, b) : 0;
-        silCount++;
+        silhouetteSamples++;
       }
     }
   }
@@ -1079,7 +1084,9 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
     available: true,
     method: 'kmeans',
     totalCustomers,
-    silhouette: silCount > 0 ? round(silSum / silCount, 2) : null,
+    silhouette: silhouetteSamples > 0 ? round(silSum / silhouetteSamples, 2) : null,
+    silhouetteSamples,
+    silhouetteApproximate: rawClusters.length >= 2 && totalCustomers > silhouetteSampleSize,
     segments,
     churnWatchCount
   };

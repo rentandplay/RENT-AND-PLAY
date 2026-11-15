@@ -7,7 +7,7 @@ import { simulateWhatIfScenario } from './analytics-models.js';
 import { bindAnalyticsCharts } from './analytics-charts.js';
 import { updateForecastWorkspace } from './forecast-workspace.js';
 import { renderAnalyticsReport } from './analytics-report.js';
-import { renderWhatIfContent } from './analytics-workspace.js';
+import { renderWhatIfContent, getCachedAnalyticsDetail } from './analytics-workspace.js';
 import { renderSettings, settingsTabs, bindBusinessSettingsNavigation, bindReceiptSettingsPreview, bindAnnouncementSettingsPreview, defaultTermsAndConditions, defaultRentalTerms, defaultPrivacyPolicy, defaultRefundPolicy, defaultAcceptedIds, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
 import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
@@ -584,6 +584,7 @@ export function createWorkspaceUI(h) {
       escape: e,
       paged,
       table,
+      cacheIdentity: model,
       canManageTargets: user?.role === 'OWNER',
       hasFinanceLoader: true,
       financeState
@@ -1299,7 +1300,9 @@ export function createWorkspaceUI(h) {
         };
         const out = whatIfForm.querySelector('#analytics-whatif-output');
         if (!out) return;
-        const detail = calculateDetailedAnalytics(model, analyticsSelection);
+        const detail = getCachedAnalyticsDetail(model, analyticsSelection, 'recommendations')
+          || getCachedAnalyticsDetail(model, analyticsSelection, 'performance')
+          || calculateDetailedAnalytics(model, analyticsSelection, undefined, { section: 'performance' });
         if (detail.error) return;
         const sim = simulateWhatIfScenario(detail, reportView.whatIf);
         const { outputHtml, visualHtml } = renderWhatIfContent(sim, e);

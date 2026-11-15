@@ -44,6 +44,12 @@ export function analyticsEquipmentOptions(items = []) {
 
 export function groupEquipmentPerformance(performance, items, categories = []) {
   const itemMap = new Map(items.map(item => [String(item.id), item])), groups = new Map();
+  const unitsByGroup = new Map();
+  for (const item of items) {
+    const groupId = String(item.stock_group_id || item.id);
+    if (!unitsByGroup.has(groupId)) unitsByGroup.set(groupId, []);
+    unitsByGroup.get(groupId).push(item);
+  }
   const categoryMap = new Map(categories.map(category => [String(category.id), category.name]));
   for (const row of performance) {
     const key = String(itemMap.get(row.id)?.stock_group_id || row.id);
@@ -51,7 +57,7 @@ export function groupEquipmentPerformance(performance, items, categories = []) {
     groups.get(key).push(row);
   }
   return [...groups].map(([stockGroupId, rows]) => {
-    const units = items.filter(item => String(item.stock_group_id || item.id) === stockGroupId), liveUnits = units.filter(item => item.is_active !== false);
+    const units = unitsByGroup.get(stockGroupId) || [], liveUnits = units.filter(item => item.is_active !== false);
     const live = rows.filter(row => row.active), measured = rows.filter(row => row.observedHours > 0);
     const canonical = liveUnits.find(item => String(item.id) === stockGroupId) || liveUnits[0] || units.find(item => String(item.id) === stockGroupId) || units[0];
     const representative = rows.find(row => row.id === String(canonical?.id)) || live.find(row => row.id === stockGroupId) || live[0] || rows[0];
@@ -130,7 +136,10 @@ function recommendationsFor(result, groups, comparison, targets) {
   return actions.sort((a, b) => order[a.priority] - order[b.priority]);
 }
 
-export function calculateDetailedAnalytics(data = {}, selection = {}, now = new Date()) {
+export function calculateDetailedAnalytics(data = {}, selection = {}, now = new Date(), options = {}) {
+  const section = options.section || 'all';
+  const includeForecastInsights = section === 'all' || section === 'forecast';
+  const includeRecommendationInsights = section === 'all' || section === 'recommendations';
   const result = calculateAnalytics(data, selection, now);
   if (result.error) return result;
   const comparison = comparisonFor(data, selection, result, now);
@@ -231,9 +240,9 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   const pivot = buildCategoryChannelPivot(result.confirmed, data.items || [], data.categories || []);
   const maintenanceIssues = buildMaintenanceTextMining((data.maintenance || []).filter(row=>inScope(row.item_id) && (!recordDate(row.started_at || row.created_at) || recordDate(row.started_at || row.created_at)<=cutoff)), result.range);
   const forecastComparison = buildForecastComparison(result);
-  const lateRiskTree = buildLateReturnDecisionTree(scopeTransactions, data.items || [], data.categories || [], cutoff);
-  const customerSegments = buildCustomerSegmentsAndChurn(scopeTransactions, cutoff);
-  const outlierAlerts = buildOutlierAlerts({
+  const lateRiskTree = includeForecastInsights ? buildLateReturnDecisionTree(scopeTransactions, data.items || [], data.categories || [], cutoff) : null;
+  const customerSegments = includeForecastInsights ? buildCustomerSegmentsAndChurn(scopeTransactions, cutoff) : null;
+  const outlierAlerts = includeForecastInsights ? buildOutlierAlerts({
     confirmed: result.confirmed,
     returns: result.returns,
     transactions: scopeTransactions,
@@ -242,8 +251,8 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
     durationStats: durationHistogram,
     speedStats: speedHistogram,
     now: cutoff
-  });
-  const marketBasket = buildMarketBasketBundles(result.confirmed, data.items || []);
+  }) : [];
+  const marketBasket = includeRecommendationInsights ? buildMarketBasketBundles(result.confirmed, data.items || []) : null;
 
   const prevTotals = comparison.previous?.totals || {};
   const outcomeDelta = (curr, prev, higherBetter = true) => {

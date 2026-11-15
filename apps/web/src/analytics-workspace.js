@@ -6,6 +6,34 @@ import { manilaDateKey } from './analytics.js';
 import { recordAttrs } from './record-links.js';
 import { normalizeReportSection } from './workspace-navigation.js';
 
+const analyticsDetailCache = new WeakMap();
+const analyticsDetailCacheMs = 12000;
+const selectionCacheKey = selection => JSON.stringify([selection.period, selection.from || '', selection.to || '', selection.categoryId || '', selection.itemId || '', selection.groupBy || '']);
+const financeCacheKey = model => {
+  const value = model?.financeSummary;
+  return value ? JSON.stringify([value.from, value.to, value.totals, value.rental_totals]) : '';
+};
+
+function cachedAnalyticsDetail(source, model, selection, section, now) {
+  const key = `${section}:${selectionCacheKey(selection)}:${financeCacheKey(model)}`;
+  let cache = analyticsDetailCache.get(source);
+  if (!cache) { cache = new Map(); analyticsDetailCache.set(source, cache); }
+  const cached = cache.get(key), timestamp = Date.now();
+  if (cached?.model === model && timestamp - cached.timestamp < analyticsDetailCacheMs) return cached.result;
+  const result = calculateDetailedAnalytics(model, selection, now, { section });
+  cache.set(key, { model, result, timestamp });
+  while (cache.size > 6) cache.delete(cache.keys().next().value);
+  return result;
+}
+
+export function getCachedAnalyticsDetail(source, selection, section) {
+  if (!source || typeof source !== 'object') return null;
+  const prefix = `${section}:${selectionCacheKey(selection)}:`;
+  const cache = analyticsDetailCache.get(source);
+  const entry = cache && [...cache].find(([key, value]) => key.startsWith(prefix) && value.timestamp + analyticsDetailCacheMs > Date.now());
+  return entry?.[1].result || null;
+}
+
 const number = value => value == null ? '—' : new Intl.NumberFormat('en-PH', { maximumFractionDigits: 1 }).format(value);
 const cash = value => value == null ? '—' : new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(value);
 const percent = value => value == null ? '—' : `${number(value * 100)}%`;
@@ -41,8 +69,9 @@ export function renderWhatIfContent(sim, escapeHtml) {
 export function renderAnalyticsWorkspace(model = {}, selection = {}, view = {}, h) {
   selection = { ...selection, period: selection.period || '365d', groupBy: selection.groupBy || 'monthly' };
   const { escape: e, table, paged, definitions = [] } = h, now = h.now || new Date();
+  const section = normalizeReportSection(view.section);
   // Recalculate live overdue status at render time, including within the same day.
-  const result = calculateDetailedAnalytics(model, selection, now), section = normalizeReportSection(view.section), today = manilaDateKey(now);
+  const result = cachedAnalyticsDetail(h.cacheIdentity || model, model, selection, section, now), today = manilaDateKey(now);
   const empty = (title, note) => `<div class="ana-empty"><strong>${e(title)}</strong><p>${e(note)}</p></div>`;
   const head = (title, note, controls = '') => `<header class="ana-panel-head"><div><h3>${e(title)}</h3><p>${e(note)}</p></div>${controls}</header>`;
   const sectionBlock = (num, title, subtitle) => `<div class="ana-section-divider" role="heading" aria-level="3"><span class="ana-section-num">${e(num)}</span><div class="ana-section-meta"><strong>${e(title)}</strong><span>${e(subtitle)}</span></div></div>`;
@@ -328,7 +357,7 @@ export function renderAnalyticsWorkspace(model = {}, selection = {}, view = {}, 
 
     const seg = result.customerSegments || { available: false, segments: [] };
     const segmentPanel = visiblePanel('customer-segments','Customer groups & churn watch',`Selected equipment/category history through ${date(result.range.to)}; inactivity measured at that cutoff`,seg.available
-      ? `<div class="ana-kpis is-compact">${kpi('Active & past customers grouped',number(seg.totalCustomers),'Aggregate groups; customer identities are not displayed','',null,{icon:'rentals'})}${kpi('Inactive customers (>21 days)',number(seg.churnWatchCount),'No booking for over 21 days at the cutoff; not a churn prediction','',null,{icon:'overdue',tone:seg.churnWatchCount?'warn':'good'})}</div>${table(['GROUP','CUSTOMERS','AVG RENTALS','AVG SPEND','REVENUE SHARE','SUGGESTED FOCUS'],seg.segments.map(s=>`<tr><td><strong>${e(s.label)}</strong></td><td>${number(s.customers)} (${percent(s.customerShare)})</td><td>${number(s.avgRentals)}</td><td>${cash(s.avgSpend)}</td><td>${inlineDataBar(s.revenueShare*100,100,percent(s.revenueShare),'teal')}</td><td>${e(s.note)}</td></tr>`).join(''))}<p class="ana-note">${seg.method === 'kmeans' ? `Exploratory k-means grouping of normalized booking count, recorded fees and days since last booking. ${seg.segments.length} nonempty groups; silhouette ${seg.silhouette == null ? 'not estimable' : number(seg.silhouette)} (−1 to 1; higher means better separation).` : 'Rule-based activity tiers are used for this small sample; clustering has not been fitted.'} Group separation does not measure churn prediction accuracy. The 21-day inactivity threshold is a review heuristic.</p>`
+      ? `<div class="ana-kpis is-compact">${kpi('Active & past customers grouped',number(seg.totalCustomers),'Aggregate groups; customer identities are not displayed','',null,{icon:'rentals'})}${kpi('Inactive customers (>21 days)',number(seg.churnWatchCount),'No booking for over 21 days at the cutoff; not a churn prediction','',null,{icon:'overdue',tone:seg.churnWatchCount?'warn':'good'})}</div>${table(['GROUP','CUSTOMERS','AVG RENTALS','AVG SPEND','REVENUE SHARE','SUGGESTED FOCUS'],seg.segments.map(s=>`<tr><td><strong>${e(s.label)}</strong></td><td>${number(s.customers)} (${percent(s.customerShare)})</td><td>${number(s.avgRentals)}</td><td>${cash(s.avgSpend)}</td><td>${inlineDataBar(s.revenueShare*100,100,percent(s.revenueShare),'teal')}</td><td>${e(s.note)}</td></tr>`).join(''))}<p class="ana-note">${seg.method === 'kmeans' ? `Exploratory k-means grouping of normalized booking count, recorded fees and days since last booking. ${seg.segments.length} nonempty groups; silhouette ${seg.silhouette == null ? 'not estimable' : number(seg.silhouette)} (−1 to 1; higher means better separation).${seg.silhouetteApproximate ? ` Deterministic sample of ${seg.silhouetteSamples} from ${seg.totalCustomers} customers.` : ''}` : 'Rule-based activity tiers are used for this small sample; clustering has not been fitted.'} Group separation does not measure churn prediction accuracy. The 21-day inactivity threshold is a review heuristic.</p>`
       : empty('Need a few more customers',seg.reason || 'Aggregate customer groups appear once at least 3 unique customers have confirmed rentals.'));
 
     const outliers = result.outlierAlerts || [];

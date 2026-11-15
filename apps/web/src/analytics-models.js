@@ -1054,7 +1054,8 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
   const silhouetteSampleSize = Math.min(totalCustomers, 400);
   let silhouetteSamples = 0;
   if (rawClusters.length >= 2) {
-    const clusterMembers = centroids.map((_, cluster) => vectors.map((_, index) => index).filter(index => assign[index] === cluster));
+    const clusterMembers = centroids.map(() => []);
+    assign.forEach((cluster, index) => clusterMembers[cluster].push(index));
     // Evenly spaced records give a deterministic bounded cost for large customer bases.
     for (let sample = 0; sample < silhouetteSampleSize; sample++) {
       const i = Math.floor((sample + .5) * totalCustomers / silhouetteSampleSize);

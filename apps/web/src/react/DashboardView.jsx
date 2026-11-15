@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from './react-shim.js';
+import { formatElapsedDuration } from '../date-time.js';
 import { AnalyticsPulse } from './AnalyticsPulse.jsx';
 import {
   Icon,
@@ -8,6 +9,7 @@ import {
   escape,
   money,
   initials,
+  date,
   formatDate,
   badge
 } from './icons.jsx';
@@ -103,24 +105,23 @@ function getDueInfo(r) {
     return { badge: 'Starts at handoff', isOverdue: false, isDueSoon: false };
   }
   if (!r.due_at) return { badge: 'Philippine time', isOverdue: false, isDueSoon: false };
-  const due = new Date(r.due_at).getTime();
+  const dueDate = date(r.due_at);
+  const due = dueDate ? dueDate.getTime() : NaN;
   const now = Date.now();
-  if (isNaN(due)) return { badge: 'Philippine time', isOverdue: false, isDueSoon: false };
+  if (!Number.isFinite(due)) return { badge: 'Philippine time', isOverdue: false, isDueSoon: false };
   const diffMs = due - now;
   if (diffMs < 0) {
-    const minutes = Math.max(1, Math.floor(-diffMs / 60000));
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
     return {
-      badge: `Overdue by ${hours ? `${hours}h ` : ''}${mins ? `${mins}m` : ''}`.trim(),
+      badge: `Overdue by ${formatElapsedDuration(diffMs)}`,
+      title: `Overdue by ${formatElapsedDuration(diffMs, { verbose: true })}`,
       isOverdue: true,
       isDueSoon: false
     };
   }
   if (diffMs <= 2 * 3600000) {
-    const mins = Math.max(1, Math.floor(diffMs / 60000));
     return {
-      badge: `Due in ${mins}m`,
+      badge: `Due in ${formatElapsedDuration(diffMs)}`,
+      title: `Due in ${formatElapsedDuration(diffMs, { verbose: true })}`,
       isOverdue: false,
       isDueSoon: true
     };
@@ -238,9 +239,7 @@ export function DashboardView({
       ? `<section class="record-section"><h3>Extension request pending</h3><p>Customer requested more time (+${Math.round(Number(extReq.quote?.billed_minutes || extReq.additional_minutes || 0))} mins · ${money(extReq.additional_fee)}). Open Transactions or notification details to review and approve.</p></section>`
       : '';
     const dueInfo = getDueInfo(r);
-    const overdueLabel = dueInfo.isOverdue
-      ? `Overdue by ${Math.max(1, Math.ceil((Date.now() - new Date(r.due_at).getTime()) / 3600000))}h`
-      : '';
+    const overdueLabel = dueInfo.isOverdue ? dueInfo.badge : '';
     showModal(
       'Rental details',
       `<div class="transaction-record-modal">
@@ -621,7 +620,10 @@ export function DashboardView({
                           </td>
                           <td>
                             <strong>{formatDate(r.due_at)}</strong>
-                            <small className={dueInfo.isOverdue ? 'due-overdue-alert' : (dueInfo.isDueSoon || r.extension_request?.status === 'PENDING') ? 'due-soon-alert' : ''}>
+                            <small
+                              className={dueInfo.isOverdue ? 'due-overdue-alert' : (dueInfo.isDueSoon || r.extension_request?.status === 'PENDING') ? 'due-soon-alert' : ''}
+                              title={r.extension_request?.status === 'PENDING' ? undefined : dueInfo.title}
+                            >
                               {r.extension_request?.status === 'PENDING'
                                 ? 'Extension requested'
                                 : (Array.isArray(r.extension_history) && r.extension_history.length > 0 && dueInfo.badge === 'Philippine time')

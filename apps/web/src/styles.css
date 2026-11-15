@@ -12956,7 +12956,6 @@ input[aria-invalid="true"]{border-color:#b42318!important}
 .ana-action-filters button[aria-pressed="true"] { border-color: var(--ana-accent); background: #ee853414; color: var(--ana-accent); font-weight: 700; }
 .ana-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .ana-action-card { padding: 22px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); min-width: 0; display: flex; flex-direction: column; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03); transition: border-color .15s ease, box-shadow .15s ease; }
-.ana-action-card:hover { border-color: color-mix(in srgb, var(--ui-border) 70%, var(--ui-text)); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05); }
 .ana-action-card > header { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin-bottom: 14px; }
 .ana-card-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ana-priority { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-muted); background: var(--ui-soft); padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }

@@ -12,6 +12,7 @@ import {
   PageHeading
 } from '../src/react-ui.js';
 import { enrichVerification } from '../src/transaction-records.js';
+import { formatDurationParts, formatElapsedDuration } from '../src/date-time.js';
 
 test('React SessionLoadingView and LoginView render accessible markup and theme controls', () => {
   const loadingHtml = renderToStaticMarkup(React.createElement(SessionLoadingView));
@@ -166,6 +167,47 @@ test('React DashboardView and PageHeading render live stats, rental rows, revenu
   assert.match(recentlyOverdueHtml, /Overdue by 30m/);
   assert.doesNotMatch(recentlyOverdueHtml, /Overdue by 1h 30m/);
 
+  const multiDayOverdueHtml = renderToStaticMarkup(React.createElement(DashboardView, {
+    data: { ...dashboardData, rentals: [{ ...dashboardData.rentals[0], due_at: new Date(Date.now() - (123 * 60 + 30) * 60000).toISOString() }] },
+    filter: 'All rentals', query: '', rentalPage: 0, period: 'This week',
+    onNavigate() {}, onFilterChange() {}, onQueryChange() {}, onRentalPageChange() {}, onPeriodChange() {}, showModal() {}
+  }));
+  assert.match(multiDayOverdueHtml, /Overdue by 5d 3h 30m/);
+  assert.match(multiDayOverdueHtml, /title="Overdue by 5 days, 3 hours, 30 minutes"/);
+  assert.doesNotMatch(multiDayOverdueHtml, /Overdue by 123h/);
+
+  const multiWeekOverdueHtml = renderToStaticMarkup(React.createElement(DashboardView, {
+    data: { ...dashboardData, rentals: [{ ...dashboardData.rentals[0], due_at: new Date(Date.now() - ((9 * 24 + 3) * 60 + 30) * 60000).toISOString() }] },
+    filter: 'All rentals', query: '', rentalPage: 0, period: 'This week',
+    onNavigate() {}, onFilterChange() {}, onQueryChange() {}, onRentalPageChange() {}, onPeriodChange() {}, showModal() {}
+  }));
+  assert.match(multiWeekOverdueHtml, /Overdue by 1w 2d 3h 30m/);
+  assert.match(multiWeekOverdueHtml, /title="Overdue by 1 week, 2 days, 3 hours, 30 minutes"/);
+
+  const dueSoonHtml = renderToStaticMarkup(React.createElement(DashboardView, {
+    data: { ...dashboardData, rentals: [{ ...dashboardData.rentals[0], displayStatus: 'Due today', due_at: new Date(Date.now() + 90 * 60000 + 30000).toISOString() }] },
+    filter: 'All rentals', query: '', rentalPage: 0, period: 'This week',
+    onNavigate() {}, onFilterChange() {}, onQueryChange() {}, onRentalPageChange() {}, onPeriodChange() {}, showModal() {}
+  }));
+  assert.match(dueSoonHtml, /Due in 1h 30m/);
+
+});
+
+test('formatDurationParts and formatElapsedDuration break down hours, days, and weeks specifically', () => {
+  assert.equal(formatDurationParts(0), '1m');
+  assert.equal(formatDurationParts(30), '30m');
+  assert.equal(formatDurationParts(60), '1h');
+  assert.equal(formatDurationParts(135), '2h 15m');
+  assert.equal(formatDurationParts(1440), '1d');
+  assert.equal(formatDurationParts(1445), '1d 5m');
+  assert.equal(formatDurationParts(123 * 60 + 30), '5d 3h 30m');
+  assert.equal(formatDurationParts(123 * 60 + 30, { verbose: true }), '5 days, 3 hours, 30 minutes');
+  assert.equal(formatDurationParts(7 * 24 * 60), '1w');
+  assert.equal(formatDurationParts((9 * 24 + 3) * 60 + 30), '1w 2d 3h 30m');
+  assert.equal(formatDurationParts((9 * 24 + 3) * 60 + 30, { verbose: true }), '1 week, 2 days, 3 hours, 30 minutes');
+  assert.equal(formatDurationParts(14 * 24 * 60 + 5), '2w 5m');
+  assert.equal(formatElapsedDuration(-15000), '1m');
+  assert.equal(formatElapsedDuration(-(7 * 24 * 60 + 30) * 60000), '1w 30m');
 });
 
 test('Global ESP32 TerminalPendingBanner surfaces across workspace pages without duplicating on Dashboard or ESP32 terminal', () => {

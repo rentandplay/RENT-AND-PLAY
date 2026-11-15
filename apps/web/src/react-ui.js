@@ -589,6 +589,9 @@ function PasswordChangeView({
 import { pageInfo } from "./workspace-navigation.js";
 import { renderRentalNotifications } from "./notifications.js";
 
+// src/react/DashboardView.jsx
+import { formatElapsedDuration } from "./date-time.js";
+
 // src/react/AnalyticsPulse.jsx
 import { calculateDashboardPulse } from "./dashboard-analytics.js";
 var dateLabel = (key) => new Intl.DateTimeFormat("en-PH", { month: "short", day: "numeric", timeZone: "UTC" }).format(/* @__PURE__ */ new Date(`${key}T00:00:00Z`));
@@ -680,24 +683,23 @@ function getDueInfo(r) {
     return { badge: "Starts at handoff", isOverdue: false, isDueSoon: false };
   }
   if (!r.due_at) return { badge: "Philippine time", isOverdue: false, isDueSoon: false };
-  const due = new Date(r.due_at).getTime();
+  const dueDate = date(r.due_at);
+  const due = dueDate ? dueDate.getTime() : NaN;
   const now = Date.now();
-  if (isNaN(due)) return { badge: "Philippine time", isOverdue: false, isDueSoon: false };
+  if (!Number.isFinite(due)) return { badge: "Philippine time", isOverdue: false, isDueSoon: false };
   const diffMs = due - now;
   if (diffMs < 0) {
-    const minutes = Math.max(1, Math.floor(-diffMs / 6e4));
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
     return {
-      badge: `Overdue by ${hours ? `${hours}h ` : ""}${mins ? `${mins}m` : ""}`.trim(),
+      badge: `Overdue by ${formatElapsedDuration(diffMs)}`,
+      title: `Overdue by ${formatElapsedDuration(diffMs, { verbose: true })}`,
       isOverdue: true,
       isDueSoon: false
     };
   }
   if (diffMs <= 2 * 36e5) {
-    const mins = Math.max(1, Math.floor(diffMs / 6e4));
     return {
-      badge: `Due in ${mins}m`,
+      badge: `Due in ${formatElapsedDuration(diffMs)}`,
+      title: `Due in ${formatElapsedDuration(diffMs, { verbose: true })}`,
       isOverdue: false,
       isDueSoon: true
     };
@@ -775,7 +777,7 @@ function DashboardView({
     const extPending = r.status === "ACTIVE" && extReq?.status === "PENDING";
     const extSection = extPending ? `<section class="record-section"><h3>Extension request pending</h3><p>Customer requested more time (+${Math.round(Number(extReq.quote?.billed_minutes || extReq.additional_minutes || 0))} mins \xB7 ${money(extReq.additional_fee)}). Open Transactions or notification details to review and approve.</p></section>` : "";
     const dueInfo = getDueInfo(r);
-    const overdueLabel = dueInfo.isOverdue ? `Overdue by ${Math.max(1, Math.ceil((Date.now() - new Date(r.due_at).getTime()) / 36e5))}h` : "";
+    const overdueLabel = dueInfo.isOverdue ? dueInfo.badge : "";
     showModal(
       "Rental details",
       `<div class="transaction-record-modal">
@@ -1072,7 +1074,14 @@ function DashboardView({
       },
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "item-cell" }, /* @__PURE__ */ React.createElement("span", { className: "item-symbol" }, /* @__PURE__ */ React.createElement(CategorySymbol, { category: itemCategory })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, r.item_name), /* @__PURE__ */ React.createElement("small", null, r.rental_code)))),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { className: "customer-cell-wrap" }, /* @__PURE__ */ React.createElement("span", { className: "mini-avatar" }, initials(r.customer)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, r.customer), isResort ? /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag resort", title: r.delivery_location || "Resort delivery" }, r.delivery_location ? r.delivery_location.split(",")[0].trim() : "Resort delivery") : /* @__PURE__ */ React.createElement("small", { className: "fulfillment-tag shop", title: "Shop counter handover" }, "Store pickup")))),
-      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("strong", null, formatDate(r.due_at)), /* @__PURE__ */ React.createElement("small", { className: dueInfo.isOverdue ? "due-overdue-alert" : dueInfo.isDueSoon || r.extension_request?.status === "PENDING" ? "due-soon-alert" : "" }, r.extension_request?.status === "PENDING" ? "Extension requested" : Array.isArray(r.extension_history) && r.extension_history.length > 0 && dueInfo.badge === "Philippine time" ? `Extended (${r.extension_history.length}x)` : dueInfo.badge)),
+      /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("strong", null, formatDate(r.due_at)), /* @__PURE__ */ React.createElement(
+        "small",
+        {
+          className: dueInfo.isOverdue ? "due-overdue-alert" : dueInfo.isDueSoon || r.extension_request?.status === "PENDING" ? "due-soon-alert" : "",
+          title: r.extension_request?.status === "PENDING" ? void 0 : dueInfo.title
+        },
+        r.extension_request?.status === "PENDING" ? "Extension requested" : Array.isArray(r.extension_history) && r.extension_history.length > 0 && dueInfo.badge === "Philippine time" ? `Extended (${r.extension_history.length}x)` : dueInfo.badge
+      )),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(StatusBadge, { status: r.displayStatus }), r.extension_request?.status === "PENDING" && /* @__PURE__ */ React.createElement("small", { className: "record-sub" }, "Extension awaiting review")),
       /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(
         "button",

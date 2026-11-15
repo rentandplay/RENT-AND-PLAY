@@ -338,11 +338,6 @@
   animation: anaPanelEnter 280ms cubic-bezier(.22, 1, .36, 1) both;
 }
 
-.analytics-workspace.ana-business .panel:hover {
-  border-color: color-mix(in srgb, var(--ui-border) 58%, var(--ui-text));
-  box-shadow: 0 12px 28px -20px color-mix(in srgb, var(--ui-text) 20%, transparent);
-}
-
 .analytics-workspace.ana-business .ana-kpi {
   position: relative;
   overflow: hidden;
@@ -357,15 +352,48 @@
 .analytics-workspace.ana-business .ana-kpi:nth-child(2) { animation-delay: 65ms; }
 .analytics-workspace.ana-business .ana-kpi:nth-child(3) { animation-delay: 130ms; }
 .analytics-workspace.ana-business .ana-kpi:last-child { animation-delay: 195ms; }
-.analytics-workspace.ana-business .ana-kpi:hover,
-.analytics-workspace.ana-business .ana-kpi:first-child:hover,
-.analytics-workspace.ana-business .ana-kpi:nth-child(2):hover,
-.analytics-workspace.ana-business .ana-kpi:nth-child(3):hover,
-.analytics-workspace.ana-business .ana-kpi:last-child:hover {
+.analytics-workspace.ana-business .ana-kpi-action:hover {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--ui-border) 48%, var(--ui-text));
   border-top-color: color-mix(in srgb, var(--ui-border) 48%, var(--ui-text));
   box-shadow: 0 12px 26px -16px color-mix(in srgb, var(--ui-text) 22%, transparent);
+}
+.analytics-workspace.ana-business button.ana-kpi-action {
+  appearance: none;
+  width: 100%;
+  color: var(--ui-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.analytics-workspace.ana-business button.ana-kpi-action:focus-visible {
+  outline: 3px solid var(--ana-blue);
+  outline-offset: 3px;
+}
+.analytics-workspace.ana-business .ana-kpi-action-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 1px;
+  color: var(--ana-blue);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.analytics-workspace.ana-business .ana-kpi-action-hint > span {
+  font-size: 16px;
+  line-height: 1;
+}
+.analytics-workspace.ana-business .ana-kpi-action .ana-kpi-spark {
+  display: block;
+  width: 100%;
+}
+.analytics-workspace.ana-business .ana-kpi:not(.ana-kpi-action):hover {
+  transform: none;
+  border-color: var(--ui-border);
+  border-top-color: var(--ui-border);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 6px 16px -12px rgba(15, 23, 42, 0.08);
 }
 
 .analytics-workspace.ana-business [data-analytics-tab],
@@ -505,7 +533,6 @@
 .analytics-workspace.ana-business .ana-outlier-item,
 .analytics-workspace.ana-business .ana-module-card {
   animation: anaCardRise 420ms cubic-bezier(.22, 1, .36, 1) both;
-  transition: transform 200ms cubic-bezier(.22, 1, .36, 1), box-shadow 200ms ease, border-color 200ms ease;
 }
 .analytics-workspace.ana-business .ana-action-card:nth-child(2),
 .analytics-workspace.ana-business .ana-bundle-card:nth-child(2),
@@ -513,15 +540,6 @@
 .analytics-workspace.ana-business .ana-action-card:nth-child(3),
 .analytics-workspace.ana-business .ana-bundle-card:nth-child(3),
 .analytics-workspace.ana-business .ana-outlier-item:nth-child(3) { animation-delay: 110ms; }
-.analytics-workspace.ana-business .ana-action-card:hover,
-.analytics-workspace.ana-business .ana-bundle-card:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--ui-border) 48%, var(--ui-text));
-  box-shadow: 0 10px 24px -16px color-mix(in srgb, var(--ui-text) 22%, transparent);
-}
-.analytics-workspace.ana-business .ana-outlier-item:hover {
-  border-color: color-mix(in srgb, var(--ui-border) 50%, var(--ui-text));
-}
 .analytics-workspace.ana-business .admin-table tbody tr {
   transition: background-color 140ms ease;
 }
@@ -1012,9 +1030,21 @@
 .analytics-workspace.ana-business .ana-heat-readout strong {
   color: var(--ui-text);
 }
-.analytics-workspace.ana-business .ana-heatmap tbody td[data-ana-heat-cell] {
+.analytics-workspace.ana-business .ana-heat-cell {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   cursor: pointer;
 }
+.analytics-workspace.ana-business .ana-heat-cell:focus-visible { outline:2px solid var(--ana-accent); outline-offset:-2px; }
 .analytics-workspace.ana-business .ana-heatmap tbody td.is-active {
   outline: 2px solid var(--ana-accent);
   outline-offset: -1px;

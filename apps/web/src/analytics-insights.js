@@ -189,11 +189,15 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   // Per-equipment trend series across trend buckets for in-table sparklines.
   const trendSeriesByGroup = new Map();
   for (const row of groups) trendSeriesByGroup.set(row.stockGroupId, Array(result.trend.length).fill(0));
+  const trendBucketByDate = new Map();
+  result.trend.forEach((bucket, index) => {
+    for (let day = bucket.from; day <= bucket.to; day = shift(day, 1)) trendBucketByDate.set(day, index);
+  });
   for (const rental of result.confirmed) {
     const day = manilaDateKey(rental.confirmed_rental_at);
     if (!day) continue;
-    const bIdx = result.trend.findIndex(b => day >= b.from && day <= b.to);
-    if (bIdx === -1) continue;
+    const bIdx = trendBucketByDate.get(day);
+    if (bIdx === undefined) continue;
     const gKey = String(itemMap.get(String(rental.item_id))?.stock_group_id || rental.item_id);
     if (trendSeriesByGroup.has(gKey)) trendSeriesByGroup.get(gKey)[bIdx]++;
   }

@@ -40,3 +40,40 @@ export function formatExcelCsvCell(value) {
   const safe = isPhoneWithLeadingZero || /^[\s]*[=+@-]/.test(text) || /^[\t\r\n]/.test(text) ? `'${text}` : text;
   return `"${safe.replaceAll('"', '""')}"`;
 }
+
+const DURATION_UNITS = [
+  ['weeks', 'w', 'week'],
+  ['days', 'd', 'day'],
+  ['hours', 'h', 'hour'],
+  ['mins', 'm', 'minute']
+];
+
+/**
+ * Formats a minute duration into exact weeks, days, hours, and minutes
+ * rather than rolling multi-day intervals into total hours.
+ */
+export function formatDurationParts(minutes, { verbose = false } = {}) {
+  const totalMinutes = Math.max(1, Math.floor(Number(minutes) || 0));
+  const counts = {
+    weeks: Math.floor(totalMinutes / 10080),
+    days: Math.floor((totalMinutes % 10080) / 1440),
+    hours: Math.floor((totalMinutes % 1440) / 60),
+    mins: totalMinutes % 60
+  };
+  const parts = [];
+  for (const [key, shortUnit, longUnit] of DURATION_UNITS) {
+    const value = counts[key];
+    if (!value) continue;
+    parts.push(verbose ? `${value} ${longUnit}${value === 1 ? '' : 's'}` : `${value}${shortUnit}`);
+  }
+  return parts.join(verbose ? ', ' : ' ');
+}
+
+/**
+ * Formats an elapsed millisecond interval into specific weeks, days, hours, and minutes.
+ */
+export function formatElapsedDuration(diffMs, options = {}) {
+  const ms = Math.abs(Number(diffMs) || 0);
+  const minutes = Math.max(1, Math.floor(ms / 60000));
+  return formatDurationParts(minutes, options);
+}

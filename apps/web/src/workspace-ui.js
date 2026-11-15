@@ -22,7 +22,7 @@ import { createMaintenanceUI } from './maintenance.js';
 import { createFinanceUI } from './finance-ui.js';
 import { createReportPayments } from './report-payments.js';
 import { createRentalPlanning } from './rental-planning.js';
-import { manilaDateTimeInput, manilaDateTimeIso, formatPhilippineDateTime } from './date-time.js';
+import { manilaDateTimeInput, manilaDateTimeIso, formatPhilippineDateTime, formatElapsedDuration } from './date-time.js';
 import { bindAccountValidation, nameError, emailError, passwordError, passwordMatchError, passwordHelp } from './account-validation.js';
 
 export function createWorkspaceUI(h) {
@@ -222,7 +222,7 @@ export function createWorkspaceUI(h) {
   };
   const txMetric = (label, value, note, glyph, tone = "blue") => `<article><div class="transaction-metric-label"><span>${e(label)}</span><i class="transaction-metric-icon ${e(tone)}">${icon(glyph)}</i></div><strong>${e(value)}</strong><small>${e(note)}</small></article>`;
   const txFilter = (page, label, count) => `<button type="button" class="transaction-filter ${txState[page].filter === label ? "selected" : ""}" data-transaction-filter="${e(label)}" aria-pressed="${txState[page].filter === label}">${e(label)}<span>${count}</span></button>`;
-  const txDueCell = row => { if (["APPROVED","PENDING_ADMIN_APPROVAL"].includes(row.status)) return `<strong>${row.scheduled_start_at?e(formatDate(row.scheduled_start_at)):'Starts at handoff'}</strong><small>Hold until ${e(formatDate(row.handoff_expires_at || row.hold_expires_at))}</small>`; const due = txDate(row.due_at), now = new Date(), label = txStatus(row), active = row.status === "ACTIVE", received = txDate(row.received_at || row.returned_at || row.confirmed_return_at), overdue = active && due && due < now, dueToday = active && due && due >= now && txDay(due) === txDay(now), lateAtReceipt = row.status === "RETURN_PENDING_INSPECTION" && due && received && received > due, extPending = active && row.extension_request?.status === 'PENDING', extCount = Array.isArray(row.extension_history) ? row.extension_history.length : 0; const hint = overdue ? `${row.latest_return_request_status === "PENDING_ADMIN_APPROVAL" ? "Return requested · " : ""}overdue by ${Math.max(1, Math.ceil((now - due) / 3600000))}h` : extPending ? "Extension requested · review" : dueToday ? (extCount ? `Due today · extended ${extCount}x` : "Due today") : lateAtReceipt ? "Received late · timer stopped" : row.status === "RETURN_PENDING_INSPECTION" ? "Timer stopped at receipt" : label === "Pending verification" ? "Waiting at counter" : extCount ? `Extended ${extCount}x` : "Due date"; const tone = overdue || lateAtReceipt ? "transaction-alert-text" : (dueToday || extPending) ? "transaction-due-text" : ""; return `<strong>${e(formatDate(row.due_at))}</strong><small class="${tone}">${e(hint)}</small>`; };
+  const txDueCell = row => { if (["APPROVED","PENDING_ADMIN_APPROVAL"].includes(row.status)) return `<strong>${row.scheduled_start_at?e(formatDate(row.scheduled_start_at)):'Starts at handoff'}</strong><small>Hold until ${e(formatDate(row.handoff_expires_at || row.hold_expires_at))}</small>`; const due = txDate(row.due_at), now = new Date(), label = txStatus(row), active = row.status === "ACTIVE", received = txDate(row.received_at || row.returned_at || row.confirmed_return_at), overdue = active && due && due < now, dueToday = active && due && due >= now && txDay(due) === txDay(now), lateAtReceipt = row.status === "RETURN_PENDING_INSPECTION" && due && received && received > due, extPending = active && row.extension_request?.status === 'PENDING', extCount = Array.isArray(row.extension_history) ? row.extension_history.length : 0; const hint = overdue ? `${row.latest_return_request_status === "PENDING_ADMIN_APPROVAL" ? "Return requested · " : ""}overdue by ${formatElapsedDuration(now - due)}` : extPending ? "Extension requested · review" : dueToday ? (extCount ? `Due today · extended ${extCount}x` : "Due today") : lateAtReceipt ? "Received late · timer stopped" : row.status === "RETURN_PENDING_INSPECTION" ? "Timer stopped at receipt" : label === "Pending verification" ? "Waiting at counter" : extCount ? `Extended ${extCount}x` : "Due date"; const tone = overdue || lateAtReceipt ? "transaction-alert-text" : (dueToday || extPending) ? "transaction-due-text" : ""; return `<strong>${e(formatDate(row.due_at))}</strong><small class="${tone}">${e(hint)}</small>`; };
   let exportingTransactions = false;
   const txHistoryMatches = (row, state, { searchText = search, verification = model.verification || [], now = new Date() } = {}) => {
     const date = txDate(row.confirmed_rental_at || row.created_at), today = txDay(now);
@@ -462,8 +462,9 @@ export function createWorkspaceUI(h) {
       const mobileQueue = queueList.map(row => {
         const isInspection = row.status === 'RETURN_PENDING_INSPECTION';
         const isRequested = row.latest_return_request_status === 'PENDING_ADMIN_APPROVAL';
-        const due = txDate(row.due_at), received = txDate(row.received_at || row.returned_at || row.confirmed_return_at), overdue = row.status === 'ACTIVE' && due && due < new Date(), lateAtReceipt = isInspection && due && received && received > due;
-        const label = isInspection ? lateAtReceipt ? 'Received late · timer stopped · inspection pending' : 'Received · timer stopped · inspection pending' : isRequested ? overdue ? `Return requested · overdue by ${Math.max(1, Math.ceil((new Date() - due) / 3600000))}h` : 'Customer requested return' : overdue ? `Equipment out · overdue by ${Math.max(1, Math.ceil((new Date() - due) / 3600000))}h` : due && txDay(due) === today ? 'Equipment out · due today' : 'Equipment currently out';
+        const due = txDate(row.due_at), now = new Date(), received = txDate(row.received_at || row.returned_at || row.confirmed_return_at), overdue = row.status === 'ACTIVE' && due && due < now, lateAtReceipt = isInspection && due && received && received > due;
+        const overdueText = overdue ? formatElapsedDuration(now - due) : '';
+        const label = isInspection ? lateAtReceipt ? 'Received late · timer stopped · inspection pending' : 'Received · timer stopped · inspection pending' : isRequested ? overdue ? `Return requested · overdue by ${overdueText}` : 'Customer requested return' : overdue ? `Equipment out · overdue by ${overdueText}` : due && txDay(due) === today ? 'Equipment out · due today' : 'Equipment currently out';
         const btnLabel = isInspection ? 'Complete inspection' : 'Receive return';
         return `<article class="return-queue-item ${isRequested ? 'return-queue-requested' : ''}"><span class="return-queue-icon">${icon('box')}</span><div><strong>${e(row.item_name)}</strong><small>${e(row.customer_name)} · ${e(txCode(row))}</small><small class="${isRequested ? 'return-requested-pill' : ''}">${label}</small></div><div class="transaction-row-actions"><button type="button" class="primary" data-return-action="${e(row.id)}">${btnLabel}</button><button type="button" class="transaction-icon-action" data-transaction-detail="${e(row.id)}" aria-label="View details for ${e(txCode(row))}" title="View details">${icon("eye")}</button></div></article>`;
       }).join('');
@@ -570,6 +571,7 @@ export function createWorkspaceUI(h) {
   function maintenance() { return maintenanceUI.render(search, { paged, table, status, empty }); }
 
   let reportUser = null;
+  let financeReportBase = null, financeReportSummary = null, financeReportModel = null;
   function reports(user = reportUser) {
     reportUser = user;
     if (model.demo_data?.active && demoHistoryBatch !== model.demo_data.batch_id) {
@@ -579,7 +581,15 @@ export function createWorkspaceUI(h) {
 
     const selectedRange = analyticsRange(analyticsSelection);
     const financeState = reportPayments.summaryFor(selectedRange);
-    const reportModel = financeState.summary && !model.financeSummary ? { ...model, financeSummary: financeState.summary } : model;
+    let reportModel = model;
+    if (financeState.summary && !model.financeSummary) {
+      if (financeReportBase !== model || financeReportSummary !== financeState.summary) {
+        financeReportBase = model;
+        financeReportSummary = financeState.summary;
+        financeReportModel = { ...model, financeSummary: financeState.summary };
+      }
+      reportModel = financeReportModel;
+    }
     return renderAnalyticsReport(reportModel, analyticsSelection, reportView, {
       escape: e,
       paged,
@@ -1185,10 +1195,35 @@ export function createWorkspaceUI(h) {
     document.querySelector('#analytics-item')?.addEventListener('change', event => { analyticsSelection.itemId = event.target.value; updateAnalytics(); });
     document.querySelector('#analytics-sort')?.addEventListener('change', event => { reportView.sort = event.target.value; pages['analytics-equipment'] = 0; rerender(); });
     document.querySelector('#analytics-reset')?.addEventListener('click', () => { Object.assign(analyticsSelection, { period: preferences.reportPeriod, groupBy: preferences.reportGrouping, from: '', to: '', categoryId: '', itemId: '' }); updateAnalytics(); });
+    const bindForecastKpiActions = () => {
+      document.querySelectorAll('[data-analytics-kpi-action]').forEach(button => {
+        button.onclick = () => {
+          const action = button.dataset.analyticsKpiAction;
+          if (action === 'forecast-rentals' || action === 'forecast-fees') {
+            const metric = action === 'forecast-rentals' ? 'rentals' : 'fees';
+            reportView.forecastMetric = metric;
+            const root = document.querySelector('.analytics-workspace');
+            if (!root || !updateForecastWorkspace(root, reports())) rerender();
+            bindForecastKpiActions();
+            document.querySelector('.ana-outlook-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            document.querySelector(`#analytics-metric-forecast-${metric}`)?.focus({ preventScroll: true });
+            return;
+          }
+          if (action === 'forecast-history') {
+            const guide = document.querySelector('[data-ana-collapse="forecast-method"]');
+            if (guide?.getAttribute('aria-expanded') !== 'true') guide?.click();
+            document.querySelector('.ana-forecast-evidence')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            guide?.focus({ preventScroll: true });
+          }
+        };
+      });
+    };
+    bindForecastKpiActions();
     const changeForecast = (property,value,selector) => {
       reportView[property]=value;
       const root=document.querySelector('.analytics-workspace');
       if(!root||!updateForecastWorkspace(root,reports())) rerender();
+      bindForecastKpiActions();
       document.querySelector(selector)?.focus({preventScroll:true});
     };
     document.querySelectorAll('[data-analytics-metric]').forEach(button => { button.onclick = () => {
@@ -1224,6 +1259,7 @@ export function createWorkspaceUI(h) {
         reportView.forecastMixExpanded = !reportView.forecastMixExpanded;
         const root = document.querySelector('.analytics-workspace');
         if (!root || !updateForecastWorkspace(root, reports())) rerender();
+        bindForecastKpiActions();
         document.querySelector('#analytics-forecast-mix-toggle')?.focus({ preventScroll: true });
       };
     });
@@ -1271,6 +1307,7 @@ export function createWorkspaceUI(h) {
         reportView.forecastModel = button.dataset.forecastModel;
         const root = document.querySelector('.analytics-workspace');
         if (!root || !updateForecastWorkspace(root, reports())) rerender();
+        bindForecastKpiActions();
         document.querySelector(`#analytics-forecast-model-${reportView.forecastModel}`)?.focus({ preventScroll: true });
       };
     });

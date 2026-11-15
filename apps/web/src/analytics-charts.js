@@ -24,10 +24,10 @@ export function demandHeatmap(days=[], bands=[], matrix=[], {escape:e=escapeHtml
     if (!peakCell || n > peakCell.n) peakCell = { day: days[d], band: bands[h], n };
   }));
   const defaultHint = peakCell && peakCell.n > 0
-    ? `Peak window: ${peakCell.day} ${peakCell.band} (${peakCell.n} handoffs) · hover or focus a cell for exact counts`
-    : 'Hover or focus a cell to inspect exact handoff counts';
+    ? `Peak window: ${peakCell.day} ${peakCell.band} (${peakCell.n} handoffs) · hover or focus a cell; select it to pin the exact count`
+    : 'Hover or focus a cell to inspect exact handoff counts; select it to pin the readout';
   const scaleLegend = `<div class="ana-heat-scale" aria-label="Activity intensity scale"><span>Low (0)</span><i class="ana-heat-0" aria-hidden="true"></i><i class="ana-heat-1" aria-hidden="true"></i><i class="ana-heat-2" aria-hidden="true"></i><i class="ana-heat-3" aria-hidden="true"></i><i class="ana-heat-4" aria-hidden="true"></i><span>Peak (${peak})</span></div>`;
-  return `<figure class="ana-heatmap" data-ana-heatmap data-ana-heat-peak="${peak}" data-ana-heat-default="${e(defaultHint)}"><div class="ana-heat-top"><figcaption>Confirmed handoffs by weekday and time band</figcaption>${scaleLegend}</div><div class="ana-heat-readout" data-ana-heat-readout role="status" aria-live="polite">${e(defaultHint)}</div><div class="ana-heatmap-scroll"><table><thead><tr><th scope="col">PH time</th>${days.map(day=>`<th scope="col">${e(day)}</th>`).join('')}</tr></thead><tbody>${bands.map((band,h)=>`<tr><th scope="row">${e(band)}</th>${days.map((day,d)=>{const n=matrix[d]?.[h]||0,level=n?Math.min(4,1+Math.floor(n/peak*3)):0;return `<td class="ana-heat-${level}" data-ana-heat-cell data-day="${e(day)}" data-band="${e(band)}" data-count="${n}" tabindex="0" style="--ana-cell-delay:${(h*7+d)*16}ms" aria-label="${e(day+' '+band)}: ${n} confirmed handoffs"><span>${n}</span></td>`;}).join('')}</tr>`).join('')}</tbody></table></div><p class="ana-note">Darker cells highlight busier handoff windows. Counts are totals; time bands span different lengths.</p></figure>`;
+  return `<figure class="ana-heatmap" data-ana-heatmap data-ana-heat-peak="${peak}" data-ana-heat-default="${e(defaultHint)}"><div class="ana-heat-top"><figcaption>Confirmed handoffs by weekday and time band</figcaption>${scaleLegend}</div><div class="ana-heat-readout" data-ana-heat-readout role="status" aria-live="polite">${e(defaultHint)}</div><div class="ana-heatmap-scroll"><table><thead><tr><th scope="col">PH time</th>${days.map(day=>`<th scope="col">${e(day)}</th>`).join('')}</tr></thead><tbody>${bands.map((band,h)=>`<tr><th scope="row">${e(band)}</th>${days.map((day,d)=>{const n=matrix[d]?.[h]||0,level=n?Math.min(4,1+Math.floor(n/peak*3)):0;return `<td class="ana-heat-${level}"><button type="button" class="ana-heat-cell" data-ana-heat-cell data-day="${e(day)}" data-band="${e(band)}" data-count="${n}" aria-pressed="false" style="--ana-cell-delay:${(h*7+d)*16}ms" aria-label="${e(day+' '+band)}: ${n} confirmed handoffs. Select to pin this count.">${n}</button></td>`;}).join('')}</tr>`).join('')}</tbody></table></div><p class="ana-note">Select a cell to pin its exact count; select it again or press Escape to clear. Darker cells indicate busier windows. Counts are totals and time bands span different lengths.</p></figure>`;
 }
 
 export function sparklineSvg(values = [], color = '#3b82f6') {
@@ -821,24 +821,40 @@ export function bindAnalyticsCharts(root = document) {
     const readout = map.querySelector('[data-ana-heat-readout]');
     const defaultText = map.dataset.anaHeatDefault || readout?.textContent || '';
     const peak = Math.max(1, Number(map.dataset.anaHeatPeak || 1));
+    let pinnedCell = null;
     const showCell = cell => {
-      map.querySelectorAll('[data-ana-heat-cell].is-active').forEach(el => el.classList.remove('is-active'));
-      if (!cell || !readout) {
+      map.querySelectorAll('[data-ana-heat-cell]').forEach(el => {
+        const pinned = el === pinnedCell;
+        el.closest('td')?.classList.toggle('is-active', pinned);
+        el.setAttribute('aria-pressed', String(pinned));
+      });
+      const shownCell = pinnedCell || cell;
+      if (!shownCell || !readout) {
         if (readout) readout.textContent = defaultText;
         return;
       }
-      cell.classList.add('is-active');
-      const day = cell.dataset.day || '', band = cell.dataset.band || '', cnt = Number(cell.dataset.count || 0);
+      const day = shownCell.dataset.day || '', band = shownCell.dataset.band || '', cnt = Number(shownCell.dataset.count || 0);
       const pct = Math.round((cnt / peak) * 100);
-      readout.innerHTML = `<strong>${escapeHtml(day)} · ${escapeHtml(band)}:</strong> <span>${plain(cnt)} confirmed handoff${cnt === 1 ? '' : 's'} (${pct}% of peak window)</span>`;
+      const pinHint = pinnedCell === shownCell ? ' <small>Selected · select again or press Escape to clear</small>' : '';
+      readout.innerHTML = `<strong>${escapeHtml(day)} · ${escapeHtml(band)}:</strong> <span>${plain(cnt)} confirmed handoff${cnt === 1 ? '' : 's'} (${pct}% of peak window)</span>${pinHint}`;
     };
     map.querySelectorAll('[data-ana-heat-cell]').forEach(cell => {
-      cell.addEventListener('pointerenter', () => showCell(cell));
-      cell.addEventListener('focus', () => showCell(cell));
-      cell.addEventListener('click', () => showCell(cell));
+      cell.addEventListener('pointerenter', () => { if (!pinnedCell) showCell(cell); });
+      cell.addEventListener('focus', () => { if (!pinnedCell) showCell(cell); });
+      cell.addEventListener('click', () => {
+        pinnedCell = pinnedCell === cell ? null : cell;
+        showCell(cell);
+      });
+      cell.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+          event.preventDefault(); pinnedCell = null; showCell(null);
+        } else if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault(); cell.click();
+        }
+      });
     });
-    map.addEventListener('pointerleave', () => showCell(null));
-    map.addEventListener('focusout', event => { if (!map.contains(event.relatedTarget)) showCell(null); });
+    map.addEventListener('pointerleave', () => { if (!pinnedCell) showCell(null); });
+    map.addEventListener('focusout', event => { if (!pinnedCell && !map.contains(event.relatedTarget)) showCell(null); });
   });
 
   animateAnalyticsKPIs(root);

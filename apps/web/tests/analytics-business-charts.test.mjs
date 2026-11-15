@@ -113,3 +113,22 @@ test('utilization bars retain percentage units and fractional values on resize',
  assert.match(read(),/2.37%/);
  assert.match(figure.querySelector('svg').textContent,/%/);
 });
+
+test('horizontal bar chart allocates suffix-aware padding in narrow cards without overlapping svg bounds',()=>{
+ const html=horizontalBarChart([
+  {label:'Equipment Set A',value:4800,suffix:' (39.6%)'},
+  {label:'Equipment Set B',value:2400,suffix:' (19.8%)'}
+ ],{width:510,currency:true,valueLabel:'Revenue'});
+ const {document}=parseHTML(`<html><body><main>${html}</main></body></html>`);
+ const svg=document.querySelector('svg');
+ const bar=svg.querySelector('rect.ana-horizontal-bar');
+ const valueText=[...svg.querySelectorAll('.ana-bar-value')].find(el=>el.textContent.includes('39.6%'));
+ assert.ok(bar && valueText);
+ const barWidth=Number(bar.getAttribute('width'));
+ const barX=Number(bar.getAttribute('x'));
+ const textX=Number(valueText.getAttribute('x'));
+ assert.ok(barX<150,'uses proportional left gutter on compact desktop cards instead of fixed 185px');
+ assert.ok(barWidth>140,'leaves ample bar track width');
+ assert.ok(textX>=barX+barWidth,'places value+suffix cleanly to the right of the bar');
+ assert.ok(barX+barWidth<=510-165,'reserves generous suffix+currency room inside 510px svg width');
+});

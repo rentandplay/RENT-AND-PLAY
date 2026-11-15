@@ -13,7 +13,8 @@ import {
   buildLateReturnDecisionTree,
   buildCustomerSegmentsAndChurn,
   buildOutlierAlerts,
-  buildMarketBasketBundles
+  buildMarketBasketBundles,
+  buildMonthlyEquipmentMatrix
 } from './analytics-models.js';
 
 const DAY = 86400000;
@@ -112,7 +113,7 @@ function recommendationsFor(result, groups, comparison, targets) {
   if (t.dueRentals >= 5 && t.overdueRentals > 0 && t.overdueRate >= (targets.overdue.limit ?? .2)) add('late-returns', 'Operations', 'medium', 'Improve return reminders', 'Review reminder timing and the return handoff process. Start with rentals that were returned late.', `${t.overdueRentals} of ${t.dueRentals} rentals due in this period were late (${Math.round(t.overdueRate * 100)}%).`, `At least 5 due rentals and a late rate of ${Math.round((targets.overdue.limit ?? .2) * 100)}% or higher, with at least one late rental. ${targets.overdue.limit === null ? 'The 20% default is a review heuristic, not an owner-approved target.' : 'Alert rate set by the owner.'}`, { page: 'Returns', review: 'This week', ruleKind: targets.overdue.limit === null ? 'Review heuristic; confirm suitability with the owner' : 'Owner-defined alert rate with a 5-rental minimum sample' });
   if (t.verificationCount >= 5 && t.verificationP95Seconds >= 60) add('handoff-delay', 'Operations', 'medium', 'Check slow counter confirmations', 'Compare the operator queue with terminal connectivity, then test a complete handoff. Timing includes operator and queue wait.', `${t.verificationCount} confirmations measured; the 95th percentile was ${Math.round(t.verificationP95Seconds)} seconds.`, 'At least 5 timed confirmations and a P95 of 60 seconds or more.', { page: 'ESP32 terminal', review: 'This week' });
   for (const row of groups.filter(row => row.known && row.repeatServiceUnits > 0).slice(0, 2)) add(`service-${row.stockGroupId}`, 'Reliability', 'medium', `Review service patterns for ${row.name}`, 'Read the unit maintenance notes to distinguish preventive inspections from recurring repairs. Prioritize units that repeatedly need service.', `${row.maintenanceCount} service records across ${row.totalUnits} unit${row.totalUnits === 1 ? '' : 's'}; ${row.downtimeHours.toFixed(1)} hours of downtime. Inspections are included.`, 'At least one physical unit had 2 or more service records in this period.', { itemId: row.id, itemName: row.name, review: 'This week' });
-  const capLimit = targets.utilization?.goal ? Math.min(0.5, Math.max(0.03, targets.utilization.goal * 0.35)) : 0.5;
+  const capLimit = targets.utilization?.goal ?? 0.5;
   for (const row of groups.filter(row => row.known && row.active && row.rentals >= 5 && row.utilization >= capLimit).slice(0, 2)) add(`capacity-${row.stockGroupId}`, 'Equipment', 'medium', `Review capacity for ${row.name}`, 'Check rental overlaps and the availability of each unit before considering more stock. Use the forecast to plan busy periods.', `${row.rentals} confirmed rentals; ${Math.round(row.utilization * 100)}% of observed calendar unit-hours rented across ${row.unitCount} active unit${row.unitCount === 1 ? '' : 's'}.`, `At least 5 rentals and ${Math.round(capLimit * 100)}% calendar-hour utilization. This alone does not prove unmet demand.`, { itemId: row.id, itemName: row.name, review: 'Before the next busy period', ...(targets.utilization?.goal != null ? { target: `Owner utilization goal ${Math.round(targets.utilization.goal * 100)}%` } : {}) });
   if (result.range.days >= 30 && t.rentals >= 5) for (const row of groups.filter(row => row.known && row.active && row.rentals === 0 && row.observedHours > 0 && row.unitRows.some(unit => unit.active && unit.status !== 'UNDER_MAINTENANCE')).slice(0, 2)) add(`idle-${row.stockGroupId}`, 'Equipment', 'medium', `Review the listing for ${row.name}`, 'Check its photo, description, relevance, and rate options. Try a small listing improvement and compare rentals in the next equal period.', `No confirmed rentals in ${result.range.days} days, with ${Math.round(row.observedHours)} observed calendar unit-hours.`, 'At least a 30-day view and 5 fleet rentals, while this active equipment has zero rentals.', { itemId: row.id, itemName: row.name, review: 'This week' });
   if (t.uniqueCustomers >= 10 && t.repeatCustomerRate < .25) add('repeat-customers', 'Customers', 'medium', 'Make repeat rentals easier', 'Review the customer experience and how equipment options are presented. Compare repeat activity in another period before treating this as a retention issue.', `${t.repeatCustomers} of ${t.uniqueCustomers} customers rented twice or more in this selected period (${Math.round(t.repeatCustomerRate * 100)}%).`, 'At least 10 customers and repeat activity below 25% within the selected period; lifetime retention is not measured.', { page: 'Customers', review: 'Next reporting period' });
@@ -196,11 +197,13 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
     return start && end && end >= start ? (end - start) / 3600000 : null;
   }).filter(v => v !== null);
   const rentalById = new Map((data.transactions || []).map(t => [String(t.id), t]));
-  const scopeItemIds = new Set(
-    (data.items || [])
-      .filter(it => (!selection.categoryId || String(it.category_id) === String(selection.categoryId)) && (!selection.itemId || String(it.id) === String(selection.itemId) || String(it.stock_group_id || it.id) === String(selection.itemId)))
-      .map(it => String(it.id))
-  );
+  // Reuse the core calculator's stock-group/category resolution for every panel.
+  const scoped = Boolean(selection.categoryId || selection.itemId);
+  const scopeItemIds = new Set(result.performance.map(row=>String(row.id)));
+  const inScope = id => !scoped || scopeItemIds.has(String(id));
+  const cutoff = recordDate(result.asOf);
+  const scopeTransactions = (data.transactions || []).filter(row=>inScope(row.item_id) && recordDate(row.confirmed_rental_at) && recordDate(row.confirmed_rental_at) <= cutoff);
+  const scopedVerification = [];
   const speedSecondsList = (data.verification || []).map(v => {
     if (v.status !== 'CONFIRMED' || !v.terminal_id) return null;
     const req = recordDate(v.requested_at);
@@ -209,8 +212,9 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
     const conf = recordDate(rawConf);
     if (!req || !conf || conf < req) return null;
     const day = manilaDateKey(rawConf);
-    if (!day || day < result.range.from || day > result.range.to) return null;
+    if (!day || day < result.range.from || day > result.range.to || conf > cutoff) return null;
     if ((selection.categoryId || selection.itemId) && (!linked || !scopeItemIds.has(String(linked.item_id)))) return null;
+    scopedVerification.push({...v,confirmed_at:conf.toISOString()});
     return (conf - req) / 1000;
   }).filter(v => v !== null);
 
@@ -219,23 +223,25 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   const pareto = { fees: buildParetoAnalysis(sparkGroups, 'fees'), rentals: buildParetoAnalysis(sparkGroups, 'rentals') };
   const waterfall = buildWaterfallAnalysis({
     financeSummary: data.financeSummary || null,
+    range: result.range,
     confirmed: result.confirmed,
     scopeFiltered: Boolean(selection.categoryId || selection.itemId)
   });
   const channelTrends = buildChannelAndPaymentTrends(result.trend, result.confirmed);
   const pivot = buildCategoryChannelPivot(result.confirmed, data.items || [], data.categories || []);
-  const maintenanceIssues = buildMaintenanceTextMining(data.maintenance || [], result.range);
+  const maintenanceIssues = buildMaintenanceTextMining((data.maintenance || []).filter(row=>inScope(row.item_id) && (!recordDate(row.started_at || row.created_at) || recordDate(row.started_at || row.created_at)<=cutoff)), result.range);
   const forecastComparison = buildForecastComparison(result);
-  const lateRiskTree = buildLateReturnDecisionTree(data.transactions || [], data.items || [], data.categories || [], now);
-  const customerSegments = buildCustomerSegmentsAndChurn(data.transactions || [], now);
+  const lateRiskTree = buildLateReturnDecisionTree(scopeTransactions, data.items || [], data.categories || [], cutoff);
+  const customerSegments = buildCustomerSegmentsAndChurn(scopeTransactions, cutoff);
   const outlierAlerts = buildOutlierAlerts({
     confirmed: result.confirmed,
-    transactions: data.transactions || [],
+    returns: result.returns,
+    transactions: scopeTransactions,
     items: data.items || [],
-    verification: data.verification || [],
+    verification: scopedVerification,
     durationStats: durationHistogram,
     speedStats: speedHistogram,
-    now
+    now: cutoff
   });
   const marketBasket = buildMarketBasketBundles(result.confirmed, data.items || []);
 
@@ -266,6 +272,7 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
     hours,
     peakHour,
     demandMatrix,
+    monthlyEquipment: buildMonthlyEquipmentMatrix(result.confirmed, data.items || [], sparkGroups, result.range),
     fleetUnits,
     topEquipment: sparkGroups.filter(row => row.rentals > 0).slice(0, 5),
     idleEquipment: sparkGroups.filter(row => row.known && row.active && row.rentals === 0),
@@ -281,6 +288,7 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
     customerSegments,
     outlierAlerts,
     marketBasket,
+    insightScope: { through:result.range.to, basis:'Selected equipment/category; all recorded booking history through the reporting cutoff. Customer inactivity is measured at that cutoff.' },
     beforeAfter,
     forecast: {
       ...result.forecast,

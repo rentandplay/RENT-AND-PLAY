@@ -2,6 +2,8 @@
 
 This guide explains the source records, formulas, limits, and decisions supported by the analytics workspace. It is also a presentation reference: every chart should answer a business question, show its reporting scope, and support a specific management review.
 
+For the 15 November 2026 module mapping, chart decisions, additional models and validation evidence, see [the module review](analytics-module-review.md).
+
 ## Reporting scope and source records
 
 - Supabase PostgreSQL is the persistent database. The backend collection interface is a compatibility adapter; it is not Firebase Firestore storage.
@@ -58,9 +60,9 @@ Target attainment is `actual / allocated_goal`. It may exceed 100%. There is no 
 
 The saved goal is a current recurring planning assumption. Applying it to an older report is not evidence of the goal that management approved at that historical time: target revision history is not reconstructed. Missed-goal recommendations are generated only for completed selected periods, preventing a partially completed current day from being treated as a failed goal.
 
-## Fixed moving-average forecast
+## Forecast baseline and comparison models
 
-The application uses a single transparent averaging method, not model selection or benchmarking.
+The default baseline is a transparent averaging method. Forecasting also compares simple exponential smoothing (alpha 0.35) and a linear time trend, with selectable methods and a lowest-recent-MAE indicator. The following table describes the baseline.
 
 | View | Historical input | Forecast |
 | --- | --- | --- |
@@ -72,7 +74,7 @@ At least four confirmed rentals must exist in the training window. Incomplete da
 
 Daily example: next Saturday's estimate is the total activity of the previous four complete Saturdays divided by four. Fees use the same averaging rule on recorded rental charges. Fractional rental estimates are expected averages, not partial physical rentals. Equipment mix allocates forecast volume in proportion to historical rental shares, not concurrent capacity.
 
-Internal walk-forward checks train on earlier periods and measure average absolute error on later held-out periods. They do not select a method or establish guaranteed future accuracy. The client screen focuses on the forecast, dates and business explanation. Aggregate CSV retains method and readiness information; it has no ranked algorithms or scenario overrides. Historical sample variation, where exported, is not a calibrated confidence interval.
+Walk-forward checks train on earlier complete periods and measure mean absolute error on later held-out periods. Comparison models use the same eligible evaluation dates and their displayed training-window lengths; the lowest recent error is historical evidence, not a guarantee of future superiority. Separate daily/weekly/monthly history requirements keep scores unavailable when they cannot be evaluated. Aggregate CSV retains method and readiness information. Historical sample variation, where exported, is not a calibrated confidence interval. What-if scenarios are separate assumption-based calculations and do not modify history.
 
 Weather, special events, rate changes, rejected requests and future reservations are not incorporated. Use forecasts to plan preparation and staffing; verify unit availability before promising equipment or buying stock.
 
@@ -84,7 +86,7 @@ Every primary recommendation includes an outcome, measure, target status, eviden
 | --- | --- | --- |
 | Current overdue follow-up | At least one active overdue rental now | Confirm customer return arrangements and availability. |
 | Late-return process | At least five due rentals, at least one late rental, and late rate reaches the owner alert or the disclosed 20% fallback heuristic | Review reminders and handoff procedures. The fallback is not an empirically validated business standard. |
-| Capacity review | Equipment has at least five rentals and at least 50% calendar-hour utilization | Check overlaps and availability before considering more stock; the heuristic does not establish unmet demand. |
+| Capacity review | Equipment has at least five rentals and reaches the owner's utilization goal, or 50% calendar-hour utilization when no goal is set | Check overlaps and availability before considering more stock; the heuristic does not establish unmet demand. |
 | Idle equipment review | At least 30 reporting days and five selected-fleet rentals, while active, observed, non-maintenance equipment has zero rentals | Inspect listing quality, suitability, and rates; test a change and compare another equal period. |
 | Demand decline | Previous matched window had at least ten rentals and current volume declined at least 20% | Investigate timing, equipment mix, seasonality, and availability before changing prices. |
 | Below owner goal | Completed selected period below an applicable allocated fee or rental goal | Review the evidence and agree a measured change with the owner. |

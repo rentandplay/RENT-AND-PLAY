@@ -2,6 +2,8 @@
 
 The owner and counter staff use this dashboard to review recorded rental performance, compare equipment, prepare for future demand and decide what to review next. The three sections are Performance (descriptive), Forecasting (predictive), and Recommendations (prescriptive).
 
+Current module alignment, model choices, design references and validation are recorded in [the 15 November 2026 review](analytics-module-review.md). The revisions below retain their historical implementation context; the current forecast includes moving average, exponential smoothing and linear trend comparison. The current chart set also includes an interactive Month x Equipment heatmap with a shared color scale, exact-value selection, keyboard controls and reduced-motion-aware replay.
+
 ## Primary dashboard
 
 - Four KPI cards: recorded rental fees, confirmed rentals, calendar-hour utilization, and current overdue rentals. Fees and rental volume have matched-period changes and optional goal attainment. Utilization shows its calendar-hours basis. Current overdue is a live snapshot, not a historical-period count.
@@ -16,7 +18,9 @@ The owner saves shared goals and alert rates in Supabase-backed business setting
 
 ## Forecasts
 
-Forecasting uses one fixed moving-average method. Daily estimates average matching weekdays in the last 28 complete days; weekly estimates average the last 8 complete weeks; monthly estimates average the last 6 complete months after at least 8 complete months are recorded. Actual history is solid blue and estimates are dashed orange. There is no model picker, automatic model selection, ranking table or what-if scenario control. A visible historical review compares rolling one-period-ahead estimates with actuals, with MAE, evaluation dates, exact values and an aggregate CSV export. It reconstructs estimates from earlier periods; these are not saved issued forecasts or guaranteed future accuracy. Monthly checks require eight earlier months, averaging the recent six. Method, dates, sample requirements and limits are explained in plain language. Aggregate demand does not establish a stockout date or a purchase quantity.
+Forecasting compares moving average, simple exponential smoothing and linear trend. The daily averaging baseline matches weekdays in the last 28 complete days; weekly uses the last 8 complete weeks; monthly uses the last 6 complete months after an 8-month readiness gate. Solid blue represents recorded history; dashed model lines represent estimates. Users can inspect one method or compare all three. Lowest recent MAE is a historical comparison, not a promise of future superiority.
+
+A separate rolling historical review compares baseline estimates against actuals using earlier complete periods only. It shows MAE, evaluation dates, exact values and aggregate CSV evidence. These are reconstructed estimates, not saved forecasts issued at the time. Exploratory late-return rules and customer groups include sample and interpretation notes. Recommendations include an assumption-based what-if control; it does not change records or establish an optimal price or purchase quantity. Aggregate demand does not establish a stockout date.
 
 ## Data and access
 

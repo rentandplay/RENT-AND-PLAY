@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { parseHTML } from 'linkedom';
 import {analyticsDefinitions,renderAnalyticsReport} from '../src/analytics-report.js';
 
 const helpers={
@@ -31,8 +32,10 @@ test('equipment labels are escaped and monthly charts do not duplicate two-bucke
   assert.ok(html.includes('1 rental'));
   assert.ok(!html.includes('1 rentals'));
   const plot=html.match(/<figure class="ana-chart[^"]*"[^>]*aria-labelledby="performance-trend-title"[^>]*>([\s\S]*?)<\/figure>/)[1];
-  assert.equal((plot.match(/class="ana-axis-label">Jan 2020<\/text>/g)||[]).length,1);
-  assert.equal((plot.match(/class="ana-axis-label">Feb 2020<\/text>/g)||[]).length,1);
+  const { document } = parseHTML(plot);
+  const ticks = [...document.querySelectorAll('[data-ana-time-tick]')];
+  assert.deepEqual(ticks.map(tick => tick.getAttribute('aria-label')), ['Jan 2020', 'Feb 2020']);
+  assert.deepEqual(ticks.map(tick => [...tick.querySelectorAll('tspan')].map(part => part.textContent)), [['Jan', '2020'], ['Feb', '2020']]);
 });
 
 test('invalid date ranges keep filters available and disable export',()=>{

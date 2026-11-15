@@ -2,6 +2,8 @@
 
 This guide maps the analytics redesign to the BA3101 final system rubric and describes the live evidence the group must supply. It supports a defensible presentation; a full score cannot be guaranteed by code changes. The instructor evaluates correctness, live demonstration, justification, the wider system, and each member's own work.
 
+For the current implementation and test evidence, use [the 15 November 2026 module review](analytics-module-review.md). Dated revision notes below are historical; statements about a single forecasting method and earlier test failures are not the current release status.
+
 Sources: BA3101 Final System Presentation Rubric, sections 2–9; BA3101 Group System Presentation Grading Form, section B; supplied Module 9, Data Visualization.
 
 ## Criteria and evidence

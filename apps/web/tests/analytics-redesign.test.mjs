@@ -338,10 +338,34 @@ test('Recommendations shows 4 KPIs, interactive priority filter + Clear filters,
     unitsInput.dispatchEvent(new window.Event('change', { bubbles: true }));
     assert.equal(unitsInput.value, '5');
 
+    // Unified Action Queue console & growth layout classes + Quick scenario presets
+    assert.ok(main.querySelector('.ana-queue-console > .ana-priority-visual'));
+    assert.ok(main.querySelector('.ana-queue-console > .ana-actions-toolbar'));
+    assert.ok(main.querySelector('.ana-module-grid.is-growth'));
+
     const resetBtn = main.querySelector('[data-whatif-reset]');
     assert.ok(resetBtn);
     resetBtn.click();
     assert.equal(main.querySelector('#analytics-whatif-form [name="extraUnits"]').value, '0');
+    assert.equal(main.querySelector('#analytics-whatif-output').textContent, beforeOut);
+
+    const unitsPreset = main.querySelector('[data-whatif-preset="units"]');
+    const promoPreset = main.querySelector('[data-whatif-preset="promo"]');
+    const peakPreset = main.querySelector('[data-whatif-preset="peak"]');
+    assert.ok(unitsPreset && promoPreset && peakPreset);
+    unitsPreset.click();
+    assert.equal(main.querySelector('#analytics-whatif-form [name="extraUnits"]').value, '1');
+    promoPreset.click();
+    assert.equal(main.querySelector('#analytics-whatif-form [name="rateChangePct"]').value, '-10');
+    assert.equal(main.querySelector('#analytics-whatif-form [name="demandShiftPct"]').value, '15');
+    peakPreset.click();
+    assert.equal(main.querySelector('#analytics-whatif-form [name="demandShiftPct"]').value, '20');
+    assert.notEqual(main.querySelector('#analytics-whatif-output').textContent, beforeOut);
+
+    resetBtn.click();
+    assert.equal(main.querySelector('#analytics-whatif-form [name="extraUnits"]').value, '0');
+    assert.equal(main.querySelector('#analytics-whatif-form [name="rateChangePct"]').value, '0');
+    assert.equal(main.querySelector('#analytics-whatif-form [name="demandShiftPct"]').value, '0');
     assert.equal(main.querySelector('#analytics-whatif-output').textContent, beforeOut);
 
     // Before/After visual diff, lower-is-better hint, CHANGE table column & non-causation note

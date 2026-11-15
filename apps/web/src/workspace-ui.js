@@ -1309,6 +1309,18 @@ export function createWorkspaceUI(h) {
       };
       whatIfForm.addEventListener('input', updateWhatIf);
       whatIfForm.addEventListener('change', updateWhatIf);
+      whatIfForm.querySelectorAll('[data-whatif-preset]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const units = whatIfForm.querySelector('[name="extraUnits"]');
+          const rate = whatIfForm.querySelector('[name="rateChangePct"]');
+          const demand = whatIfForm.querySelector('[name="demandShiftPct"]');
+          const preset = btn.dataset.whatifPreset;
+          if (preset === 'units' && units) units.value = String(Math.min(5, (Number(units.value) || 0) + 1));
+          if (preset === 'promo') { if (rate) rate.value = '-10'; if (demand) demand.value = '15'; }
+          if (preset === 'peak' && demand) demand.value = '20';
+          updateWhatIf({ type: 'change' });
+        });
+      });
       whatIfForm.querySelector('[data-whatif-reset]')?.addEventListener('click', () => {
         const item = whatIfForm.querySelector('[name="targetGroupId"]');
         const units = whatIfForm.querySelector('[name="extraUnits"]');

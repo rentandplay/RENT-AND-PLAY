@@ -6,8 +6,45 @@ const round = (value, digits = 2) => {
   return Math.round((Number(value) || 0) * factor) / factor;
 };
 const finite = value => typeof value === 'number' && Number.isFinite(value);
+const recordedFee = value => Number.isFinite(Number(value)) && Number(value)>0 ? roundCents(Number(value)) : 0;
 
 const CONFIRMED_STATUSES = new Set(['ACTIVE', 'COMPLETED', 'RETURN_PENDING_INSPECTION']);
+
+/** Module 9 color-scale matrix: confirmed handoffs, Philippine months, shared scale. */
+export function buildMonthlyEquipmentMatrix(confirmed = [], items = [], groups = [], range = {}) {
+  if (!range.from || !range.to) return { months: [], columns: [], totalRentals: 0, totalFees: 0 };
+  const itemMap = new Map(items.map(item => [String(item.id), item]));
+  const months = [];
+  for (let key = range.from.slice(0, 7); key <= range.to.slice(0, 7);) {
+    const date = new Date(`${key}-01T00:00:00Z`);
+    date.setUTCMonth(date.getUTCMonth() + 1);
+    const next = date.toISOString().slice(0, 10);
+    const end = new Date(+date - 86400000).toISOString().slice(0, 10);
+    months.push({ key, label: new Intl.DateTimeFormat('en-PH', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${key}-01T00:00:00Z`)),
+      from: range.from > `${key}-01` ? range.from : `${key}-01`, to: range.to < end ? range.to : end,
+      partial: range.from > `${key}-01` || range.to < end, cells: [] });
+    key = next.slice(0, 7);
+  }
+  const monthIndex = new Map(months.map((month, i) => [month.key, i]));
+  const byGroup = new Map(groups.map(group => [String(group.stockGroupId), { id: String(group.stockGroupId), name: group.name, rentals: 0, cents: 0, values: months.map(() => ({ rentals: 0, cents: 0 })) }]));
+  for (const rental of confirmed) {
+    const day = manilaDateKey(rental.confirmed_rental_at);
+    if (!day || day < range.from || day > range.to || !CONFIRMED_STATUSES.has(rental.status)) continue;
+    const key = String(itemMap.get(String(rental.item_id))?.stock_group_id || rental.item_id);
+    if (!byGroup.has(key)) byGroup.set(key, { id: key, name: 'Unlisted equipment', rentals: 0, cents: 0, values: months.map(() => ({ rentals: 0, cents: 0 })) });
+    const group = byGroup.get(key), cell = group.values[monthIndex.get(day.slice(0, 7))];
+    const cents = Math.round(recordedFee(rental.rental_fee) * 100);
+    cell.rentals++; cell.cents += cents; group.rentals++; group.cents += cents;
+  }
+  const ranked = [...byGroup.values()].sort((a, b) => b.rentals - a.rentals || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  // Keep all records in the totals; a named remainder avoids hiding the long tail.
+  const columns = ranked.length > 6 ? [...ranked.slice(0, 5), { id: '__other__', name: `Other equipment (${ranked.length - 5})`,
+    rentals: ranked.slice(5).reduce((s, row) => s + row.rentals, 0), cents: ranked.slice(5).reduce((s, row) => s + row.cents, 0),
+    values: months.map((_, i) => ranked.slice(5).reduce((s, row) => ({ rentals: s.rentals + row.values[i].rentals, cents: s.cents + row.values[i].cents }), { rentals: 0, cents: 0 })) }] : ranked;
+  months.forEach((month, i) => { month.cells = columns.map(column => ({ rentals: column.values[i].rentals, fees: column.values[i].cents / 100 })); });
+  return { months, columns: columns.map(({ id, name, rentals, cents }) => ({ id, name, rentals, fees: cents / 100 })),
+    totalRentals: ranked.reduce((s, row) => s + row.rentals, 0), totalFees: ranked.reduce((s, row) => s + row.cents, 0) / 100 };
+}
 
 function stockGroupKey(item = {}, fallbackId = '') {
   return item.stock_group_id || item.stockGroupId || item.id || fallbackId;
@@ -88,14 +125,11 @@ export function buildParetoAnalysis(rows = [], metricKey = 'fees') {
 }
 
 /** Waterfall Cash / Revenue Bridge (BA Mod 9 Slide 23) from finance ledger or filtered rental totals. */
-export function buildWaterfallAnalysis({ financeSummary = null, confirmed = [], scopeFiltered = false } = {}) {
+export function buildWaterfallAnalysis({ financeSummary = null, confirmed = [], scopeFiltered = false, range = null } = {}) {
   const ledgerTotals = financeSummary?.totals;
   const rentalTotals = financeSummary?.rental_totals;
-  const hasLedger = !scopeFiltered && ledgerTotals && (
-    (finite(ledgerTotals.collections) && ledgerTotals.collections > 0) ||
-    (finite(ledgerTotals.refunds) && ledgerTotals.refunds > 0) ||
-    (finite(ledgerTotals.expenses) && ledgerTotals.expenses > 0)
-  );
+  const matchingPeriod = !range || financeSummary?.from === range.from && financeSummary?.to === range.to;
+  const hasLedger = !scopeFiltered && matchingPeriod && ledgerTotals && ['collections','refunds','expenses'].every(key=>finite(ledgerTotals[key]) && ledgerTotals[key]>=0);
 
   if (hasLedger) {
     const collections = roundCents(ledgerTotals.collections || 0);
@@ -103,20 +137,20 @@ export function buildWaterfallAnalysis({ financeSummary = null, confirmed = [], 
     const qrCollections = roundCents(ledgerTotals.qr_collections || 0);
     const refunds = roundCents(ledgerTotals.refunds || 0);
     const expenses = roundCents(ledgerTotals.expenses || 0);
-    const netAfterExpenses = roundCents(ledgerTotals.net_after_expenses ?? (collections - refunds - expenses));
+    const netAfterExpenses = roundCents(collections - refunds - expenses);
     const afterRefunds = roundCents(collections - refunds);
 
     const steps = [
       { label: 'Gross collections', kind: 'start', amount: collections, start: 0, end: collections, detail: `Cash + QR collected` },
       { label: 'Less: Refunds', kind: 'minus', amount: -refunds, start: collections, end: afterRefunds, detail: 'Security & fee refunds' },
       { label: 'Less: Expenses', kind: 'minus', amount: -expenses, start: afterRefunds, end: netAfterExpenses, detail: 'Recorded shop expenses' },
-      { label: 'Net cash balance', kind: 'total', amount: netAfterExpenses, start: 0, end: netAfterExpenses, detail: 'Collections minus refunds & expenses' }
+      { label: 'Net cash movement', kind: 'total', amount: netAfterExpenses, start: 0, end: netAfterExpenses, detail: 'Collections minus refunds & expenses; excludes opening cash balance' }
     ];
 
     return {
       available: true,
       source: 'ledger',
-      title: 'Revenue to net cash bridge',
+      title: 'Collections, refunds & expenses',
       steps,
       summary: {
         collections,
@@ -124,7 +158,7 @@ export function buildWaterfallAnalysis({ financeSummary = null, confirmed = [], 
         qrCollections,
         refunds,
         expenses,
-        netCollected: roundCents(ledgerTotals.net_collected ?? afterRefunds),
+        netCollected: afterRefunds,
         netAfterExpenses,
         charges: finite(rentalTotals?.charges) ? roundCents(rentalTotals.charges) : null,
         balanceDue: finite(rentalTotals?.balance_due) ? roundCents(rentalTotals.balance_due) : null
@@ -135,25 +169,14 @@ export function buildWaterfallAnalysis({ financeSummary = null, confirmed = [], 
   let totalFees = 0;
   let deliveryFees = 0;
   let counterFees = 0;
-  let addonFees = 0;
   let openBalance = 0;
-  let hasAddons = false;
 
   for (const row of confirmed) {
-    const fee = finite(row.rental_fee) && row.rental_fee >= 0 ? row.rental_fee : 0;
+    const fee = recordedFee(row.rental_fee);
     totalFees += fee;
     if (isDeliveryMode(row.fulfillment_mode)) deliveryFees += fee;
     else counterFees += fee;
 
-    const fb = row.fee_breakdown || {};
-    const extra = (finite(fb.delivery_fee) ? fb.delivery_fee : 0) +
-      (finite(fb.overtime_fee) ? fb.overtime_fee : 0) +
-      (finite(fb.extension_fee) ? fb.extension_fee : 0) +
-      (finite(fb.damage_fee) ? fb.damage_fee : 0);
-    if (extra > 0) {
-      hasAddons = true;
-      addonFees += Math.min(fee, extra);
-    }
     if (finite(row.balance_due) && row.balance_due > 0) {
       openBalance += Math.min(fee, row.balance_due);
     }
@@ -168,35 +191,24 @@ export function buildWaterfallAnalysis({ financeSummary = null, confirmed = [], 
   counterFees = roundCents(counterFees);
   openBalance = roundCents(Math.min(totalFees, openBalance));
 
-  let steps;
-  if (hasAddons || openBalance > 0) {
-    const baseFees = roundCents(Math.max(0, totalFees - addonFees));
-    const collectedEst = roundCents(Math.max(0, totalFees - openBalance));
-    steps = [
-      { label: 'Base rental fees', kind: 'start', amount: baseFees, start: 0, end: baseFees, detail: 'Confirmed base rate charges' },
-      { label: 'Add-on & late fees', kind: 'plus', amount: roundCents(addonFees), start: baseFees, end: totalFees, detail: 'Delivery, extension, overtime' },
-      { label: 'Less: Open balance', kind: 'minus', amount: -openBalance, start: totalFees, end: collectedEst, detail: 'Unpaid balance on record' },
-      { label: 'Collected rental fees', kind: 'total', amount: collectedEst, start: 0, end: collectedEst, detail: 'Confirmed fees less unpaid balance' }
-    ];
-  } else {
-    steps = [
-      { label: 'Shop counter fees', kind: 'start', amount: counterFees, start: 0, end: counterFees, detail: 'Confirmed walk-in & pickup fees' },
-      { label: 'Resort delivery fees', kind: 'plus', amount: deliveryFees, start: counterFees, end: totalFees, detail: 'Confirmed resort delivery fees' },
-      { label: 'Confirmed rental fees', kind: 'total', amount: totalFees, start: 0, end: totalFees, detail: 'Total confirmed rental revenue' }
-    ];
-  }
+  // Charges alone cannot establish collected cash, even when balance_due is zero.
+  const steps = [
+    { label: 'Counter fees', kind: 'start', amount: counterFees, start: 0, end: counterFees, detail: 'Recorded rental fees for counter bookings' },
+    { label: 'Delivery fees', kind: 'plus', amount: deliveryFees, start: counterFees, end: totalFees, detail: 'Recorded rental fees for delivery bookings' },
+    { label: 'Recorded fees', kind: 'total', amount: totalFees, start: 0, end: totalFees, detail: 'Recorded rental charges; cash collection is not inferred' }
+  ];
 
   return {
     available: true,
     source: 'rentals',
-    title: hasAddons || openBalance > 0 ? 'Confirmed charges to collected fees bridge' : 'Revenue composition bridge',
+    title: 'Recorded rental-fee composition',
     steps,
     summary: {
       totalFees,
       counterFees,
       deliveryFees,
       openBalance,
-      collectedEst: roundCents(totalFees - openBalance)
+      collections: null
     }
   };
 }
@@ -223,7 +235,7 @@ export function buildChannelAndPaymentTrends(trend = [], confirmed = []) {
     if (!day) continue;
     const target = buckets.find(b => day >= b.from && day <= b.to);
     if (!target) continue;
-    const fee = finite(row.rental_fee) && row.rental_fee >= 0 ? row.rental_fee : 0;
+    const fee = recordedFee(row.rental_fee);
     if (isDeliveryMode(row.fulfillment_mode)) {
       target.delivery++;
       target.deliveryFees = roundCents(target.deliveryFees + fee);
@@ -281,8 +293,10 @@ export function computeHistogramStats(samples = [], binSpecs = []) {
   const mean = clean.reduce((sum, v) => sum + v, 0) / n;
   const median = n % 2 ? clean[(n - 1) / 2] : (clean[n / 2 - 1] + clean[n / 2]) / 2;
   const variance = n > 1 ? clean.reduce((sum, v) => sum + (v - mean) ** 2, 0) / (n - 1) : 0;
-  const stdDev = Math.sqrt(variance);
-  const modeBin = [...counts].sort((a, b) => b.count - a.count)[0];
+  const stdDev = n>1 ? Math.sqrt(variance) : null;
+  const maxCount=Math.max(0,...counts.map(bin=>bin.count));
+  const modeBins=counts.filter(bin=>bin.count>0 && bin.count===maxCount).map(bin=>({label:bin.label,count:bin.count}));
+  const modeBin = modeBins[0];
 
   return {
     available: true,
@@ -291,7 +305,8 @@ export function computeHistogramStats(samples = [], binSpecs = []) {
     mean: round(mean, 2),
     median: round(median, 2),
     modeBin: modeBin && modeBin.count > 0 ? { label: modeBin.label, count: modeBin.count } : null,
-    stdDev: round(stdDev, 2),
+    modeBins,
+    stdDev: stdDev===null ? null : round(stdDev, 2),
     min: round(clean[0], 2),
     max: round(clean[n - 1], 2)
   };
@@ -316,6 +331,11 @@ export const VERIFICATION_SPEED_BINS = [
 /** Category x Channel interactive pivot matrix + Billing kind breakdown (BA Mod 9.2.10 & Mod 10.4.6). */
 export function buildCategoryChannelPivot(confirmed = [], items = [], categories = []) {
   const itemMap = new Map((items || []).map(item => [item.id, item]));
+  const catalog = new Map();
+  for(const item of items) {
+    const key=String(item.stock_group_id||item.id),current=catalog.get(key);
+    if(!current || current.is_active===false&&item.is_active!==false || (current.is_active!==false)===(item.is_active!==false)&&String(item.id)===key)catalog.set(key,item);
+  }
   const catName = new Map((categories || []).map(cat => [cat.id, cat.name || 'Category']));
   const rowsMap = new Map();
   const billingMap = new Map(['Hourly', 'Package', 'Whole stay', 'Standard / Other'].map(label => [label, { label, rentals: 0, fees: 0 }]));
@@ -341,9 +361,9 @@ export function buildCategoryChannelPivot(confirmed = [], items = [], categories
 
   for (const row of confirmed) {
     const item = itemMap.get(row.item_id);
-    const category = catName.get(item?.category_id) || 'Other equipment';
+    const category = catName.get(catalog.get(String(item?.stock_group_id||row.item_id))?.category_id??item?.category_id) || 'Uncategorized';
     const entry = ensureRow(category);
-    const fee = finite(row.rental_fee) && row.rental_fee >= 0 ? row.rental_fee : 0;
+    const fee = recordedFee(row.rental_fee);
     const cell = isDeliveryMode(row.fulfillment_mode) ? entry.delivery : entry.counter;
 
     cell.rentals++;
@@ -485,18 +505,18 @@ function predictExponentialSmoothing(history = [], horizonCount = 1, alpha = 0.3
   return Array.from({ length: horizonCount }, () => value);
 }
 
-function predictLinearRegression(history = [], horizonCount = 1, currency = false) {
+function predictLinearRegression(history = [], horizonCount = 1, currency = false, skippedPeriods = 0) {
   const { slope, intercept } = fitLinearRegression(history);
   const n = history.length;
   return Array.from({ length: horizonCount }, (_, step) => {
-    const raw = Math.max(0, intercept + slope * (n + step));
+    const raw = Math.max(0, intercept + slope * (n + skippedPeriods + step));
     return currency ? roundCents(raw) : round(raw, 1);
   });
 }
 
-function evaluateWalkForwardMae(history = [], baselinePredictor, groupBy) {
+function evaluateWalkForwardMae(history = [], baselinePredictor, groupBy, currency = false, rentalHistory = []) {
   const clean = history.map(v => (finite(v) ? v : 0));
-  const minWindow = groupBy === 'daily' ? 14 : 6;
+  const minWindow = groupBy === 'daily' ? 28 : 8;
   if (clean.length < minWindow + 3) {
     return { ready: false, samples: 0, ma: null, ses: null, linear: null };
   }
@@ -505,17 +525,21 @@ function evaluateWalkForwardMae(history = [], baselinePredictor, groupBy) {
   let sesErr = 0;
   let linErr = 0;
   let count = 0;
+  const rows = [];
 
   for (let idx = start; idx < clean.length; idx++) {
-    const train = clean.slice(0, idx);
+    const window = groupBy === 'daily' ? 28 : groupBy === 'monthly' ? 6 : 8;
+    const train = clean.slice(Math.max(0, idx-window), idx);
+    if (rentalHistory.slice(Math.max(0, idx-window), idx).reduce((a,b)=>a+b,0) < 4) continue;
     const actual = clean[idx];
-    const maPred = baselinePredictor(train, idx);
-    const sesPred = predictExponentialSmoothing(train, 1, 0.35, true)[0];
-    const linPred = predictLinearRegression(train, 1, true)[0];
+    const maPred = baselinePredictor(train, train.length);
+    const sesPred = predictExponentialSmoothing(train, 1, 0.35, currency)[0];
+    const linPred = predictLinearRegression(train, 1, currency)[0];
     maErr += Math.abs(actual - maPred);
     sesErr += Math.abs(actual - sesPred);
     linErr += Math.abs(actual - linPred);
     count++;
+    rows.push({ index:idx, trainingStart:Math.max(0,idx-window), trainingEnd:idx-1, actual, ma:maPred, ses:sesPred, linear:linPred });
   }
 
   return {
@@ -523,7 +547,8 @@ function evaluateWalkForwardMae(history = [], baselinePredictor, groupBy) {
     samples: count,
     ma: count > 0 ? roundCents(maErr / count) : null,
     ses: count > 0 ? roundCents(sesErr / count) : null,
-    linear: count > 0 ? roundCents(linErr / count) : null
+    linear: count > 0 ? roundCents(linErr / count) : null,
+    rows
   };
 }
 
@@ -560,8 +585,15 @@ export function buildForecastComparison(analyticsResult = {}) {
   const maFees = points.map(p => p.fees);
   const sesRentals = predictExponentialSmoothing(rentalHist, points.length, 0.35, false);
   const sesFees = predictExponentialSmoothing(feeHist, points.length, 0.35, true);
-  const linRentals = predictLinearRegression(rentalHist, points.length, false);
-  const linFees = predictLinearRegression(feeHist, points.length, true);
+  // An incomplete current period is not a training observation, but still takes
+  // a place on the time axis before the first future period.
+  const lastBucket=completedBuckets.at(-1),firstPoint=points[0];
+  const monthIndex = key => Number(key.slice(0,4))*12+Number(key.slice(5,7))-1;
+  const skippedPeriods = !lastBucket ? 0 : groupBy==='monthly'
+    ? Math.max(0,monthIndex(firstPoint.from)-monthIndex(lastBucket.from)-1)
+    : Math.max(0,Math.round((Date.parse(firstPoint.from)-Date.parse(lastBucket.from))/(86400000*(groupBy==='weekly'?7:1)))-1);
+  const linRentals = predictLinearRegression(rentalHist, points.length, false, skippedPeriods);
+  const linFees = predictLinearRegression(feeHist, points.length, true, skippedPeriods);
   const rentalReg = fitLinearRegression(rentalHist);
   const feeReg = fitLinearRegression(feeHist);
 
@@ -574,23 +606,25 @@ export function buildForecastComparison(analyticsResult = {}) {
       }
       if (!sameWeekday.length) return arr.at(-1) ?? 0;
       const avg = sameWeekday.reduce((s, v) => s + v, 0) / sameWeekday.length;
-      return isFee ? roundCents(avg) : round(avg, 1);
+      return avg;
     }
-    const lookback = groupBy === 'weekly' ? 8 : 8;
+    const lookback = groupBy === 'monthly' ? 6 : 8;
     const slice = arr.slice(-lookback);
     const avg = slice.reduce((s, v) => s + v, 0) / Math.max(1, slice.length);
-    return isFee ? roundCents(avg) : round(avg, 1);
+    return avg;
   };
 
-  const wfRentals = evaluateWalkForwardMae(rentalHist, (t, i) => maPredictor(t, i, false), groupBy);
-  const wfFees = evaluateWalkForwardMae(feeHist, (t, i) => maPredictor(t, i, true), groupBy);
+  const evaluation = forecast.evaluationHistory || completedBuckets;
+  const evaluationRentals = evaluation.map(b=>b.rentals);
+  const wfRentals = evaluateWalkForwardMae(evaluationRentals, (t, i) => maPredictor(t, i, false), groupBy, false, evaluationRentals);
+  const wfFees = evaluateWalkForwardMae(evaluation.map(b=>b.fees), (t, i) => maPredictor(t, i, true), groupBy, true, evaluationRentals);
 
   const models = [
     {
       key: 'ma',
-      name: 'Same-weekday moving average',
+      name: groupBy === 'daily' ? 'Same-weekday moving average' : 'Moving average',
       shortName: 'Moving average',
-      description: 'Averages matching past days/weeks so regular weekend peaks repeat cleanly.',
+      description: groupBy === 'daily' ? 'Averages matching weekdays from the last 4 complete weeks.' : `Averages the last ${groupBy === 'monthly' ? 6 : 8} complete ${groupBy === 'monthly' ? 'months' : 'weeks'}.`,
       rentals: maRentals,
       fees: maFees,
       totalRentals: round(maRentals.reduce((s, v) => s + v, 0), 1),
@@ -660,6 +694,7 @@ export function buildForecastComparison(analyticsResult = {}) {
     groupBy,
     models,
     evalSamples: wfRentals.samples,
+    evaluation: { rentals: wfRentals.rows || [], fees: wfFees.rows || [], requiredPeriods:(groupBy==='daily'?28:8)+3, basis:'Rolling one-period-ahead evaluation; each model uses the same history window as its displayed forecast.' },
     lowestErrorRentalKey: pickLowest('maeRentals'),
     lowestErrorFeeKey: pickLowest('maeFees'),
     driftAlert,
@@ -710,14 +745,16 @@ export function buildLateReturnDecisionTree(transactions = [], items = [], categ
 
     const due = recordDate(row.due_at);
     const ret = recordDate(row.received_at || row.confirmed_return_at);
-    if (row.status === 'ACTIVE') {
+    const validDue = due && due >= start;
+    const received = ret && ret >= start && ret <= now ? ret : null;
+    if (validDue && !received && (row.status === 'ACTIVE' || ret > now)) {
       activeToScore.push({ due, features });
     }
-    if (!due) continue;
-    if (ret) {
-      dueSamples.push({ ...features, isLate: ret > due, start });
-    } else if (row.status === 'ACTIVE' && due < now) {
-      dueSamples.push({ ...features, isLate: true, start });
+    if (!validDue) continue;
+    if (received) {
+      dueSamples.push({ ...features, isLate: received > due, start, knownAt:received });
+    } else if ((row.status === 'ACTIVE' || ret > now) && due < now) {
+      dueSamples.push({ ...features, isLate: true, start, knownAt:due });
     }
   }
 
@@ -764,41 +801,36 @@ export function buildLateReturnDecisionTree(transactions = [], items = [], categ
     return best;
   }
 
-  const leaves = [];
-  const rootSplit = bestSplit(dueSamples);
-  if (!rootSplit) {
-    leaves.push({ conditions: ['All due & returned bookings'], rows: dueSamples });
-  } else {
-    const used = new Set([rootSplit.key]);
-    const otherLeftVal = [...new Set(rootSplit.right.map(r => r[rootSplit.key]))].join(' / ');
-    const branches = [
-      { label: rootSplit.value, rows: rootSplit.left },
-      { label: otherLeftVal || `Not ${rootSplit.value}`, rows: rootSplit.right }
+  // The displayed rules, active scoring and holdout use this same depth-2 learner.
+  function fitRules(rows, predicates = [], usedKeys = new Set()) {
+    const split = predicates.length < 2 ? bestSplit(rows, usedKeys) : null;
+    if (!split) return [{ predicates, rows }];
+    const used = new Set([...usedKeys,split.key]);
+    return [
+      ...fitRules(split.left,[...predicates,{key:split.key,value:split.value,equal:true}],used),
+      ...fitRules(split.right,[...predicates,{key:split.key,value:split.value,equal:false}],used)
     ];
-    for (const branch of branches) {
-      const subSplit = bestSplit(branch.rows, used);
-      if (subSplit) {
-        const otherSubVal = [...new Set(subSplit.right.map(r => r[subSplit.key]))].join(' / ');
-        leaves.push({ conditions: [branch.label, subSplit.value], rows: subSplit.left });
-        leaves.push({ conditions: [branch.label, otherSubVal || `Not ${subSplit.value}`], rows: subSplit.right });
-      } else {
-        leaves.push({ conditions: [branch.label], rows: branch.rows });
-      }
-    }
   }
+  const matches = (features, leaf) => leaf.predicates.every(p=>(features[p.key]===p.value)===p.equal);
+  const lateRate = leaf => leaf.rows.filter(r=>r.isLate).length/leaf.rows.length;
+  const higherRisk = (rate, baseline) => rate >= Math.min(1,Math.max(0.3,baseline*1.35));
+  const leaves = fitRules(dueSamples);
 
   const rules = leaves.map(leaf => {
     const lateCount = leaf.rows.filter(r => r.isLate).length;
     const rate = lateCount / leaf.rows.length;
-    const risk = rate >= Math.max(0.3, baseLateRate * 1.35) ? 'Higher risk' : rate >= Math.max(0.15, baseLateRate * 0.85) ? 'Moderate risk' : 'Lower risk';
+    const risk = higherRisk(rate, baseLateRate) ? 'Higher risk' : rate >= Math.max(0.15, baseLateRate * 0.85) ? 'Moderate risk' : 'Lower risk';
     const advice = risk === 'Higher risk'
       ? 'Send a return reminder 1 hour before due time or confirm extension early.'
       : risk === 'Moderate risk'
         ? 'Keep standard due-time check active.'
         : 'Normal return pace observed.';
+    const conditions=leaf.predicates.map(p=>`${p.equal?'':'Not '}${p.value}`);
+    if (!conditions.length) conditions.push('All due & returned bookings');
     return {
-      conditions: leaf.conditions,
-      ruleText: `IF ${leaf.conditions.join(' AND ')}`,
+      predicates:leaf.predicates,
+      conditions,
+      ruleText: `IF ${conditions.join(' AND ')}`,
       samples: leaf.rows.length,
       lateCount,
       lateRate: rate,
@@ -810,25 +842,24 @@ export function buildLateReturnDecisionTree(transactions = [], items = [], categ
   // Score currently ACTIVE rentals anonymously against learned rules (never store customer/rental IDs).
   let elevatedCount = 0;
   for (const active of activeToScore) {
-    const valuesSet = new Set(Object.values(active.features));
-    const matched = rules.find(rule => rule.conditions.every(c => valuesSet.has(c)));
+    const matched = rules.find(rule => matches(active.features,rule));
     if (matched && matched.risk === 'Higher risk') elevatedCount++;
   }
 
-  // Chronological 80/20 evaluation note (Modeling Mod 6) when sufficient both-class observations exist.
+  // Chronological 75/25 evaluation of the same learner and higher-risk threshold.
   const positives = dueSamples.filter(r => r.isLate).length;
   let validation = null;
   if (dueSamples.length >= 16 && positives >= 2 && positives <= dueSamples.length - 2) {
     const splitAt = Math.floor(dueSamples.length * 0.75);
-    const train = dueSamples.slice(0, splitAt);
     const test = dueSamples.slice(splitAt);
-    const thresholdRate = Math.max(0.3, (train.filter(r => r.isLate).length / train.length) * 1.25);
-    const s1 = bestSplit(train);
+    // A booking outcome must already be known before the first test release.
+    const train = dueSamples.slice(0, splitAt).filter(row=>row.knownAt < test[0].start);
+    const validationLeaves = train.length >= MIN_SAMPLES ? fitRules(train) : [];
+    const trainingLateRate = train.filter(r=>r.isLate).length/Math.max(1,train.length);
     let tp = 0; let fp = 0; let fn = 0; let tn = 0;
     for (const row of test) {
-      const predLate = s1
-        ? ((row[s1.key] === s1.value ? s1.left : s1.right).filter(r => r.isLate).length / (row[s1.key] === s1.value ? s1.left : s1.right).length) >= thresholdRate
-        : false;
+      const leaf=validationLeaves.find(leaf=>matches(row,leaf));
+      const predLate=leaf ? higherRisk(lateRate(leaf),trainingLateRate) : false;
       if (predLate && row.isLate) tp++;
       else if (predLate && !row.isLate) fp++;
       else if (!predLate && row.isLate) fn++;
@@ -836,8 +867,8 @@ export function buildLateReturnDecisionTree(transactions = [], items = [], categ
     }
     const precision = tp + fp > 0 ? tp / (tp + fp) : null;
     const recall = tp + fn > 0 ? tp / (tp + fn) : null;
-    const f1 = precision !== null && recall !== null && precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : null;
-    validation = { holdoutCount: test.length, accuracy: round((tp + tn) / test.length, 2), f1: f1 !== null ? round(f1, 2) : null };
+    const f1 = 2*tp+fp+fn>0 ? 2*tp/(2*tp+fp+fn) : null;
+    if(validationLeaves.length) validation = { holdoutCount: test.length, trainingCount:train.length, accuracy: round((tp + tn) / test.length, 2), precision, recall, f1, confusion:{tp,fp,fn,tn}, model:'Depth-2 rules; chronological 75/25 split; only earlier known outcomes', trainingThrough:new Date(Math.max(...train.map(r=>r.knownAt.getTime()))).toISOString(), testFrom:test[0].start.toISOString() };
   }
 
   return {
@@ -862,7 +893,7 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
     if (!CONFIRMED_STATUSES.has(row.status) || !row.customer_id) continue;
     const start = recordDate(row.confirmed_rental_at);
     if (!start || start > now) continue;
-    const fee = finite(row.rental_fee) && row.rental_fee >= 0 ? row.rental_fee : 0;
+    const fee = recordedFee(row.rental_fee);
     const entry = byCustomer.get(row.customer_id) || { rentals: 0, spend: 0, lastAt: start };
     entry.rentals++;
     entry.spend = roundCents(entry.spend + fee);
@@ -913,7 +944,7 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
     const inactive = profiles.filter(p => p.recencyDays > 21);
     const occasional = profiles.filter(p => p.rentals < 2 && p.recencyDays <= 21);
     const segments = [
-      frequent.length ? summarize('Frequent repeat renters', frequent, 'Booked 2+ times recently.') : null,
+      frequent.length ? summarize('Frequent repeat renters', frequent, 'At least 2 recorded bookings; last booking within 21 days.') : null,
       occasional.length ? summarize('Occasional / single renters', occasional, 'Recent single bookings.') : null,
       inactive.length ? summarize('Inactive / churn watch', inactive, 'No booking in over 21 days.') : null
     ].filter(Boolean);
@@ -955,6 +986,7 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
         bestIdx = idx;
       }
     }
+    if (bestD <= 0) break; // Identical profiles cannot form distinct clusters.
     centroids.push(vectors[bestIdx].slice());
   }
 
@@ -1004,8 +1036,8 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
       label = 'Inactive / churn watch';
       note = `Last booking averaged ${round(cluster.avgRecency, 0)} days ago — consider a return promo.`;
     } else if (cluster === frequentCluster && !usedLabels.has('Frequent repeat renters')) {
-      label = 'Frequent repeat renters';
-      note = 'Highest repeat booking count in your renter base.';
+      label = cluster.avgRentals > 1 ? 'Frequent repeat renters' : 'Single-booking renters';
+      note = cluster.avgRentals > 1 ? 'Highest average booking count among these groups.' : 'One recorded booking per customer; repeat behavior is not established.';
     } else if (cluster === highSpendCluster && !usedLabels.has('High-spend renters')) {
       label = 'High-spend renters';
       note = 'Higher average rental spend per customer.';
@@ -1024,6 +1056,8 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
     for (let i = 0; i < totalCustomers; i++) {
       const ci = assign[i];
       const samePts = vectors.filter((_, j) => j !== i && assign[j] === ci);
+      // A singleton has no within-cluster comparison: its silhouette is zero, not one.
+      if (!samePts.length) { silCount++; continue; }
       const a = samePts.length ? samePts.reduce((s, p) => s + Math.sqrt(dist2(vectors[i], p)), 0) / samePts.length : 0;
       let b = Infinity;
       for (let c = 0; c < centroids.length; c++) {
@@ -1033,8 +1067,8 @@ export function buildCustomerSegmentsAndChurn(transactions = [], now = new Date(
         const meanDist = otherPts.reduce((s, p) => s + Math.sqrt(dist2(vectors[i], p)), 0) / otherPts.length;
         if (meanDist < b) b = meanDist;
       }
-      if (Number.isFinite(b) && Math.max(a, b) > 0) {
-        silSum += (b - a) / Math.max(a, b);
+      if (Number.isFinite(b)) {
+        silSum += Math.max(a, b) > 0 ? (b - a) / Math.max(a, b) : 0;
         silCount++;
       }
     }
@@ -1128,15 +1162,17 @@ export function buildMarketBasketBundles(confirmed = [], items = []) {
 }
 
 /** Anonymized Outlier & Unusual Record Alerts using Mean + 2 SD rule (Modeling Mod 4) + overdue checks. */
-export function buildOutlierAlerts({ confirmed = [], transactions = [], items = [], verification = [], durationStats = null, speedStats = null, now = new Date() } = {}) {
+export function buildOutlierAlerts({ confirmed = [], returns = confirmed, transactions = [], items = [], verification = [], durationStats = null, speedStats = null, now = new Date() } = {}) {
   const itemMap = new Map((items || []).map(item => [item.id, item.name || 'Equipment']));
   const alerts = [];
 
   // 1. Active rentals overdue > 24 hours.
   const longOverdue = (transactions || []).filter(r => {
-    if (r.status !== 'ACTIVE') return false;
+    const start = recordDate(r.confirmed_rental_at);
+    const received = recordDate(r.received_at || r.confirmed_return_at);
+    if (!start || start > now || (received && received<=now) || (r.status !== 'ACTIVE' && !(received>now))) return false;
     const due = recordDate(r.due_at);
-    return due && (now.getTime() - due.getTime()) > 24 * 3600000;
+    return due && due>=start && (now.getTime() - due.getTime()) > 24 * 3600000;
   });
   if (longOverdue.length) {
     const topItems = [...new Set(longOverdue.map(r => itemMap.get(r.item_id) || 'Equipment'))].slice(0, 3);
@@ -1152,10 +1188,10 @@ export function buildOutlierAlerts({ confirmed = [], transactions = [], items = 
   // 2. Duration outliers (> mean + 2 SD when >= 5 completed duration samples).
   if (durationStats?.available && durationStats.count >= 5 && durationStats.stdDev > 0) {
     const threshold = durationStats.mean + 2 * durationStats.stdDev;
-    const longDurations = confirmed.filter(r => {
+    const longDurations = returns.filter(r => {
       const start = recordDate(r.confirmed_rental_at);
       const ret = recordDate(r.received_at || r.confirmed_return_at);
-      if (!start || !ret || ret < start) return false;
+      if (!start || !ret || ret < start || ret > now) return false;
       return ((ret - start) / 3600000) > threshold;
     });
     if (longDurations.length) {
@@ -1174,7 +1210,7 @@ export function buildOutlierAlerts({ confirmed = [], transactions = [], items = 
     if (v.status !== 'CONFIRMED') return false;
     const req = recordDate(v.requested_at);
     const conf = recordDate(v.confirmed_at);
-    return req && conf && conf >= req && ((conf - req) / 1000) > 60;
+    return v.terminal_id && req && conf && conf >= req && conf<=now && ((conf - req) / 1000) > 60;
   });
   if (slowVerifs.length) {
     alerts.push({
@@ -1187,7 +1223,7 @@ export function buildOutlierAlerts({ confirmed = [], transactions = [], items = 
   }
 
   // 4. Confirmed rentals with missing/unrecorded fee.
-  const zeroFees = confirmed.filter(r => !finite(r.rental_fee) || r.rental_fee === 0);
+  const zeroFees = confirmed.filter(r => !recordedFee(r.rental_fee));
   if (zeroFees.length) {
     alerts.push({
       kind: 'missing-fee',
@@ -1212,19 +1248,22 @@ export function simulateWhatIfScenario({ groups = [], totals = {} } = {}, input 
   const targetLabel = group ? group.name : 'Whole fleet';
   const currentRentals = group ? group.rentals : (totals.rentals || 0);
   const currentFees = roundCents(group ? group.fees : (totals.fees || 0));
-  const currentUnits = Math.max(1, group ? (group.units || 1) : groups.reduce((s, g) => s + (g.units || 1), 0));
+  const units = g => { const value=g.unitCount??g.units;return Number.isSafeInteger(value)&&value>=0?value:0; };
+  const currentUnits = group ? units(group) : groups.reduce((s,g)=>s+units(g),0);
   const currentUtil = group ? group.utilization : totals.utilization;
 
-  // Transparent elasticity model: -0.35 price sensitivity + capacity ceiling if extra units are added.
-  const unitCapacityScale = (currentUnits + extraUnits) / currentUnits;
+  // Hypothetical demand assumptions; adding stock alone does not create bookings.
+  const unitCapacityScale = currentUnits>0 ? (currentUnits + extraUnits) / currentUnits : null;
   const priceEffect = 1 - 0.35 * (rateChangePct / 100);
   const marketEffect = 1 + (demandShiftPct / 100);
-  const combinedRentalFactor = Math.max(0.25, marketEffect * priceEffect * Math.min(unitCapacityScale, 1 + extraUnits * 0.25));
+  const requestedRentalFactor = Math.max(0, marketEffect * priceEffect);
+  const capacityFactor = unitCapacityScale!==null && finite(currentUtil) && currentUtil>0 ? unitCapacityScale/currentUtil : null;
+  const combinedRentalFactor = capacityFactor===null ? requestedRentalFactor : Math.min(requestedRentalFactor,capacityFactor);
 
   const projectedRentals = round(currentRentals * combinedRentalFactor, 1);
   const avgFee = currentRentals > 0 ? currentFees / currentRentals : 0;
   const projectedFees = roundCents(projectedRentals * avgFee * (1 + rateChangePct / 100));
-  const projectedUtilization = finite(currentUtil)
+  const projectedUtilization = finite(currentUtil) && unitCapacityScale!==null
     ? Math.min(1, round((currentUtil * combinedRentalFactor) / unitCapacityScale, 4))
     : null;
 
@@ -1235,6 +1274,7 @@ export function simulateWhatIfScenario({ groups = [], totals = {} } = {}, input 
     rateChangePct,
     demandShiftPct,
     currentRentals,
+    currentUnits,
     projectedRentals,
     currentFees,
     projectedFees,
@@ -1242,6 +1282,7 @@ export function simulateWhatIfScenario({ groups = [], totals = {} } = {}, input 
     currentUtilization: currentUtil,
     projectedUtilization,
     capacityWarning: projectedUtilization !== null && projectedUtilization >= 0.85,
-    formulaNote: 'Assumes -0.35 moderate price elasticity plus extra capacity scaling from added units.'
+    capacityLimited:capacityFactor!==null && requestedRentalFactor>capacityFactor,
+    formulaNote: 'Hypothetical assumptions: price elasticity −0.35 (not fitted to business data), constant average duration and fee per booking, and the entered demand shift. Extra units increase capacity; they do not create demand. Calendar-hour capacity is an approximate ceiling, not a guarantee of unit availability at peak times.'
   };
 }

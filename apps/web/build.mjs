@@ -115,6 +115,7 @@ const sourceFiles = [
   'dashboard-analytics.js',
   'analytics-charts.js',
   'analytics-chart-motion.js',
+  'analytics-equipment-matrix.js',
   'forecast-workspace.js',
   'styles.css',
   'analytics-layout.css',

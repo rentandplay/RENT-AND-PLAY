@@ -582,7 +582,7 @@ export function App() {
     c.rentalNotifications.setAccount(user.id);
   }, [user, stopRentalEventStream, syncRentalEventStream]);
 
-  // Warm first-visit page data after authentication, without rendering hidden pages.
+  // Warm small configuration views without competing with the current page.
   useEffect(() => {
     if (!user?.id || user.mustChangePassword) return;
     let active = true;
@@ -591,10 +591,7 @@ export function App() {
       const current = pageRef.current;
       if (workspacePages.has(current) && current !== 'Payments') await c.workspaceUI.load().catch(() => {});
       if (!active || userRef.current?.id !== user.id) return;
-      await Promise.all([
-        c.workspaceUI.preloadPages({ skipViews: [pageRef.current] }),
-        c.inventoryController.prefetch()
-      ]);
+      await c.workspaceUI.preloadPages({ skipViews: [pageRef.current] });
     };
     const timer = setTimeout(() => { void warmPages(); }, 150);
     return () => { active = false; clearTimeout(timer); c.workspaceUI.cancelPreload(); };

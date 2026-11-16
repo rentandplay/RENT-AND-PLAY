@@ -201,8 +201,10 @@ async function selectRentableUnit(tx,db,itemId,stockGroupId=null,input={},now=ne
     const item=docData(doc);
     if(start ? item.is_active===false || !['AVAILABLE','RESERVED_PENDING','RENTED'].includes(item.status) || !healthyUnit(item) : !rentableUnit(item))continue;
     if(await unitHasMaintenance(tx,db,doc.id))continue;
-    const related=await rentalsForItem(tx,db,doc.id);
-    const fee=await frozenQuote(tx,db,item,{...input,startAt:(start||now).toISOString()},now,Boolean(start));
+    const [related,fee]=await Promise.all([
+      rentalsForItem(tx,db,doc.id),
+      frozenQuote(tx,db,item,{...input,startAt:(start||now).toISOString()},now,Boolean(start))
+    ]);
     if(!calendarConflict(rows(related),start||now,asDate(fee.due_at),now))return {doc,item,related,fee};
   }
   return null;

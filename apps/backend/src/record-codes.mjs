@@ -101,29 +101,29 @@ export function createRecordCodeService(db, { now = () => new Date(), onWrite = 
     };
     for (const [key, type] of Object.entries(kinds)) if (result[key]) result[key] = await enrich(result[key], type, related);
     for (const key of ['inspection', 'delivery_preparation']) if (result[key]) result[key] = await enrich(result[key], null, related);
-    for (const field of ['inspected_by', 'prepared_by', 'confirmed_rental_by', 'received_by', 'confirmed_return_by']) if (result[field]) {
+    for (const field of ['inspected_by', 'prepared_by', 'confirmed_rental_by', 'received_by', 'confirmed_return_by']) if (result[field] && !usable(result[`${field}_account_code`], recordTypes.users)) {
       const account = await reference('users', result[field]);
       if (account) result[`${field}_account_code`] = account.account_code;
     }
-    if (result.rental_id) {
+    if (result.rental_id && !usable(result.rental_code, recordTypes.rentals)) {
       const rental = await reference('rentals', result.rental_id);
       if (rental) result.rental_code = rental.rental_code;
     }
-    if (result.terminal_id || result.terminalId) {
+    if ((result.terminal_id || result.terminalId) && !usable(result.terminal_code, recordTypes.terminals)) {
       const terminal = await reference('terminals', result.terminal_id || result.terminalId);
       if (terminal) result.terminal_code = terminal.terminal_code;
     }
-    if (result.confirmed_terminal_id) {
+    if (result.confirmed_terminal_id && !usable(result.confirmed_terminal_code, recordTypes.terminals)) {
       const terminal = await reference('terminals', result.confirmed_terminal_id);
       if (terminal) result.confirmed_terminal_code = terminal.terminal_code;
     }
     // A ticket and a notification identify rentals through rental_id, not id.
-    if (result.ticket?.rental_id) {
+    if (result.ticket?.rental_id && !usable(result.ticket.rental_code, recordTypes.rentals)) {
       const rental = await reference('rentals', result.ticket.rental_id);
       if (rental) result.ticket = { ...result.ticket, rental_code: rental.rental_code };
     }
     if (Array.isArray(result.notifications)) result.notifications = await Promise.all(result.notifications.map(async entry => {
-      const rental = await reference('rentals', entry.rental_id);
+      const rental = usable(entry.rental_code, recordTypes.rentals) ? null : await reference('rentals', entry.rental_id);
       return { ...entry, ...(rental ? { rental_code: rental.rental_code } : {}), title: String(entry.title || '').replace(/\bbooking\b/gi, 'rental request'), message: String(entry.message || '').replace(/\bbooking\b/gi, 'rental request') };
     }));
     return result;

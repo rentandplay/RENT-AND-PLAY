@@ -7,9 +7,10 @@ import {
   normalizeSupabaseUrl
 } from '../src/supabase.mjs';
 
-function createMockSupabaseServer() {
+function createMockSupabaseServer({ maxRows = 500 } = {}) {
   const tables = new Map();
   const storageObjects = new Map();
+  const calls = [];
 
   function getTable(name) {
     if (!name || !/^[a-z0-9_]+$/.test(name)) {
@@ -21,6 +22,23 @@ function createMockSupabaseServer() {
 
   async function fetcher(url, options = {}) {
     const parsed = new URL(url);
+    calls.push({ url: parsed, options });
+
+    if (parsed.pathname.startsWith('/rest/v1/') && !parsed.pathname.includes('/rpc/')) {
+      let rows = [...getTable(parsed.pathname.split('/').at(-1)).entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, row]) => ({ id, data: structuredClone(row.data), version: row.version }));
+      for (const [key, predicate] of parsed.searchParams) {
+        if (key === 'id' && predicate.startsWith('gt.')) rows = rows.filter(row => row.id > predicate.slice(3));
+        if (!key.startsWith('data->>')) continue;
+        const field = key.slice('data->>'.length);
+        const allowed = predicate.startsWith('in.') ? JSON.parse(`[${predicate.slice(4, -1)}]`) : [predicate.slice(3)];
+        rows = rows.filter(row => allowed.includes(String(row.data[field])));
+      }
+      const count = rows.length;
+      rows = rows.slice(0, Math.min(maxRows, Number(parsed.searchParams.get('limit'))));
+      return { ok: true, status: 200, headers: new Headers({ 'content-range': `0-${rows.length - 1}/${count}` }), json: async () => rows };
+    }
 
     // Storage upload endpoint: /storage/v1/object/<bucket>/<path>
     if (parsed.pathname.startsWith('/storage/v1/object/')) {
@@ -109,8 +127,123 @@ function createMockSupabaseServer() {
     return { ok: false, status: 404, json: async () => ({}), text: async () => 'Not found' };
   }
 
-  return { fetcher, tables, storageObjects };
+  return { fetcher, tables, storageObjects, calls };
 }
+
+test('stock and rental lookups filter in PostgreSQL and paginate beyond a server row cap', async () => {
+  const mock = createMockSupabaseServer({ maxRows: 2 });
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: mock.fetcher });
+  for (let i = 0; i < 8; i++) await db.collection('rentals').doc(`r${i}`).set({ item_id: i < 6 ? 'bike' : 'ball', status: i < 5 ? 'ACTIVE' : 'COMPLETED' });
+  const result = await db.collection('rentals').where('item_id', '==', 'bike').where('status', 'in', ['ACTIVE', 'APPROVED']).get();
+  assert.deepEqual(result.docs.map(doc => doc.id), ['r0', 'r1', 'r2', 'r3', 'r4']);
+  const reads = mock.calls.filter(call => call.url.pathname === '/rest/v1/rentals');
+  assert.equal(reads.length, 3);
+  assert.equal(reads[0].url.searchParams.get('data->>item_id'), 'eq.bike');
+  assert.equal(reads[0].url.searchParams.get('data->>status'), 'in.("ACTIVE","APPROVED")');
+  assert.equal(mock.calls.some(call => call.url.pathname.endsWith('/app_list_docs')), false);
+});
+
+test('plain readiness limits run in SQL and string pushdown still preserves strict local types', async () => {
+  const mock = createMockSupabaseServer();
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: mock.fetcher });
+  await db.collection('users').doc('a').set({ code: 42 });
+  await db.collection('users').doc('b').set({ code: '42' });
+  assert.equal((await db.collection('users').limit(1).get()).size, 1);
+  assert.equal(mock.calls.at(-1).url.searchParams.get('limit'), '1');
+  assert.equal(mock.calls.at(-1).options.headers.Prefer, undefined, 'readiness should not count the entire user table');
+  const result = await db.collection('users').where('code', '==', '42').get();
+  assert.deepEqual(result.docs.map(doc => doc.id), ['b']);
+});
+
+test('installations exposing only RPCs fall back without requiring a migration', async () => {
+  const mock = createMockSupabaseServer();
+  let direct = 0;
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: async (url, options) => {
+    if (new URL(url).pathname === '/rest/v1/rentals') {
+      direct++;
+      return { ok: false, status: 403, json: async () => ({ code: '42501', message: 'Permission denied' }) };
+    }
+    return mock.fetcher(url, options);
+  } });
+  await db.collection('rentals').doc('r1').set({ status: 'ACTIVE' });
+  for (let i = 0; i < 2; i++) assert.equal((await db.collection('rentals').where('status', '==', 'ACTIVE').get()).size, 1);
+  assert.equal(direct, 1);
+});
+
+test('overlapping full-history scans share one request and recover after a failed read', async () => {
+  let reads = 0, fail = true;
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: async () => {
+    reads++;
+    await new Promise(resolve => setImmediate(resolve));
+    if (fail) throw new Error('Temporary outage');
+    return { ok: true, json: async () => [{ id: 'r1', version: 1, data: { status: 'ACTIVE' } }] };
+  } });
+  const failed = await Promise.allSettled([db.collection('rentals').get(), db.collection('rentals').get()]);
+  assert.ok(failed.every(result => result.status === 'rejected'));
+  assert.equal(reads, 1);
+  fail = false;
+  const result = await Promise.all([db.collection('rentals').get(), db.collection('rentals').get()]);
+  assert.equal(reads, 2);
+  assert.ok(result.every(snapshot => snapshot.size === 1));
+  await db.collection('rentals').get();
+  assert.equal(reads, 3, 'completed data is never reused for authoritative reads');
+});
+
+test('collection media downloads run only for rows selected by filter, ordering and limit', async () => {
+  const downloads = [];
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: async url => {
+    if (url.includes('/storage/')) {
+      downloads.push(url);
+      return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2]).buffer };
+    }
+    return { ok: true, json: async () => ['a', 'b', 'c'].map((id, i) => ({ id, version: 1, data: {
+      score: i, image_data_url: `__SUPABASE_STORAGE__:proofs/${id}.png`
+    } })) };
+  } });
+  const result = await db.collection('rental_payment_proofs').where('score', '>=', 1).orderBy('score', 'desc').limit(1).get();
+  assert.deepEqual(result.docs.map(doc => doc.id), ['c']);
+  assert.equal(downloads.length, 1);
+  assert.match(downloads[0], /proofs\/c\.png$/);
+  assert.match(result.docs[0].data().image_data_url, /^data:image\/png;base64,/);
+});
+
+test('a committed write detaches older in-flight scans before authoritative reads begin', async () => {
+  let begin, release, lists = 0;
+  const started = new Promise(resolve => { begin = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: async url => {
+    if (url.endsWith('/app_commit_writes')) return { ok: true, json: async () => ({ ok: true }) };
+    const old = ++lists === 1;
+    if (old) { begin(); await gate; }
+    return { ok: true, json: async () => [{ id: 'r1', version: old ? 1 : 2, data: { status: old ? 'ACTIVE' : 'COMPLETED' } }] };
+  } });
+  const old = db.collection('rentals').get();
+  await started;
+  await db.collection('rentals').doc('r1').set({ status: 'COMPLETED' });
+  try {
+    assert.equal((await db.collection('rentals').get()).docs[0].data().status, 'COMPLETED');
+    assert.equal(lists, 2, 'a new read cannot join a pre-commit snapshot');
+  } finally { release(); await old; }
+});
+
+test('transaction retries reuse repeated reads within an attempt and refresh after conflict', async () => {
+  const mock = createMockSupabaseServer();
+  const db = createSupabaseFirestore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-key', fetcher: mock.fetcher });
+  const ref = db.collection('settings').doc('business');
+  await ref.set({ value: 1 });
+  let attempts = 0;
+  await db.runTransaction(async tx => {
+    attempts++;
+    const first = await tx.get(ref), second = await tx.get(db.collection('settings').doc('business'));
+    assert.equal(first.data().value, second.data().value);
+    if (attempts === 1) await ref.update({ value: 5 });
+    tx.update(ref, { value: first.data().value + 1 });
+  });
+  assert.equal(attempts, 2);
+  const reads = mock.calls.filter(call => call.url.pathname.endsWith('/app_get_doc'));
+  assert.equal(reads.length, 2);
+  assert.equal((await ref.get()).data().value, 6);
+});
 
 test('chat queries send ownership, ordering and limits to PostgreSQL instead of listing all messages', async () => {
   const calls = [];

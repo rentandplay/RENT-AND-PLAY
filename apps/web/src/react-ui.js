@@ -3414,10 +3414,7 @@ function App() {
       if (workspacePages.has(current) && current !== "Payments") await c.workspaceUI.load().catch(() => {
       });
       if (!active || userRef.current?.id !== user.id) return;
-      await Promise.all([
-        c.workspaceUI.preloadPages({ skipViews: [pageRef.current] }),
-        c.inventoryController.prefetch()
-      ]);
+      await c.workspaceUI.preloadPages({ skipViews: [pageRef.current] });
     };
     const timer = setTimeout(() => {
       void warmPages();

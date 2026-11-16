@@ -150,8 +150,10 @@ export async function quoteEquipmentRental(db, input, now = new Date()) {
       const item=docData(itemDoc);
       if(item.is_active===false||!healthyUnit(item)|| (start ? !['AVAILABLE','RESERVED_PENDING','RENTED'].includes(item.status) : String(item.status).toUpperCase()!=='AVAILABLE'||item.reserved_rental_id||item.current_rental_id))continue;
       if(await unitHasMaintenance(tx,db,itemDoc.id))continue;
-      const openDocs=await rentalsForItem(tx,db,itemDoc.id);
-      const quote = await frozenQuote(tx,db,item,{...input,startAt:(start||now).toISOString()},now,Boolean(start));
+      const [openDocs,quote]=await Promise.all([
+        rentalsForItem(tx,db,itemDoc.id),
+        frozenQuote(tx,db,item,{...input,startAt:(start||now).toISOString()},now,Boolean(start))
+      ]);
       if(calendarConflict(rows(openDocs),start||now,asDate(quote.due_at),now))continue;
       return quote;
     }

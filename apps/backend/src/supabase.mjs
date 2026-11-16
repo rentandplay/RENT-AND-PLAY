@@ -151,7 +151,81 @@ export function createSupabaseFirestore({
   const baseUrl = normalizeSupabaseUrl(url);
   const apiKey = (serviceRoleKey || '').trim();
   const mediaDataUrlCache = new Map();
+  const pendingReads = new Map();
+  const rpcOnlyTables = new Set();
   let writeListener = onWrite;
+
+  // Share only reads that are currently in flight, never completed snapshots.
+  // Transaction and authorization reads must see writes as soon as they commit.
+  function sharedRead(table, key, read) {
+    const cacheKey = JSON.stringify([table, key]);
+    const existing = pendingReads.get(cacheKey);
+    if (existing) return existing.promise;
+    const entry = { table, promise: null };
+    entry.promise = Promise.resolve().then(read).finally(() => {
+      if (pendingReads.get(cacheKey) === entry) pendingReads.delete(cacheKey);
+    });
+    pendingReads.set(cacheKey, entry);
+    return entry.promise;
+  }
+
+  async function listRows(table, filters, limit, order, cursor, scoped) {
+    if (!baseUrl || !apiKey) return rpc('app_list_docs', { p_collection: table });
+    // String equality predicates cover stock, status, ownership and rental
+    // lookups. PostgreSQL filters these before sending data to Node. Keep the
+    // local predicates too, to preserve strict types and legacy query behavior.
+    const params = new URLSearchParams({ select: 'id,data,version:tx_version', order: 'id.asc' });
+    let pushed = false;
+    for (const [field, operator, value] of filters) {
+      if (field === '__name__' || !/^[A-Za-z0-9_]+$/.test(field)) continue;
+      if (operator === '==' && typeof value === 'string') {
+        params.append(`data->>${field}`, `eq.${value}`);
+        pushed = true;
+      } else if (operator === 'in' && Array.isArray(value) && value.length && value.every(entry => typeof entry === 'string')) {
+        params.append(`data->>${field}`, `in.(${value.map(entry => JSON.stringify(entry)).join(',')})`);
+        pushed = true;
+      }
+    }
+    // A plain limit (including readiness's limit(1)) can also run in SQL.
+    const plainLimit = !filters.length && !order && !cursor && !scoped && Number.isFinite(limit);
+    if ((!pushed && !plainLimit) || rpcOnlyTables.has(table)) {
+      return sharedRead(table, 'all', () => rpc('app_list_docs', { p_collection: table }));
+    }
+    return sharedRead(table, params.toString() + (plainLimit ? `:${limit}` : ''), async () => {
+      const result = [];
+      let after = null;
+      while (true) {
+        const page = new URLSearchParams(params);
+        page.set('limit', String(plainLimit ? Math.min(500, limit - result.length) : 500));
+        if (after !== null) page.set('id', `gt.${after}`);
+        const response = await fetcher(`${baseUrl}/rest/v1/${table}?${page}`, {
+          signal: AbortSignal.timeout(requestTimeoutMs),
+          headers: headers(plainLimit ? {} : { Prefer: 'count=exact' })
+        });
+        if (!response.ok) {
+          const failure = await response.json().catch(() => ({}));
+          // Older installations can expose only the RPCs. They still work and
+          // share their aggregate read, without needing a schema migration.
+          if (['42501', 'PGRST205', '42P01'].includes(failure.code)) {
+            rpcOnlyTables.add(table);
+            return sharedRead(table, 'all', () => rpc('app_list_docs', { p_collection: table }));
+          }
+          throw Object.assign(new Error(failure.message || `Supabase query failed (${response.status})`), {
+            code: failure.code || 'SUPABASE_ERROR', status: response.status
+          });
+        }
+        const rows = await response.json();
+        if (!Array.isArray(rows)) throw new Error('Supabase query returned an invalid document list.');
+        result.push(...rows);
+        const total = response.headers?.get('content-range')?.split('/')[1];
+        if (!rows.length || plainLimit && result.length >= limit || total && total !== '*' && rows.length >= Number(total)) break;
+        const next = rows.at(-1).id;
+        if (next === after) throw new Error('Supabase query pagination did not advance.');
+        after = next;
+      }
+      return result;
+    });
+  }
 
   function headers(extra = {}) {
     return {
@@ -314,6 +388,8 @@ export function createSupabaseFirestore({
       p_writes: enrichedWrites,
       p_preconditions: normalizedPreconditions
     });
+    const changedTables = new Set(normalizedWrites.map(op => op.collection));
+    for (const [key, entry] of pendingReads) if (changedTables.has(entry.table)) pendingReads.delete(key);
     if (writeListener && normalizedWrites.length) {
       try { writeListener(normalizedWrites); } catch {}
     }
@@ -382,6 +458,7 @@ export function createSupabaseFirestore({
     const { tableName, scopePrefix, isSubcollection } = parseCollectionPath(name);
     const query = {
       _isQuery: true,
+      _queryKey: JSON.stringify([name, encodeSupabaseValue(filters), limitVal, order, cursorId]),
       collectionName: name,
       doc: id => document(name, id),
       where: (field, operator, value) => {
@@ -400,16 +477,10 @@ export function createSupabaseFirestore({
         const chatQuery = ['chat_threads', 'chat_messages'].includes(tableName);
         const rows = chatQuery
           ? await rpc('app_chat_list_docs', { p_collection: tableName, p_filters: filters, p_order: order, p_limit: Number.isFinite(limitVal) ? limitVal : 51 })
-          : await rpc('app_list_docs', { p_collection: tableName });
-        const hydratedRows = await Promise.all(
-          (Array.isArray(rows) ? rows : []).map(async row => ({
-            ...row,
-            data: await hydrateRowFromStorage(tableName, row.data || {})
-          }))
-        );
+          : await listRows(tableName, filters, limitVal, order, cursorId, isSubcollection);
         const scopedRows = isSubcollection && scopePrefix
-          ? hydratedRows.filter(row => String(row.id).startsWith(scopePrefix))
-          : hydratedRows;
+          ? rows.filter(row => String(row.id).startsWith(scopePrefix))
+          : rows;
 
         const decodedEntries = scopedRows.map(row => {
           const userDocId = isSubcollection && scopePrefix && String(row.id).startsWith(scopePrefix)
@@ -446,15 +517,16 @@ export function createSupabaseFirestore({
           ? filtered.findIndex(entry => entry.id === String(cursorId)) + 1
           : 0;
         const sliced = filtered.slice(startIdx, startIdx + limitVal);
-        const docs = sliced.map(entry => {
+        // Hydrate media only for the selected page, after scope/filter/limit.
+        const docs = await Promise.all(sliced.map(async entry => {
           const ref = document(name, entry.id);
           return makeDocSnapshot(ref, {
             id: entry.id,
             exists: true,
-            data: entry.rawData,
+            data: await hydrateRowFromStorage(tableName, entry.rawData),
             version: entry.version
           });
-        });
+        }));
 
         return {
           docs,
@@ -527,13 +599,18 @@ export function createSupabaseFirestore({
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           const writes = [];
           const preconditions = new Map();
+          const reads = new Map();
 
           const tx = {
             async get(target) {
               if (writes.length > 0) {
                 throw new Error('Firestore transactions require all reads to be executed before all writes.');
               }
-              const result = await target.get();
+              // Booking validation reads business settings more than once.
+              // Reuse reads only inside this attempt; retries start afresh.
+              const key = target._isQuery ? target._queryKey : target.path;
+              if (!reads.has(key)) reads.set(key, target.get());
+              const result = await reads.get(key);
               if (target._isQuery) {
                 for (const docSnap of result.docs) {
                   const resolved = resolveCollectionAndId(docSnap.ref.collectionName, docSnap.id);

@@ -58,10 +58,10 @@ export function createWorkspaceUI(h) {
   const workspaceRequest = (view = searchPage || 'Rentals') => {
     const active = view === searchPage;
     const current = active ? remote[view] ||= { cursor: '', previous: [] } : { cursor: '' };
-    const reportRange = view === 'Reports' ? analyticsRange(analyticsSelection) : null;
     const rankingRange = view === 'Transaction History' && rankingPeriod !== 'all' ? analyticsRange({ period: rankingPeriod }) : null;
     return '/workspace?' + new URLSearchParams({ view,
-      ...(reportRange && !reportRange.error ? { from: reportRange.from, to: reportRange.to } : {}),
+      // Reports receives complete metric evidence. Its date/category controls
+      // filter that same snapshot locally instead of redownloading its history.
       ...(rankingRange ? { rankingFrom: rankingRange.from, rankingTo: rankingRange.to } : {}),
       ...(current.cursor ? { cursor: current.cursor } : {}), status: active ? remoteStatus : defaultRecordStatus(view),
       ...(active && remoteFrom ? { from: remoteFrom } : {}), ...(active && remoteTo ? { to: remoteTo } : {}),
@@ -108,7 +108,9 @@ export function createWorkspaceUI(h) {
   const preloadPages = ({ skipViews = [] } = {}) => {
     if (preloadTask) return preloadTask;
     const epoch = ++preloadEpoch, version = cacheVersion;
-    const queue = ['Reports', 'Rentals', 'Customers', 'Returns', 'Rates & Fees', 'Maintenance', 'Payments', 'Settings', 'Transaction History', 'ESP32 terminal'].filter(page => !skipViews.includes(page));
+    // Only warm small configuration views automatically. History, analytics,
+    // customer directories and finance load on navigation or hover intent.
+    const queue = ['Rates & Fees', 'Settings'].filter(page => !skipViews.includes(page));
     const valid = () => epoch === preloadEpoch && version === cacheVersion;
     const idle = h.whenIdle || (() => new Promise(resolve => {
       if (typeof requestIdleCallback === 'function') requestIdleCallback(resolve, { timeout: 250 });
@@ -121,11 +123,10 @@ export function createWorkspaceUI(h) {
         while (pendingLoads.size >= 2 && valid()) await Promise.race([...pendingLoads.values()].map(entry => entry.promise.catch(() => {})));
         if (!valid()) return;
         const page = queue.shift();
-        if (page === 'Payments') await financeUI.prefetch();
-        else if (page) await readWorkspace(workspaceRequest(page)).catch(() => {});
+        if (page) await readWorkspace(workspaceRequest(page)).catch(() => {});
       }
     };
-    const task = Promise.all([worker(), worker()]).finally(() => { if (preloadTask === task) preloadTask = null; });
+    const task = worker().finally(() => { if (preloadTask === task) preloadTask = null; });
     preloadTask = task;
     return task;
   };
@@ -702,9 +703,7 @@ export function createWorkspaceUI(h) {
     const wrongRequest = model?.view_meta?.view && modelKey !== key;
     const retry = '<button type="button" class="secondary" id="module-retry">Try again</button>';
     const wrongView = model?.view_meta?.view && model.view_meta.view !== page;
-    const reportRange = page === 'Reports' ? analyticsRange(analyticsSelection) : null;
-    const wrongReportRange = model?.view_meta?.view === 'Reports' && reportRange && !reportRange.error && (model.view_meta.from !== reportRange.from || model.view_meta.to !== reportRange.to);
-    if (!model || wrongView || wrongReportRange) return loadError
+    if (!model || wrongView) return loadError
       ? `<section class="panel module-load-error" role="alert">${icon('chip')}<h3>Couldn’t load this page</h3><p>${e(loadError)}</p>${retry}</section>`
       : page === 'Reports'
         ? `<section class="panel module-loading ana-loading-skeleton" role="status" aria-busy="true"><span class="sr-only">Loading ${e(displayPage.toLowerCase())}…</span><div class="ana-skel-tabs" aria-hidden="true"><span></span><span></span><span></span></div><div class="ana-skel-bar" aria-hidden="true"></div><div class="ana-skel-kpis" aria-hidden="true"><div></div><div></div><div></div><div></div></div><div class="ana-skel-grid" aria-hidden="true"><div class="is-main"></div><div class="is-side"></div></div></section>`

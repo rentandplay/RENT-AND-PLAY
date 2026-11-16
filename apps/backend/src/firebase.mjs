@@ -59,10 +59,14 @@ export function asDate(value) {
   return new Date(/(?:Z|[+-]\d\d:\d\d)$/.test(text) ? text : text.replace(' ', 'T') + '+08:00');
 }
 
+// Analytics serializes thousands of timestamps per response. Constructing an
+// ICU formatter for every field blocks all other requests on the Node thread.
+const localDateTimeFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+
 export function localDateTime(value) {
   const date = asDate(value);
   if (!date || Number.isNaN(date.getTime())) return null;
-  const fields = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
+  const fields = Object.fromEntries(localDateTimeFormatter.formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
   return `${fields.year}-${fields.month}-${fields.day} ${fields.hour}:${fields.minute}:${fields.second}.${String(date.getMilliseconds()).padStart(3, '0')}`;
 }
 

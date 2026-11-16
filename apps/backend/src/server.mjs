@@ -77,7 +77,7 @@ async function serveWeb(req, res, requestPath) {
   } catch { res.writeHead(404).end('Not found'); }
 }
 
-export function createFirebaseServices({ db = defaultFirestore, auth = defaultFirebaseAuth, messaging = defaultMessaging, now = () => new Date(), superAdminUid = process.env.SUPER_ADMIN_UID || '' } = {}) {
+export function createFirebaseServices({ db = defaultFirestore, auth = defaultFirebaseAuth, messaging = defaultMessaging, now = () => new Date(), superAdminUid = process.env.SUPER_ADMIN_UID || '', summaryWaitMs = 1000 } = {}) {
   const firestore = db, firebaseAuth = auth;
   const validateEmail = validateEmailFormat;
   const registrationOtp = createRegistrationOtpService({ db: firestore, auth: firebaseAuth, now });
@@ -98,6 +98,9 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     now, ownerUid, deviceDb: readDatabase, profileDb: readDatabase,
     onDevicesChanged: () => readCache.invalidate('notification_devices')
   });
+  const refreshExpiriesInBackground = () => {
+    verificationSweep.run().catch(error => console.warn(`Verification expiry sweep deferred (${error.code || 'DATABASE_ERROR'}).`));
+  };
   let healthCheckedAt = -Infinity, healthError = null, healthPending = null;
   const services = {
     subscribeCustomerChanges(listener) {
@@ -196,28 +199,24 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     },
     async touchLogin(id) { await firestore.collection('users').doc(String(id)).update({ last_login_at: new Date() }); },
     updateProfile: (id, input) => updateProfile(firebaseAuth, firestore, id, input),
-    dashboard: async () => { await verificationSweep.run(); return loadDashboard(readDatabase, now()); },
+    dashboard: async () => { const result = await loadDashboard(readDatabase, now()); refreshExpiriesInBackground(); return result; },
     analyticsSummary: () => loadAnalyticsSummary(readDatabase, now()),
-    inventoryList: async () => { await verificationSweep.run(); return inventoryList(readDatabase); }, inventoryDetail: id => inventoryDetail(firestore, id), inventoryQr: id => inventoryQr(firestore, id), inventoryQrLabels: () => inventoryQrLabels(firestore),
+    inventoryList: async () => { const result = await inventoryList(readDatabase); refreshExpiriesInBackground(); return result; }, inventoryDetail: id => inventoryDetail(firestore, id), inventoryQr: id => inventoryQr(firestore, id), inventoryQrLabels: () => inventoryQrLabels(firestore),
     createItem: (actor, input) => createItem(firestore, actor, input), updateItem: (actor, id, input) => updateItem(firestore, actor, id, input), setItemQuantity: (actor, id, input) => setItemQuantity(firestore, actor, id, input), itemAction: (actor, id, input) => itemAction(firestore, actor, id, input), createItemCategory: (actor, input) => createItemCategory(firestore, actor, input), deleteItemCategory: (actor, id) => deleteItemCategory(firestore, actor, id), deleteArchivedItem: (actor, id, input) => deleteArchivedItem(firestore, actor, id, input),
     workspace: async (role,options={}) => {
-      if (options.view === 'Reports') {
-        // Expiring temporary handoff requests is background maintenance. Do
-        // not make the read-only analytics page wait for or compete with its scan.
-        const report = await loadWorkspace(readDatabase, role, now(), { ownerUid,...options });
-        verificationSweep.run().catch(error => console.warn(`Verification expiry sweep failed after report load (${error.code || 'DATABASE_ERROR'}).`));
-        return report;
-      }
-      await verificationSweep.run();
-      return loadWorkspace(readDatabase, role, now(), { ownerUid,...options });
+      // Read-only pages must not fail because a separate cleanup scan is slow.
+      // Stock-changing operations still await expiry and recheck live records.
+      const result = await loadWorkspace(readDatabase, role, now(), { ownerUid,...options });
+      refreshExpiriesInBackground();
+      return result;
     },
     mobileAdminWorkspace: async role => {
-      await verificationSweep.run();
       const [workspace, dashboard, inventory] = await Promise.all([
         loadWorkspace(readDatabase, role, now(), { ownerUid, mobile: true, view:'Mobile' }),
         loadDashboard(readDatabase, now()),
         inventoryList(readDatabase)
       ]);
+      refreshExpiriesInBackground();
       return { ...workspace, items: inventory.items, _dashboard: dashboard, _inventory: inventory };
     },
     pricing: () => loadPricing(readDatabase, { allowInvalidFallback: true }), savePricing: (actor, input) => savePricing(firestore, actor, input),
@@ -378,7 +377,13 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
       const result = await operation(...args);
       const changedRental=result?.rental || result?.data?.rental;
       if (changedRental?.id) {
-        try { await projectRentalSummary(firestore,String(changedRental.id),now()); }
+        // The booking has already committed. Do not turn a delayed derived
+        // report into an uncertain checkout result. The durable report job and
+        // this task can finish after the response; invalidate again on finish.
+        const summary = projectRentalSummary(firestore,String(changedRental.id),now()).finally(() => {
+          for(const collection of ['rental_daily','equipment_rental_totals','equipment_rental_daily','rental_report_snapshots','customer_report_summaries','rental_financial_daily']) readCache.invalidate(collection);
+        });
+        try { await withDeadline(() => summary, summaryWaitMs); }
         catch (error) { console.warn(`Rental summary queued for retry: ${error.code || 'SUMMARY_PENDING'}`); result.summaryPending=true; }
         for(const collection of ['rental_daily','equipment_rental_totals','equipment_rental_daily','rental_report_snapshots','customer_report_summaries','payment_ledger','financial_daily','rental_financial_daily','rental_payment_totals']) readCache.invalidate(collection);
       }
@@ -550,6 +555,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
     try { return JSON.parse(value, (key, val) => (key === '__proto__' || key === 'constructor' || key === 'prototype' ? undefined : val)); } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
   }
   const server = http.createServer(async (req, res) => {
+    const requestStartedAt = performance.now();
     const cookie = (value, seconds, persistent = false) => buildSessionCookie(value, seconds, persistent, req);
     const requestPath = new URL(req.url, 'http://127.0.0.1').pathname;
     if (!requestPath.startsWith('/api/')) return serveWeb(req, res, requestPath);
@@ -1080,13 +1086,16 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
       }
       send(res, 404, { error: 'API endpoint not found.' });
     } catch (error) {
-      if (Number.isInteger(error.status) && error.status >= 400 && error.status < 600 && !isQuotaError(error)) send(res, error.status, { error: error.message, ...(error.code ? { code: error.code } : {}) });
+      if (Number.isInteger(error.status) && error.status >= 400 && error.status < 600 && !isQuotaError(error)) {
+        if (error.status >= 500) console.error(`Backend request failed [${req.method} ${requestPath}] (${error.code || error.name || 'SERVER_ERROR'}, ${Math.round(performance.now() - requestStartedAt)}ms): ${error.message}`);
+        send(res, error.status, { error: error.message, ...(error.code ? { code: error.code } : {}) });
+      }
       else {
         quotaBackoff.record(error);
         const { status, ...failure } = firebaseFailure(error);
         if (!error.quotaCooldown) {
           const diagnostic = error instanceof ReferenceError || error instanceof TypeError ? error.stack : error.message;
-          console.error(`Backend request failed [${req.method} ${requestPath}] (${error.code || error.name || 'SERVER_ERROR'}): ${diagnostic}`);
+          console.error(`Backend request failed [${req.method} ${requestPath}] (${error.code || error.name || 'SERVER_ERROR'}, ${Math.round(performance.now() - requestStartedAt)}ms): ${diagnostic}`);
         }
         send(res, status, failure, { 'Retry-After': String(failure.retryAfterSeconds) });
       }

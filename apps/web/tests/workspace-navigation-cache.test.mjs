@@ -68,7 +68,7 @@ test('hover prefetch is shared with navigation without altering the current page
   assert.doesNotMatch(ui.render('Reports', user), /module-loading/);
 });
 
-test('sign-in preloading makes the first visit to every workspace page render without another request', async () => {
+test('sign-in preloading warms only small configuration pages with one background worker', async () => {
   let reads = 0, active = 0, peak = 0;
   const ui = createWorkspaceUI({ ...helpers, whenIdle: async () => {}, api: async path => {
     reads++; active++; peak = Math.max(peak, active);
@@ -78,12 +78,14 @@ test('sign-in preloading makes the first visit to every workspace page render wi
   ui.render('Reports', user); await ui.load();
   await ui.preloadPages({ skipViews: ['Reports'] });
   const warmedReads = reads;
-  for (const page of ['Customers', 'Rentals', 'Returns', 'Rates & Fees', 'Maintenance', 'Settings', 'Transaction History', 'ESP32 terminal', 'Reports', 'Payments']) {
+  for (const page of ['Rates & Fees', 'Settings', 'Reports']) {
     assert.doesNotMatch(ui.render(page, user), /module-loading|Loading rental payments/);
     if (page !== 'Payments') await ui.load();
   }
   assert.equal(reads, warmedReads, 'first clicks reuse data obtained in advance');
-  assert.ok(peak <= 3, 'two background workers, with the cash worker issuing two related queries');
+  assert.equal(warmedReads, 3, 'one visited report and two small configuration views');
+  assert.equal(peak, 1, 'preloading must leave capacity for interactive requests');
+  assert.match(ui.render('Customers', user), /module-loading/, 'directories wait for navigation intent');
 });
 
 test('sign-out cancels queued preloading and ignores snapshots that finish afterward', async () => {
@@ -92,9 +94,9 @@ test('sign-out cancels queued preloading and ignores snapshots that finish after
     const request = deferred(); paths.push(path); pending.push(request); return request.promise;
   } });
   const preload = ui.preloadPages();
-  await new Promise(resolve => setImmediate(resolve)); assert.equal(paths.length, 2);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(paths.length, 1);
   ui.reset(); pending.forEach((request, index) => request.resolve(snapshot(paths[index]))); await preload;
-  assert.equal(paths.length, 2); assert.deepEqual(ui.business(), {});
+  assert.equal(paths.length, 1); assert.deepEqual(ui.business(), {});
   assert.match(ui.render('Reports', user), /module-loading/);
 });
 
@@ -107,12 +109,18 @@ test('writes invalidate snapshots and sign-out discards every cached page and in
   assert.match(ui.render('Customers', user), /module-loading/); await ui.load(); assert.equal(reads, 4);
 });
 
-test('filter changes use the correct cached query and local analytics controls make no new workspace reads', async () => {
+test('analytics date, category and grouping controls reuse the complete evidence snapshot', async () => {
   const { document } = parseHTML('<html><body></body></html>');
   const original = globalThis.document; globalThis.document = document;
   try {
     let reads = 0;
-    const ui = createWorkspaceUI({ ...helpers, api: async path => { reads++; return snapshot(path); } });
+    const ui = createWorkspaceUI({ ...helpers, api: async path => {
+      reads++;
+      const query = new URL(path, 'http://localhost').searchParams;
+      assert.equal(query.has('from'), false, 'a complete history request is independent of the selected report period');
+      assert.equal(query.has('to'), false);
+      return snapshot(path);
+    } });
     ui.setReportSection('forecast'); ui.render('Reports', user); await ui.load();
     document.body.innerHTML = ui.render('Reports', user); ui.bind('Reports', user, () => {});
     const category = document.querySelector('#analytics-category');
@@ -123,7 +131,8 @@ test('filter changes use the correct cached query and local analytics controls m
     [...period.options].find(option => option.value === '7d').selected = true;
     period.dispatchEvent(new document.defaultView.Event('change'));
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(reads, 2, 'a different date window actually requires server data');
+    assert.equal(reads, 1, 'a different date window reuses the complete evidence instead of downloading it again');
+    assert.doesNotMatch(ui.render('Reports', user), /module-loading/);
   } finally { globalThis.document = original; }
 });
 

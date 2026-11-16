@@ -4,7 +4,8 @@ import { blocksCurrentStock, OPEN_RENTALS } from './rental-calendar.mjs';
 import { rentalDailySummary } from './report-summaries.mjs';
 
 export function databaseDate(value) {return asDate(value);}
-export const dateKey = date => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
+const dateKeyFormatter = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'});
+export const dateKey = date => dateKeyFormatter.format(date);
 export function rentalStatus(row,now=new Date()) {
   if(row.status!=='ACTIVE')return row.status==='APPROVED'?(row.delivery_status==='OUT_FOR_DELIVERY'?'On the way':row.delivery_status==='DELIVERY_FAILED'?'Delivery unsuccessful':row.scheduled_start_at && !row.delivery_preparation?'Scheduled':row.fulfillment_mode==='SHOP_HANDOVER'?'Awaiting shop handover':'Awaiting resort handoff'):row.status==='RETURN_PENDING_INSPECTION'?'Inspection pending':row.status==='PENDING_ADMIN_APPROVAL'?'Pending admin review':row.status==='PENDING_VERIFICATION'?'Pending':row.status;
   if(row.latest_return_request_status==='PENDING_ADMIN_APPROVAL')return 'Return requested';
@@ -45,10 +46,10 @@ const roundMoney=value=>Math.round(Number(value||0)*100)/100;
 export async function loadDashboard(db,now=new Date()) {
   const today=dateKey(now);
   const names=['items','item_categories','item_rates','customers','rentals','verification_requests','terminals'];
-  const [todayFinancialDoc,demoDoc,...snapshots]=await Promise.all([db.collection('financial_daily').doc(today).get(),db.collection('report_summary_state').doc('presentation_demo').get(),...names.map(name=>name==='customers'?Promise.resolve({docs:[]}):name==='rentals'?db.collection(name).where('status','in',OPEN_RENTALS).get():db.collection(name).get())]);
+  const [todayFinancialDoc,demoDoc,daily,...snapshots]=await Promise.all([db.collection('financial_daily').doc(today).get(),db.collection('report_summary_state').doc('presentation_demo').get(),rentalDailySummary(db,dateKey(new Date(now.getTime()-14*86400000)),today),...names.map(name=>name==='customers'?Promise.resolve({docs:[]}):name==='rentals'?db.collection(name).where('status','in',OPEN_RENTALS).get():db.collection(name).get())]);
   const source=Object.fromEntries(names.map((name,index)=>[name,rows(snapshots[index])]));
-  source.customers=(await Promise.all([...new Set(source.rentals.map(rental=>rental.customer_id).filter(Boolean))].map(id=>db.collection('customers').doc(String(id)).get()))).filter(doc=>doc.exists).map(docData);
-  const daily=await rentalDailySummary(db,dateKey(new Date(now.getTime()-14*86400000)),dateKey(now));
+  const customerDocs=await Promise.all([...new Set(source.rentals.map(rental=>rental.customer_id).filter(Boolean))].map(id=>db.collection('customers').doc(String(id)).get()));
+  source.customers=customerDocs.filter(doc=>doc.exists).map(docData);
   const revenue=revenueWeeks(daily.daily.map(row=>({status:'COMPLETED',confirmed_rental_at:new Date(row.business_day+'T00:00:00+08:00'),rental_fee:row.fees})),now);
   const categoriesById=new Map(source.item_categories.map(category=>[category.id,category]));
   const itemsById=new Map(source.items.map(item=>[item.id,item]));

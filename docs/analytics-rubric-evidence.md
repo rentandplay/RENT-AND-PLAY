@@ -4,6 +4,8 @@ This guide maps the analytics redesign to the BA3101 final system rubric and des
 
 For the current implementation and test evidence, use [the 15 November 2026 module review](analytics-module-review.md). Dated revision notes below are historical; statements about a single forecasting method and earlier test failures are not the current release status.
 
+For the owner review plan, source-record reconciliation and current live demonstration worksheets, use [the analytics defense and evidence guide](defense/analytics-rubric-demo-guide.md). The workspace now saves an optional owner review plan together with numeric goals, validates its dates and text limits, and audits it through the existing owner-only settings endpoint. Staff can trace Performance totals to included rental records. Recommendations show suggested responsibilities, the saved review lead and a follow-up date; actual task acceptance and completion remain in the review register. Forecasting separately labels minimum history, available history and the moving-average training window. Owner agreement and observed business improvements must still be supplied as evidence.
+
 Sources: BA3101 Final System Presentation Rubric, sections 2–9; BA3101 Group System Presentation Grading Form, section B; supplied Module 9, Data Visualization.
 
 ## Criteria and evidence

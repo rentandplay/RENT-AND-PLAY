@@ -2,12 +2,13 @@ import { collectCsvRecords, serializeCsv, csvNumber, downloadCsv } from './csv-e
 
 import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
+import { reviewFields } from './analytics-review.js';
 import { calculateDetailedAnalytics } from './analytics-insights.js';
 import { simulateWhatIfScenario } from './analytics-models.js';
 import { bindAnalyticsCharts } from './analytics-charts.js';
 import { updateForecastWorkspace } from './forecast-workspace.js';
 import { renderAnalyticsReport } from './analytics-report.js';
-import { renderWhatIfContent, getCachedAnalyticsDetail } from './analytics-workspace.js';
+import { renderWhatIfContent, getCachedAnalyticsDetail, renderEquipmentTrendDetail, renderSparklineDetail } from './analytics-workspace.js';
 import { renderSettings, settingsTabs, bindBusinessSettingsNavigation, bindReceiptSettingsPreview, bindAnnouncementSettingsPreview, defaultTermsAndConditions, defaultRentalTerms, defaultPrivacyPolicy, defaultRefundPolicy, defaultAcceptedIds, renderActiveSessionsList, renderSecurityAlertsList } from './settings-ui.js';
 import { reportPathForSection, normalizeReportSection } from './workspace-navigation.js';
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
@@ -596,6 +597,7 @@ export function createWorkspaceUI(h) {
       table,
       cacheIdentity: model,
       canManageTargets: user?.role === 'OWNER',
+      canViewSourceRecords: ['OWNER','OPERATOR'].includes(user?.role),
       hasFinanceLoader: true,
       financeState
     });
@@ -1156,9 +1158,11 @@ export function createWorkspaceUI(h) {
       event.preventDefault();
       const button = targetForm.querySelector('[type="submit"]'), error = targetForm.querySelector('.form-error');
       if (button.disabled) return;
-      const values = Object.fromEntries(new FormData(targetForm));
-      for (const key of Object.keys(values)) values[key] = values[key].trim() === '' ? null : Number(values[key]);
+      const inputs = Object.fromEntries(new FormData(targetForm));
+      const values = Object.fromEntries(['monthly_fee_goal','monthly_rental_goal','utilization_goal','overdue_rate_alert'].map(key => [key, !inputs[key]?.trim() ? null : Number(inputs[key])]));
       for (const key of ['utilization_goal','overdue_rate_alert']) if (values[key] !== null) values[key] /= 100;
+      const reviewPlan = Object.fromEntries(reviewFields.map(([key]) => [key, inputs['plan_' + key]?.trim() || '']));
+      if (Object.values(reviewPlan).some(Boolean) || model.settings?.analytics_targets?.review_plan) values.review_plan = Object.values(reviewPlan).some(Boolean) ? reviewPlan : null;
       button.disabled = true; error.textContent = ''; button.textContent = 'Saving…';
       try {
         const response = await api('/settings/analytics', { method:'PATCH', body:JSON.stringify(values) });
@@ -1169,6 +1173,35 @@ export function createWorkspaceUI(h) {
       } catch (problem) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save business targets'; }
     });
     bindAnalyticsCharts();
+    const openSparkDetail = (detail,button) => {
+      if (!detail) { toast('This trend is unavailable. Refresh the report and try again.'); return; }
+      showModal(detail.title,detail.html);
+      modal.querySelector('[data-equipment-trend-close]').onclick = () => modal.close();
+      modal.querySelector('.ana-equipment-trend-detail').addEventListener('keydown',event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault(); event.stopPropagation(); modal.close();
+      },{capture:true});
+      modal.addEventListener('close',() => { if (button.isConnected) button.focus({preventScroll:true}); },{once:true});
+      bindAnalyticsCharts(modal);
+    };
+    const bindSparkDetails = () => {
+      document.querySelectorAll('[data-analytics-spark]').forEach(button => {
+        button.onclick = () => {
+          let payload;
+          try { payload = JSON.parse(button.dataset.analyticsSpark); } catch { }
+          openSparkDetail(renderSparklineDetail(payload,e),button);
+        };
+      });
+    };
+    bindSparkDetails();
+    document.querySelectorAll('[data-equipment-trend]').forEach(button => {
+      button.onclick = () => {
+        const result = getCachedAnalyticsDetail(model,analyticsSelection,'performance') || calculateDetailedAnalytics(model,analyticsSelection);
+        const detail = !result.error && renderEquipmentTrendDetail(result,button.dataset.equipmentTrend,e);
+        if (!detail) { toast('This equipment trend is unavailable. Refresh the report and try again.'); return; }
+        openSparkDetail(detail,button);
+      };
+    });
     for (const [attribute, property] of [['demand', 'demandView'], ['ranking', 'rankingMetric']]) {
       document.querySelectorAll(`[data-analytics-${attribute}]`).forEach(button => button.onclick = () => {
         const value = button.getAttribute(`data-analytics-${attribute}`); reportView[property] = value; rerender();
@@ -1196,6 +1229,7 @@ export function createWorkspaceUI(h) {
     document.querySelector('#analytics-sort')?.addEventListener('change', event => { reportView.sort = event.target.value; pages['analytics-equipment'] = 0; rerender(); });
     document.querySelector('#analytics-reset')?.addEventListener('click', () => { Object.assign(analyticsSelection, { period: preferences.reportPeriod, groupBy: preferences.reportGrouping, from: '', to: '', categoryId: '', itemId: '' }); updateAnalytics(); });
     const bindForecastKpiActions = () => {
+      bindSparkDetails();
       document.querySelectorAll('[data-analytics-kpi-action]').forEach(button => {
         button.onclick = () => {
           const action = button.dataset.analyticsKpiAction;
@@ -1381,8 +1415,10 @@ export function createWorkspaceUI(h) {
     document.querySelectorAll('[data-analytics-go-page]').forEach(button => { button.onclick = () => h.navigate?.(button.dataset.analyticsGoPage); });
     document.querySelectorAll('[data-analytics-go-section]').forEach(button => { button.onclick = () => { selectAnalyticsTab(button.dataset.analyticsGoSection); if (button.dataset.analyticsCoverage) document.querySelector('#analytics-data-coverage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }; });
     document.querySelector('#report-export')?.addEventListener('click', () => {
-      const result = calculateDetailedAnalytics(model, analyticsSelection); if (result.error) { toast(result.error); return; }
-      const csv = analyticsCsv(result, model, analyticsSelection);
+      const financeState = reportPayments.summaryFor(analyticsRange(analyticsSelection));
+      const exportModel = financeState.summary && !model.financeSummary ? { ...model, financeSummary:financeState.summary } : model;
+      const result = calculateDetailedAnalytics(exportModel, analyticsSelection); if (result.error) { toast(result.error); return; }
+      const csv = analyticsCsv(result, exportModel, analyticsSelection, reportView);
       downloadCsv(csv, 'analytics-' + result.range.from + '-to-' + result.range.to); toast('Complete filtered analytics exported.');
     });
   }

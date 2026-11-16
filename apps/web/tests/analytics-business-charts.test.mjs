@@ -25,7 +25,7 @@ test('heatmap provides exact accessible counts including zeros and escapes label
  const {document}=parseHTML(demandHeatmap(['<img src=x>'],['Morning'],[[3]]));
  assert.equal(document.querySelector('img'),null);
  assert.equal(document.querySelector('td').textContent,'3');
- assert.match(document.querySelector('td').getAttribute('aria-label'),/3 confirmed handoffs/);
+ assert.match(document.querySelector('td button').getAttribute('aria-label'),/3 confirmed handoffs/);
  assert.match(demandHeatmap(['Mon'],['Night'],[[0]]),/ana-heat-0/);
 });
 

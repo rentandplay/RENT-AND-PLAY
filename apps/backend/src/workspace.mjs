@@ -586,9 +586,31 @@ export async function saveSettings(db, actor, input, now = new Date()) {
 export async function saveAnalyticsSettings(db, actor, input, now = new Date()) {
   const fields = ['monthly_fee_goal', 'monthly_rental_goal', 'utilization_goal', 'overdue_rate_alert'];
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Enter valid analytics targets.');
-  if (Object.keys(input).some(key => !fields.includes(key))) fail(400, 'Unknown analytics target field.');
+  if (Object.keys(input).some(key => !fields.includes(key) && key !== 'review_plan')) fail(400, 'Unknown analytics target field.');
   if (!Object.keys(input).length) fail(400, 'Provide at least one analytics target.');
   const supplied = {};
+  if (Object.hasOwn(input, 'review_plan')) {
+    const raw = input.review_plan;
+    if (raw === null) supplied.review_plan = null;
+    else {
+      const limits = { objective:300, rationale:600, responsible_role:100, review_on:10, cadence:80, baseline_from:10, baseline_to:10 };
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(key => !Object.hasOwn(limits,key))) fail(400, 'Enter a valid owner review plan.');
+      const plan = {};
+      for (const [key,max] of Object.entries(limits)) {
+        if (raw[key] !== undefined && typeof raw[key] !== 'string') fail(400, 'Review plan fields must contain text.');
+        const value = (raw[key] || '').trim();
+        if (value.length > max) fail(400, `Review plan ${key.replaceAll('_',' ')} is too long.`);
+        if (value && ['review_on','baseline_from','baseline_to'].includes(key)) {
+          const date = new Date(value + 'T00:00:00Z');
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(date.getTime()) || date.toISOString().slice(0,10) !== value) fail(400, 'Enter valid review plan dates.');
+        }
+        plan[key] = value;
+      }
+      if (Boolean(plan.baseline_from) !== Boolean(plan.baseline_to) || plan.baseline_from > plan.baseline_to) fail(400, 'Enter both baseline dates in chronological order.');
+      if (plan.baseline_to && plan.review_on && plan.review_on <= plan.baseline_to) fail(400, 'The review date must follow the baseline period.');
+      supplied.review_plan = Object.values(plan).some(Boolean) ? plan : null;
+    }
+  }
   for (const key of fields) {
     if (!Object.hasOwn(input, key)) continue;
     const raw = input[key];
@@ -606,6 +628,7 @@ export async function saveAnalyticsSettings(db, actor, input, now = new Date()) 
   return db.runTransaction(async tx => {
     const current = await tx.get(ref), before = current.exists ? current.data() : {};
     const previous = Object.fromEntries(fields.map(key => [key, before.analytics_targets?.[key] ?? null]));
+    if (before.analytics_targets?.review_plan != null) previous.review_plan = before.analytics_targets.review_plan;
     const analytics_targets = { ...previous, ...supplied };
     const value = { analytics_targets, analytics_targets_updated_at: now, analytics_targets_updated_by: String(actor) };
     tx.set(ref, value, { merge: true });

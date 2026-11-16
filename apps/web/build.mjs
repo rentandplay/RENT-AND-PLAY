@@ -112,6 +112,7 @@ const sourceFiles = [
   'analytics-insights.js',
   'analytics-models.js',
   'analytics-targets.js',
+  'analytics-review.js',
   'dashboard-analytics.js',
   'analytics-charts.js',
   'analytics-chart-motion.js',

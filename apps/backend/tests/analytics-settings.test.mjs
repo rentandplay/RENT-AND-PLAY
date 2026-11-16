@@ -62,6 +62,28 @@ test('concurrent partial goal changes preserve both updates and audit their comm
   assert.equal(audits[1].new_values.monthly_fee_goal, 12000);
 });
 
+test('owner review plans persist with target audits and survive numeric-only updates', async () => {
+  const db = memoryFirestore();
+  const plan = { objective:'Improve equipment availability', rationale:'Review recent handoffs and idle capacity', responsible_role:'Owner', review_on:'2026-12-15', cadence:'Weekly', baseline_from:'2026-11-01', baseline_to:'2026-11-30' };
+  const saved = await saveAnalyticsSettings(db, 'owner', { review_plan:plan, monthly_rental_goal:80 });
+  assert.deepEqual(saved.analytics_targets.review_plan, plan);
+  const updated = await saveAnalyticsSettings(db, 'owner', { monthly_fee_goal:12000 });
+  assert.deepEqual(updated.analytics_targets.review_plan, plan);
+  assert.deepEqual(db.records('audit_logs')[1].old_values.review_plan, plan);
+  const cleared = await saveAnalyticsSettings(db, 'owner', { review_plan:null });
+  assert.equal(cleared.analytics_targets.review_plan, null);
+  assert.equal(cleared.analytics_targets.monthly_rental_goal, 80);
+});
+
+test('malformed review plans are rejected without saving goals or audit records', async () => {
+  const db = memoryFirestore();
+  for (const plan of [[], 'approved', {approved:true}, {objective:2}, {objective:'a'.repeat(301)}, {review_on:'2026-02-30'}, {baseline_from:'2026-10-01'}, {baseline_from:'2026-11-10',baseline_to:'2026-11-01'}, {baseline_from:'2026-11-01',baseline_to:'2026-11-10',review_on:'2026-11-09'}]) {
+    await assert.rejects(saveAnalyticsSettings(db,'owner',{monthly_fee_goal:12000,review_plan:plan}), error => error.status === 400);
+  }
+  assert.equal(db.data('settings','business'), undefined);
+  assert.equal(db.records('audit_logs').length,0);
+});
+
 test('analytics settings API requires an active owner session and rejects foreign origins', async () => {
   const db = memoryFirestore();
   const user = { id: 'owner-id', full_name: 'Owner Test', email: 'owner@example.test', role: 'OPERATOR', is_active: true };

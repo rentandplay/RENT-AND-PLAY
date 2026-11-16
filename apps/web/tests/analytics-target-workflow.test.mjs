@@ -96,6 +96,31 @@ test('target save failure remains visible, preserves entered values and permits 
   } finally { f.cleanup(); }
 });
 
+test('owner review plan saves as text and remains visible after refresh', async () => {
+  const f = await fixture(async value => ({settings:{business_name:'Rent & Play',analytics_targets:value}}));
+  try {
+    f.set({monthly_rental_goal:'80',plan_objective:'Improve equipment availability',plan_rationale:'Based on recent records',plan_responsible_role:'Owner',plan_review_on:'2026-12-15',plan_cadence:'Weekly',plan_baseline_from:'2026-11-01',plan_baseline_to:'2026-11-30'});
+    await f.submit();
+    const sent = JSON.parse(f.calls.find(call => call.method === 'PATCH').body);
+    assert.equal(sent.review_plan.objective,'Improve equipment availability');
+    assert.equal(sent.review_plan.review_on,'2026-12-15');
+    assert.equal(sent.monthly_rental_goal,80);
+    const savedForm = f.main.querySelector('#analytics-targets-form');
+    assert.equal(savedForm.querySelector('[name="plan_objective"]').value,'Improve equipment availability');
+  } finally { f.cleanup(); }
+});
+
+test('clearing a saved review plan leaves numeric targets intact', async () => {
+  const f = await fixture(async value => ({settings:{analytics_targets:value}}), {monthly_rental_goal:80,review_plan:{objective:'Prior plan'}});
+  try {
+    for (const input of f.form.querySelectorAll('[name^="plan_"]')) input.value='';
+    await f.submit();
+    const sent=JSON.parse(f.calls.find(call=>call.method==='PATCH').body);
+    assert.equal(sent.review_plan,null);
+    assert.equal(sent.monthly_rental_goal,80);
+  } finally { f.cleanup(); }
+});
+
 test('saving unchanged targets restores the button when the workspace keeps identical markup', async () => {
   const initial = { monthly_fee_goal: 12000, monthly_rental_goal: 80, utilization_goal: .35, overdue_rate_alert: 0 };
   const f = await fixture(async value => ({ settings: { business_name: 'Rent & Play', analytics_targets: value } }), initial);

@@ -238,7 +238,7 @@ test('Performance glossary search filters items cleanly via workspace-ui binding
   });
 });
 
-test('Forecasting uses Module 9 palette, orders Equipment Mix before Late-Risk, highlights selected model, and preserves collapse state across updates', () => {
+test('Forecasting uses Module 9 palette, orders Equipment Mix before Late-Risk, highlights selected model, and keeps supporting evidence visible across updates', () => {
   const model = buildRichModel();
   const html = renderAnalyticsReport(model, { period: '365d', groupBy: 'monthly' }, { section: 'forecast' }, helpers);
   const { document } = parseHTML(`<html><body>${html}</body></html>`);
@@ -258,25 +258,14 @@ test('Forecasting uses Module 9 palette, orders Equipment Mix before Late-Risk, 
   assert.ok(focusedHtml.includes('is-focused') && focusedHtml.includes('is-dimmed'));
   assert.ok(focusedHtml.includes('is-selected-model'));
 
-  // Collapse toggle preservation via updateForecastWorkspace (uses #ana-forecast-method-body & #ana-forecast-insights-body)
+  // Method notes and operational insights remain visible after a model update.
   const root = parseHTML(`<div id="root">${html}</div>`).document.querySelector('#root');
-  const toggleBtn = root.querySelector('[data-ana-collapse="forecast-method"]');
-  assert.ok(toggleBtn);
-  toggleBtn.setAttribute('aria-expanded', 'true');
-  root.querySelector('#ana-forecast-method-body').removeAttribute('hidden');
-
-  const insightsBtn = root.querySelector('[data-ana-collapse="forecast-insights"]');
-  assert.ok(insightsBtn);
-  insightsBtn.setAttribute('aria-expanded', 'true');
-  root.querySelector('#ana-forecast-insights-body').removeAttribute('hidden');
-
-  updateForecastWorkspace(root, html);
-  const afterToggle = root.querySelector('[data-ana-collapse="forecast-method"]');
-  assert.equal(afterToggle.getAttribute('aria-expanded'), 'true');
-  assert.equal(root.querySelector('#ana-forecast-method-body').hasAttribute('hidden'), false);
-  assert.equal(root.querySelector('[data-ana-collapse="forecast-insights"]').getAttribute('aria-expanded'), 'true');
-  assert.equal(root.querySelector('[data-ana-collapse="forecast-insights"] .ana-collapse-hint').textContent, 'Hide insights');
-  assert.equal(root.querySelector('#ana-forecast-insights-body').hasAttribute('hidden'), false);
+  updateForecastWorkspace(root, focusedHtml);
+  assert.ok(root.querySelector('.ana-method-guide'));
+  assert.equal(root.querySelector('.ana-method-guide').closest('[hidden]'),null);
+  assert.equal(root.querySelector('[data-analytics-detail="late-risk"]').closest('[hidden]'),null);
+  assert.equal(root.querySelector('[data-analytics-detail="customer-segments"]').closest('[hidden]'),null);
+  assert.ok(root.querySelector('.is-selected-model'));
 });
 
 test('Recommendations shows 4 KPIs, interactive priority filter + Clear filters, Showing X of Y count, rule collapse, clamped What-If with % diff, and Before/After CHANGE column', async () => {
@@ -452,7 +441,7 @@ test('Adaptive pairedComparisonChart renders for <=2 periods while multi-period 
     assert.equal(dailyDoc.querySelector('[data-analytics-detail="forecast-review"] .ana-paired-chart'), null);
     assert.ok(dailyDoc.querySelector('[data-analytics-detail="forecast-review"] .ana-line-stroke'));
 
-    // Switch to Forecasting & test Forecast Mix Top-5 / Show All 7 + Operational Insights accordion
+    // Switch to Forecasting & test Forecast Mix Top-5 / Show All 7 and visible insights.
     ui.setReportSection('forecast');
     redraw();
     const mixToggle = main.querySelector('[data-forecast-mix-toggle]');
@@ -463,12 +452,8 @@ test('Adaptive pairedComparisonChart renders for <=2 periods while multi-period 
     assert.equal(main.querySelector('[data-forecast-mix-toggle]').getAttribute('aria-pressed'), 'true');
     assert.equal(main.querySelectorAll('.ana-equipment-demand-visual [data-ana-point]').length, 7);
 
-    const insightsToggle = main.querySelector('[data-ana-collapse="forecast-insights"]');
-    assert.ok(insightsToggle);
-    assert.equal(insightsToggle.getAttribute('aria-expanded'), 'false');
-    insightsToggle.click();
-    assert.equal(insightsToggle.getAttribute('aria-expanded'), 'true');
-    assert.equal(main.querySelector('#ana-forecast-insights-body').hasAttribute('hidden'), false);
-    assert.equal(insightsToggle.querySelector('.ana-collapse-hint').textContent, 'Hide insights');
+    assert.ok(main.querySelector('.ana-insights-body'));
+    assert.equal(main.querySelector('.ana-insights-body').closest('[hidden]'),null);
+    assert.equal(main.querySelector('[data-analytics-detail="late-risk"]').closest('[hidden]'),null);
   });
 });

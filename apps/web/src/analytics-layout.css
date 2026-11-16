@@ -2145,3 +2145,244 @@
   align-self: start;
   height: auto;
 }
+
+/* Give the Performance overview a clear visual starting point without adding a tall banner. */
+#analytics-panel-performance > .ana-summary-performance {
+  position:relative;
+  isolation:isolate;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:24px;
+  min-height:132px;
+  padding:20px 22px 20px 24px;
+  overflow:hidden;
+  border:1px solid color-mix(in srgb,var(--ana-accent) 24%,var(--ui-border));
+  border-radius:15px;
+  background:linear-gradient(112deg,color-mix(in srgb,var(--ana-accent) 7%,var(--ui-surface)) 0%,var(--ui-surface) 58%,color-mix(in srgb,var(--ana-blue) 6%,var(--ui-surface)) 100%);
+  box-shadow:0 8px 24px -20px rgba(15,23,42,.34);
+}
+#analytics-panel-performance > .ana-summary-performance::after {
+  content:"";
+  position:absolute;
+  z-index:-1;
+  top:-82px;
+  right:275px;
+  width:190px;
+  height:190px;
+  border:1px solid color-mix(in srgb,var(--ana-accent) 13%,transparent);
+  border-radius:50%;
+  box-shadow:0 0 0 18px color-mix(in srgb,var(--ana-accent) 3%,transparent),0 0 0 38px color-mix(in srgb,var(--ana-blue) 3%,transparent);
+  pointer-events:none;
+}
+#analytics-panel-performance > .ana-summary-performance .ana-summary-copy { min-width:0; position:relative; z-index:1; }
+#analytics-panel-performance > .ana-summary-performance .ana-eyebrow {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  width:max-content;
+  max-width:100%;
+  margin:0 0 9px;
+  color:var(--ui-muted);
+  font-size:11px;
+  font-weight:750;
+  letter-spacing:.075em;
+  line-height:1.25;
+  text-transform:uppercase;
+}
+#analytics-panel-performance > .ana-summary-performance .ana-summary-icon {
+  display:grid;
+  place-items:center;
+  width:28px;
+  height:28px;
+  flex:0 0 28px;
+  color:var(--ana-accent-hover);
+  border:1px solid color-mix(in srgb,var(--ana-accent) 22%,var(--ui-border));
+  border-radius:8px;
+  background:color-mix(in srgb,var(--ana-accent) 10%,var(--ui-surface));
+}
+#analytics-panel-performance > .ana-summary-performance .ana-summary-icon svg { display:block; width:17px; height:17px; }
+#analytics-panel-performance > .ana-summary-performance .ana-summary-type {
+  padding:4px 7px;
+  color:var(--ana-accent-hover);
+  border:1px solid color-mix(in srgb,var(--ana-accent) 18%,transparent);
+  border-radius:999px;
+  background:color-mix(in srgb,var(--ana-accent) 8%,var(--ui-surface));
+  font-size:9px;
+  font-weight:750;
+  letter-spacing:.06em;
+}
+#analytics-panel-performance > .ana-summary-performance h2 { margin:0; font-size:27px; line-height:1.2; letter-spacing:-.65px; }
+#analytics-panel-performance > .ana-summary-performance p { max-width:70ch; margin:7px 0 0; color:var(--ui-muted); font-size:13px; line-height:1.55; }
+#analytics-panel-performance > .ana-summary-performance aside {
+  position:relative;
+  z-index:1;
+  display:grid;
+  gap:6px;
+  width:min(100%,290px);
+  max-width:290px;
+  flex-shrink:0;
+  margin:0;
+  padding:12px 15px;
+  border:1px solid color-mix(in srgb,var(--ana-blue) 15%,var(--ui-border));
+  border-radius:11px;
+  background:color-mix(in srgb,var(--ana-blue) 4%,var(--ui-surface));
+}
+#analytics-panel-performance > .ana-summary-performance .ana-compare-kicker { display:flex; align-items:center; gap:7px; color:var(--ui-muted); font-size:10px; font-weight:750; letter-spacing:.075em; text-transform:uppercase; }
+#analytics-panel-performance > .ana-summary-performance .ana-compare-kicker i { display:grid; place-items:center; width:18px; height:18px; color:#2563eb; border-radius:6px; background:#dbeafe; font-size:12px; font-style:normal; letter-spacing:0; }
+#analytics-panel-performance > .ana-summary-performance aside strong { color:var(--ui-text); font-size:13px; font-variant-numeric:tabular-nums; line-height:1.45; }
+#analytics-panel-performance > .ana-summary-performance aside small { display:flex; align-items:center; gap:7px; color:var(--ui-muted); font-size:10.5px; line-height:1.4; }
+#analytics-panel-performance > .ana-summary-performance aside small i { width:7px; height:7px; flex:0 0 7px; border-radius:50%; background:#16a34a; }
+#analytics-panel-performance > .ana-summary-performance aside small.is-in-progress i { background:#f59e0b; box-shadow:0 0 0 3px color-mix(in srgb,#f59e0b 15%,transparent); }
+@media(max-width:760px) {
+  #analytics-panel-performance > .ana-summary-performance { grid-template-columns:minmax(0,1fr); gap:14px; min-height:0; padding:17px; }
+  #analytics-panel-performance > .ana-summary-performance::after { right:12px; top:-115px; }
+  #analytics-panel-performance > .ana-summary-performance h2 { font-size:24px; }
+  #analytics-panel-performance > .ana-summary-performance aside { width:100%; max-width:none; margin:0; }
+  #analytics-panel-performance > .ana-summary-performance aside small { display:flex; }
+}
+@media(max-width:420px) {
+  #analytics-panel-performance > .ana-summary-performance { padding:14px; }
+  #analytics-panel-performance > .ana-summary-performance .ana-eyebrow { gap:6px; font-size:10px; }
+  #analytics-panel-performance > .ana-summary-performance .ana-summary-type { font-size:8px; padding:3px 6px; }
+  #analytics-panel-performance > .ana-summary-performance h2 { font-size:22px; }
+  #analytics-panel-performance > .ana-summary-performance p { font-size:12px; }
+}
+
+/* Match the overview styling across predictive and prescriptive analytics. */
+#analytics-panel-forecast > .ana-summary-feature,
+#analytics-panel-recommendations > .ana-summary-feature {
+  --ana-hero-accent:#3b82f6;
+  --ana-hero-accent-hover:#2563eb;
+  position:relative;
+  isolation:isolate;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:24px;
+  min-height:132px;
+  padding:20px 22px 20px 24px;
+  overflow:hidden;
+  border:1px solid color-mix(in srgb,var(--ana-hero-accent) 22%,var(--ui-border));
+  border-radius:15px;
+  background:linear-gradient(112deg,color-mix(in srgb,var(--ana-hero-accent) 7%,var(--ui-surface)) 0%,var(--ui-surface) 58%,color-mix(in srgb,var(--ana-hero-accent) 4%,var(--ui-surface)) 100%);
+  box-shadow:0 8px 24px -20px rgba(15,23,42,.34);
+}
+#analytics-panel-recommendations > .ana-summary-feature {
+  --ana-hero-accent:#8b5cf6;
+  --ana-hero-accent-hover:#7c3aed;
+}
+#analytics-panel-forecast > .ana-summary-feature::after,
+#analytics-panel-recommendations > .ana-summary-feature::after {
+  content:"";
+  position:absolute;
+  z-index:-1;
+  top:-82px;
+  right:275px;
+  width:190px;
+  height:190px;
+  border:1px solid color-mix(in srgb,var(--ana-hero-accent) 13%,transparent);
+  border-radius:50%;
+  box-shadow:0 0 0 18px color-mix(in srgb,var(--ana-hero-accent) 3%,transparent),0 0 0 38px color-mix(in srgb,var(--ana-hero-accent) 2%,transparent);
+  pointer-events:none;
+}
+#analytics-panel-forecast > .ana-summary-feature .ana-summary-copy,
+#analytics-panel-recommendations > .ana-summary-feature .ana-summary-copy { min-width:0; position:relative; z-index:1; }
+#analytics-panel-forecast > .ana-summary-feature .ana-eyebrow,
+#analytics-panel-recommendations > .ana-summary-feature .ana-eyebrow {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  width:max-content;
+  max-width:100%;
+  margin:0 0 9px;
+  color:var(--ui-muted);
+  font-size:11px;
+  font-weight:750;
+  letter-spacing:.055em;
+  line-height:1.25;
+  text-transform:uppercase;
+}
+#analytics-panel-forecast > .ana-summary-feature .ana-summary-icon,
+#analytics-panel-recommendations > .ana-summary-feature .ana-summary-icon {
+  display:grid;
+  place-items:center;
+  width:28px;
+  height:28px;
+  flex:0 0 28px;
+  color:var(--ana-hero-accent-hover);
+  border:1px solid color-mix(in srgb,var(--ana-hero-accent) 22%,var(--ui-border));
+  border-radius:8px;
+  background:color-mix(in srgb,var(--ana-hero-accent) 10%,var(--ui-surface));
+}
+#analytics-panel-forecast > .ana-summary-feature .ana-summary-icon svg,
+#analytics-panel-recommendations > .ana-summary-feature .ana-summary-icon svg { display:block; width:17px; height:17px; }
+#analytics-panel-forecast > .ana-summary-feature .ana-summary-type,
+#analytics-panel-recommendations > .ana-summary-feature .ana-summary-type {
+  padding:4px 7px;
+  color:var(--ana-hero-accent-hover);
+  border:1px solid color-mix(in srgb,var(--ana-hero-accent) 18%,transparent);
+  border-radius:999px;
+  background:color-mix(in srgb,var(--ana-hero-accent) 8%,var(--ui-surface));
+  font-size:9px;
+  font-weight:750;
+  letter-spacing:.06em;
+}
+#analytics-panel-forecast > .ana-summary-feature h2,
+#analytics-panel-recommendations > .ana-summary-feature h2 { margin:0; font-size:27px; line-height:1.2; letter-spacing:-.65px; }
+#analytics-panel-forecast > .ana-summary-feature p,
+#analytics-panel-recommendations > .ana-summary-feature p { max-width:70ch; margin:7px 0 0; color:var(--ui-muted); font-size:13px; line-height:1.55; }
+#analytics-panel-forecast > .ana-summary-feature aside,
+#analytics-panel-recommendations > .ana-summary-feature aside {
+  position:relative;
+  z-index:1;
+  display:grid;
+  gap:6px;
+  width:min(100%,290px);
+  max-width:290px;
+  flex-shrink:0;
+  margin:0;
+  padding:12px 15px;
+  border:1px solid color-mix(in srgb,var(--ana-hero-accent) 15%,var(--ui-border));
+  border-radius:11px;
+  background:color-mix(in srgb,var(--ana-hero-accent) 4%,var(--ui-surface));
+}
+#analytics-panel-forecast > .ana-summary-feature .ana-compare-kicker,
+#analytics-panel-recommendations > .ana-summary-feature .ana-compare-kicker { display:flex; align-items:center; gap:7px; color:var(--ui-muted); font-size:10px; font-weight:750; letter-spacing:.075em; text-transform:uppercase; }
+#analytics-panel-forecast > .ana-summary-feature .ana-compare-kicker i,
+#analytics-panel-recommendations > .ana-summary-feature .ana-compare-kicker i { display:grid; place-items:center; width:18px; height:18px; color:var(--ana-hero-accent-hover); border-radius:6px; background:color-mix(in srgb,var(--ana-hero-accent) 13%,var(--ui-surface)); font-size:12px; font-style:normal; letter-spacing:0; }
+#analytics-panel-forecast > .ana-summary-feature aside strong,
+#analytics-panel-recommendations > .ana-summary-feature aside strong { color:var(--ui-text); font-size:13px; font-variant-numeric:tabular-nums; line-height:1.45; }
+#analytics-panel-recommendations > .ana-summary-feature aside strong.ana-action-count { font-size:27px; line-height:1; letter-spacing:-.65px; }
+#analytics-panel-recommendations > .ana-summary-feature .ana-queue-label { margin-top:-3px; color:var(--ui-muted); font-size:10px; font-weight:650; letter-spacing:.045em; text-transform:uppercase; }
+#analytics-panel-forecast > .ana-summary-feature .ana-summary-status,
+#analytics-panel-recommendations > .ana-summary-feature .ana-recommendation-meta { display:flex; align-items:center; gap:7px; color:var(--ui-muted); font-size:10.5px; line-height:1.4; }
+#analytics-panel-forecast > .ana-summary-feature .ana-summary-status i,
+#analytics-panel-recommendations > .ana-summary-feature .ana-recommendation-meta i { width:7px; height:7px; flex:0 0 7px; border-radius:50%; background:#16a34a; }
+#analytics-panel-forecast > .ana-summary-feature .ana-summary-status.is-learning i { background:#f59e0b; box-shadow:0 0 0 3px color-mix(in srgb,#f59e0b 15%,transparent); }
+#analytics-panel-recommendations > .ana-summary-feature .ana-recommendation-meta i { background:#ef4444; box-shadow:0 0 0 3px color-mix(in srgb,#ef4444 13%,transparent); }
+#analytics-panel-recommendations > .ana-summary-feature .ana-recommendation-meta span { color:var(--ui-border); }
+@media(max-width:760px) {
+  #analytics-panel-forecast > .ana-summary-feature,
+  #analytics-panel-recommendations > .ana-summary-feature { grid-template-columns:minmax(0,1fr); gap:14px; min-height:0; padding:17px; }
+  #analytics-panel-forecast > .ana-summary-feature::after,
+  #analytics-panel-recommendations > .ana-summary-feature::after { right:12px; top:-115px; }
+  #analytics-panel-forecast > .ana-summary-feature h2,
+  #analytics-panel-recommendations > .ana-summary-feature h2 { font-size:24px; }
+  #analytics-panel-forecast > .ana-summary-feature aside,
+  #analytics-panel-recommendations > .ana-summary-feature aside { width:100%; max-width:none; margin:0; }
+  #analytics-panel-forecast > .ana-summary-feature .ana-summary-status,
+  #analytics-panel-recommendations > .ana-summary-feature .ana-recommendation-meta { display:flex; }
+}
+@media(max-width:420px) {
+  #analytics-panel-forecast > .ana-summary-feature,
+  #analytics-panel-recommendations > .ana-summary-feature { padding:14px; }
+  #analytics-panel-forecast > .ana-summary-feature .ana-eyebrow,
+  #analytics-panel-recommendations > .ana-summary-feature .ana-eyebrow { gap:6px; font-size:10px; }
+  #analytics-panel-forecast > .ana-summary-feature .ana-summary-type,
+  #analytics-panel-recommendations > .ana-summary-feature .ana-summary-type { font-size:8px; padding:3px 6px; }
+  #analytics-panel-forecast > .ana-summary-feature h2,
+  #analytics-panel-recommendations > .ana-summary-feature h2 { font-size:22px; }
+  #analytics-panel-forecast > .ana-summary-feature p,
+  #analytics-panel-recommendations > .ana-summary-feature p { font-size:12px; }
+}

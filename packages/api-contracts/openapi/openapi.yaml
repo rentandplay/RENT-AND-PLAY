@@ -288,6 +288,26 @@ paths:
         '400': {description: Invalid customer details}
         '401': {description: Active staff authentication required}
         '409': {description: Name and normalized phone or email matches an existing profile; reuse or restore it}
+  /api/inventory/scan:
+    post:
+      summary: Validate an issued equipment label and optional assigned unit without changing a rental
+      security: [{adminSession: []}, {mobileAdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: {type: string, minLength: 1, maxLength: 256}
+                expectedItemId: {type: string, maxLength: 128}
+      responses:
+        '200': {description: Verified equipment id, name, item_code and status}
+        '400': {description: Invalid code or customer QR instead of an equipment label}
+        '401': {description: Active staff authentication required}
+        '404': {description: Unknown or ambiguous equipment label}
+        '409': {description: Archived unit or wrong assigned equipment}
   /api/rentals/{rentalId}/prepare-delivery:
     post:
       summary: Verify the exact reserved unit at the shop before either shop handover or resort delivery

@@ -1,5 +1,6 @@
 import { recordCode } from './record-codes.js';
 import { getMx10Printer } from './mx10-printer.js';
+import { formatReceiptDuration } from './transaction-records.js';
 import { renderWalkInReceipt } from './walk-in-receipt.js';
 
 const clean = value => String(value ?? '').replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim();
@@ -33,7 +34,7 @@ export function thermalReceiptLines(row, settings = {}) {
   field('Handover', row.fulfillment_mode === 'SHOP_HANDOVER' ? 'At shop' : 'Resort delivery');
   field('Location', row.delivery_location);
   field('Started', date(row.confirmed_rental_at)); field('Due', date(row.due_at));
-  field('Duration', Number.isFinite(fee.billed_minutes) ? `${fee.billed_minutes} min` : null);
+  field('Duration', formatReceiptDuration(fee.billed_minutes));
   divider();
   field('Rental fee', money(row.rental_fee)); field('Payment method', row.payment_method);
   field('Payment received', money(row.rental_paid_amount));

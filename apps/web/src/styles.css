@@ -12405,7 +12405,10 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 .qr-scanner-frame {
   position: relative;
   display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
   place-items: center;
+  padding: 10px;
   width: 100%;
   height: clamp(180px, 28vh, 250px);
   margin-top: 10px;
@@ -12430,7 +12433,7 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 
 .qr-scanner-target {
   position: relative;
-  width: min(56%, 210px);
+  width: min(56%, 210px, 65cqh);
   aspect-ratio: 1;
   z-index: 1;
   border: 2px solid rgba(255, 255, 255, 0.22);
@@ -12488,12 +12491,9 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 }
 
 .qr-scanner-label {
-  position: absolute;
+  position: relative;
   z-index: 2;
-  left: 50%;
-  bottom: 12px;
-  max-width: calc(100% - 24px);
-  transform: translateX(-50%);
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -12507,7 +12507,9 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
   font-weight: 600;
   letter-spacing: 0.2px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.35;
   pointer-events: none;
 }
 
@@ -12731,8 +12733,27 @@ input[aria-invalid="true"]{border-color:#b42318!important}
 }
 .qr-scanner-frame {
   height: clamp(160px, 32dvh, 260px);
+  container-type: size;
   scroll-margin-block: 16px;
 }
+.rental-desk-form [data-camera-status][data-state="warning"] {
+  color: #87551a;
+  border-color: #d9a659;
+  background: #fff7e8;
+}
+.rental-desk-form [data-camera-status][data-state="error"] {
+  color: #a12525;
+  border-color: #e2a3a3;
+  background: #fff0f0;
+}
+.rental-desk-form [data-camera-status][data-state="success"] {
+  color: #16643c;
+  border-color: #91c7a9;
+  background: #eefaf3;
+}
+.qr-scanner-frame[data-state="error"] .qr-scanner-target { border-color: #f87171; }
+.qr-scanner-frame[data-state="warning"] .qr-scanner-target { border-color: #fbbf24; }
+.qr-scanner-frame[data-state="validating"] .qr-scanner-target::after { animation-play-state: paused; }
 #modal:has(.qr-scanner-frame) .rental-form-scroll,
 #modal:has(.qr-scanner-frame) .rental-flow-scroll {
   scroll-padding-block: 16px;

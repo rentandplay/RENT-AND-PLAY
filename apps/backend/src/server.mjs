@@ -18,7 +18,7 @@ import { authenticateTerminal, createRentalRequest, createReturnRequest, createM
 import { mobileCatalog, mobileRentalList, resolveMobileItem, mobileProfile, mobilePaymentInstructions, mobileTerms, mobileBusinessSettings, mobileCustomerTrust } from './mobile.mjs';
 import { createReadCache } from './read-cache.mjs';
 import { createQuotaBackoff, firebaseFailure, isQuotaError } from './firebase-errors.mjs';
-import { createBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt, completeRentalReturn, lookupRental, rentalTicket, changeAssignedUnit, settleRentalPayment, inspectionPhoto, submitRentalPaymentProof, rentalPaymentProof, reviewRentalPaymentProof, prepareRentalDelivery, MOBILE_RENTAL_TERMS_VERSION } from './rental-flow.mjs';
+import { createBooking, verifyReleaseCodes, releaseBooking, recordRentalReceipt, completeRentalReturn, lookupRental, validateEquipmentScan, rentalTicket, changeAssignedUnit, settleRentalPayment, inspectionPhoto, submitRentalPaymentProof, rentalPaymentProof, reviewRentalPaymentProof, prepareRentalDelivery, MOBILE_RENTAL_TERMS_VERSION } from './rental-flow.mjs';
 import { listNotifications, markNotificationsRead, registerNotificationDevice, unregisterNotificationDevice, createNotificationDispatcher, recordSecurityAlert, listSecurityAlerts } from './notifications.mjs';
 import { isCustomerRole, isOwnerRole, isStaffRole, normalizeRole } from './roles.mjs';
 import { createRegistrationOtpService } from './registration-otp.mjs';
@@ -250,6 +250,7 @@ export function createFirebaseServices({ db = defaultFirestore, auth = defaultFi
     changeAssignedUnit: (actor, id, input) => changeAssignedUnit(firestore, actor, id, input, now()),
     settleRentalPayment: (actor, id, input) => settleRentalPayment(firestore, actor, id, input, now()),
     lookupRental: input => lookupRental(firestore, input,now()),
+    validateEquipmentScan: input => validateEquipmentScan(firestore, input),
     rentalTicket: (actor, id) => rentalTicket(firestore, actor, id,now()),
     inspectionPhoto: id => inspectionPhoto(firestore, id),
     reviewMobileRental: async (actor, id, input) => reviewMobileRental(firestore, actor, id, input, now()),
@@ -865,6 +866,7 @@ export function createApi({ services = defaultServices, sessions = new FirebaseS
           return sendRentalUpdate(res, 201, await services.createCounterBooking(user, input), { customerId: input.customerId });
         }
         if (rentalLookupRoute && req.method === 'POST') return send(res, 200, await services.lookupRental(await body(req)));
+        if (path === '/api/inventory/scan') return req.method === 'POST' ? send(res, 200, await services.validateEquipmentScan(await body(req))) : send(res, 405, { error: 'Method not allowed.' });
         if (inspectionPhotoRoute && req.method === 'GET') return send(res, 200, await services.inspectionPhoto(inspectionPhotoRoute[1]));
         if (rentalFlowRoute && req.method === 'GET' && rentalFlowRoute[2] === 'payment-proof') return send(res, 200, await services.rentalPaymentProof(rentalFlowRoute[1]));
         if (rentalFlowRoute && req.method === 'GET' && rentalFlowRoute[2] === 'rolling-qr') return send(res, 200, await services.rentalTicket(user, rentalFlowRoute[1]));

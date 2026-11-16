@@ -21,7 +21,7 @@
   "expected_text": [
     "RENT & PLAY", "Lakewoods Subdivision", "Los Banos, Laguna", "RENTAL RECEIPT", "R-0042", "",
     "Status: ACTIVE", "Customer: Ana Reyes", "Contact: 09171234567", "Equipment: Bicycle", "Unit: EQUIP-017",
-    "Handover: At shop", "Location: Rent & Play, Lakewoods", "Started: 2026-10-14 10:30", "Due: 2026-10-14 11:30", "Duration: 60 min", "",
+    "Handover: At shop", "Location: Rent & Play, Lakewoods", "Started: 2026-10-14 10:30", "Due: 2026-10-14 11:30", "Duration: 1 hour", "",
     "Rental fee: PHP 200.00", "Payment method: CASH", "Payment received: PHP 200.00", "Balance due: PHP 0.00", "",
     "Late rate: PHP 200.00 / started 60 min", "Grace: 0 min", "Keep this rental reference.", "Timer stops when staff receives the item.", "Return is subject to inspection. Damage or missing parts may affect final charges."
   ]

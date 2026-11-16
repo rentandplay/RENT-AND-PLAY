@@ -778,6 +778,18 @@ export async function lookupRental(db, input, now = new Date()) {
   return serializeFlow({ rental: { ...rental, status:state(rental), item_id: rental.item_id || rental.itemId, item_name: item?.name || rental.item_name || rental.itemName, item_code: item?.item_code || '', customer_name: customer?.full_name || rental.customer_name || rental.customerName }, item: item ? { id: item.id, name: item.name, item_code: item.item_code, status: item.status } : null });
 }
 
+export async function validateEquipmentScan(db, input) {
+  details(input);
+  const code = requiredText(input.code, 'Equipment QR', 256);
+  if (/^(?:rp-(?:rental|booking)-|R-)/i.test(code)) fail(400, 'This is a customer rental QR. Scan the printed QR sticker on the equipment.');
+  const item = await lookupInventory(db, code);
+  // A camera scan must match an issued label, rather than an internal record ID.
+  if (![item.qr_token, item.item_code, item.qrCode, item.legacy_item_code].filter(Boolean).includes(code)) fail(400, 'This is not an issued equipment QR label. Scan the printed sticker on the unit.');
+  if (item.is_active === false) fail(409, 'This equipment label belongs to an archived unit. Ask staff to review the equipment record.');
+  if (input.expectedItemId != null && item.id !== idValue(input.expectedItemId)) fail(409, 'Wrong equipment label. Scan the QR sticker on the unit assigned to this rental.');
+  return { item: { id: item.id, name: item.name, item_code: item.item_code, status: item.status } };
+}
+
 async function lookupInventory(db, code) {
   const matches = (await Promise.all(['qr_token', 'item_code', 'qrCode', 'legacy_item_code'].map(field => db.collection('items').where(field, '==', code).get()))).flatMap(snap => rows(snap));
   if (/^[A-Za-z0-9_-]{1,128}$/.test(code)) { const doc = await record(db, 'items', code).get(); if (doc.exists) matches.push(docData(doc)); }

@@ -193,7 +193,7 @@ export function createRentalDesk(h) {
   const manualControls = '<label class="pricing-check"><input type="checkbox" name="manualLookup"/> Use printed rental/equipment codes</label><label data-manual-reason hidden>Manual lookup reason (optional)<textarea name="manualReason" maxlength="1000"></textarea></label><p data-camera-status role="status"></p>';
   const inspectionControls = release => release ? `<section class="rental-inspection rental-release-inspection"><div class="rental-section-heading"><h3>Quick equipment check</h3><p>Confirm condition and included accessories before handoff.</p></div><div class="rental-release-inspection-grid"><label>Condition<select name="condition" required><option value="GOOD">Good</option><option value="FAIR">Fair</option></select></label><label class="pricing-check rental-accessory-check"><input name="accessoriesChecked" type="checkbox" required/><span>Accessories checked<small>Unit and included pieces are present.</small></span></label></div><details class="rental-inspection-more"><summary>Add optional notes or photos</summary><label>Inspection notes <small>Optional</small><textarea name="inspectionNotes" maxlength="2000" rows="2" placeholder="Record any marks or details for the return inspection."></textarea></label><label class="rental-photo-picker">Inspection photos <small>Optional · up to 2 images</small><input type="file" accept="image/*" capture="environment" multiple data-inspection-photos/></label><div class="inspection-photo-preview" data-photo-preview></div></details></section>` : `<section class="rental-inspection"><div class="rental-section-heading"><h3>Equipment inspection</h3><p>Check the condition and count all included accessories.</p></div><div class="rental-inspection-grid"><label>Condition<select name="condition" required><option value="GOOD">Good</option><option value="FAIR">Fair</option><option value="DAMAGED">Damaged</option><option value="NEEDS_INSPECTION">Needs inspection / preparation</option></select></label><label>Next equipment status<select name="result"><option value="AVAILABLE">Available for rental</option><option value="UNDER_MAINTENANCE">Under maintenance / inspection</option></select></label><label class="pricing-check rental-accessory-check"><input name="accessoriesChecked" type="checkbox" required/><span>Equipment and accessories checked<small>I checked the physical unit and all included pieces.</small></span></label><label>Inspection notes <small>Optional</small><textarea name="inspectionNotes" maxlength="2000" rows="3" placeholder="Record condition, accessories, and any existing marks."></textarea></label><label class="rental-photo-picker">Inspection photos <small>Optional · up to 2 images</small><input type="file" accept="image/*" capture="environment" multiple data-inspection-photos/></label><div class="inspection-photo-preview" data-photo-preview></div></div></section>`;
   function bindManual(form, row, needsBooking) {
-    bindQrReaders(form, modal);
+    bindEquipmentReader(form, row);
     const checkbox = form.elements.manualLookup;
     if (checkbox) checkbox.onchange = () => {
       const manual = checkbox.checked; form.querySelector('[data-manual-reason]').hidden = !manual;
@@ -205,6 +205,15 @@ export function createRentalDesk(h) {
       }
       else { if (needsBooking) form.elements.transactionCode.value = ''; form.elements.inventoryCode.value = ''; form.elements.manualReason.value = ''; }
     };
+  }
+  function bindEquipmentReader(form, expectedRental) {
+    return bindQrReaders(form, modal, {
+      validateCapture: async (code) => {
+        const expectedItemId = expectedRental?.item_id || expectedRental?.itemId;
+        const { item } = await api('/inventory/scan', { method: 'POST', body: JSON.stringify({ code, ...(expectedItemId ? { expectedItemId } : {}) }) });
+        return { message: `Equipment QR verified: ${item.item_code || item.name}. Review the details before confirming.` };
+      },
+    });
   }
   async function saved(response, label, next) {
     modal.close();
@@ -769,7 +778,8 @@ export function createRentalDesk(h) {
   function chooseReturn() { lookupForm('INVENTORY'); }
   function lookupForm(kind = 'RENTAL') {
     showModal(kind === 'RENTAL' ? 'Find rental' : 'Find returned equipment',`<form class="admin-form rental-desk-form">${scanField('code',kind === 'RENTAL' ? 'Customer rental QR or rental code' : 'Inventory QR or item code')}<p data-camera-status role="status"></p>${actions('Find record')}</form>`);
-    const form = modal.querySelector('form'); bindQrReaders(form, modal);
+    const form = modal.querySelector('form');
+    if (kind === 'INVENTORY') bindEquipmentReader(form); else bindQrReaders(form, modal);
     form.querySelector('[data-close]').onclick = () => modal.close();
     form.onsubmit = async event => {
       event.preventDefault();
@@ -792,7 +802,7 @@ export function createRentalDesk(h) {
   }
   function assignmentForm(row) {
     showModal('Change assigned unit',`<form class="admin-form rental-desk-form"><p>Choose another available unit of the same product and price.</p>${scanField('inventoryCode','Replacement inventory QR or item code')}<p data-camera-status role="status"></p><label>Reason<textarea name="reason" required maxlength="1000"></textarea></label>${actions('Change unit')}</form>`);
-    const form=modal.querySelector('form');bindQrReaders(form,modal);
+    const form=modal.querySelector('form');bindEquipmentReader(form);
     submit(form,'Assign this replacement unit?','The old reservation is released only after the replacement is reserved.',async fields=>saved(await api(`/rentals/${encodeURIComponent(row.id)}/assignment`,{method:'POST',body:JSON.stringify({inventoryCode:fields.inventoryCode,reason:fields.reason})}),'Assigned unit updated.', updated => continueRental({ ...row, ...updated })));
   }
   function settlementForm(row) {

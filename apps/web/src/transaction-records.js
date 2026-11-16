@@ -37,6 +37,21 @@ export function formatDurationHuman(minutes) {
   if (remMins === 0) return `${hourPart} (${mins} minutes)`;
   return `${hourPart}, ${remMins} Min${remMins === 1 ? '' : 's'} (${totalHoursLabel})`;
 }
+export function formatReceiptDuration(minutes) {
+  const mins = Number(minutes);
+  if (!Number.isFinite(mins) || mins <= 0) return 'Not recorded';
+  if (mins < 60) return `${mins} min`;
+
+  const days = Math.floor(mins / 1440);
+  const remainingAfterDays = mins % 1440;
+  const hours = days > 0 ? Math.floor(remainingAfterDays / 60) : Math.floor(mins / 60);
+  const remainingMinutes = days > 0 ? remainingAfterDays % 60 : mins % 60;
+  const parts = [];
+  if (days > 0) parts.push(`${days} day${days === 1 ? '' : 's'}`);
+  if (hours > 0) parts.push(`${hours} hour${hours === 1 ? '' : 's'}`);
+  if (remainingMinutes > 0) parts.push(`${remainingMinutes} min`);
+  return parts.join(' ');
+}
 export function renderFeeBreakdown(row, h) {
   const { money, escape: e, formatDate } = h, fee = savedCharges(row);
   const pending = ['PENDING_ADMIN_APPROVAL', 'APPROVED'].includes(row.status);

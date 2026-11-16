@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { renderAnalyticsReport } from '../src/analytics-report.js';
 import { reportSectionForPath, reportPathForSection } from '../src/workspace-navigation.js';
 import { lineChart } from '../src/analytics-charts.js';
@@ -163,11 +164,21 @@ test('forecast exposes three plain-language models and interactive model selecti
  assert.notEqual(linearOnly,html);
 });
 
-test('all analytics sections expose their evidence without expand or collapse controls',()=>{
+test('all analytics sections expose their evidence without expand or collapse controls and show data coverage only on Descriptive',()=>{
  for(const section of ['performance','forecast','recommendations']) {
   const {document}=parseHTML(renderAnalyticsReport({},selection,{section,details:{equipment:false,targets:false,definitions:false,'forecast-review':false}},helpers));
   assert.equal(document.querySelectorAll('details,summary,.ana-disclosure-label').length,0,section);
-  assert.ok(document.querySelector('[data-analytics-detail="coverage"]'));
+  const coverage = document.querySelector('[data-analytics-detail="coverage"]');
+  if (section === 'performance') assert.ok(coverage, 'Descriptive performance section shows data coverage');
+  else assert.equal(coverage, null, `${section} should not render data coverage`);
   for(const panel of document.querySelectorAll('[data-analytics-detail]')) assert.equal(panel.hasAttribute('hidden'),false);
  }
+ const recDoc = parseHTML(renderAnalyticsReport({},selection,{section:'recommendations'},helpers)).document;
+ const govGrid = recDoc.querySelector('.ana-governance-grid');
+ assert.ok(govGrid);
+ assert.equal(govGrid.children.length, 1);
+ assert.ok(govGrid.classList.contains('is-single'));
+ assert.equal(govGrid.querySelector('[data-analytics-detail="targets"]') !== null, true);
+ const layoutCss = readFileSync(new URL('../src/analytics-layout.css', import.meta.url), 'utf8');
+ assert.doesNotMatch(layoutCss, /\.ana-governance-grid\s*\{[^}]*1\.45fr/);
 });

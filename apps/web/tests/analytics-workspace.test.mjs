@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { renderAnalyticsReport } from '../src/analytics-report.js';
 import { reportSectionForPath, reportPathForSection } from '../src/workspace-navigation.js';
 import { lineChart } from '../src/analytics-charts.js';
@@ -191,11 +192,20 @@ test('forecast uses technical model names and keeps plain-language explanations 
  assert.notEqual(linearOnly,html);
 });
 
-test('analytics keeps summary evidence visible and supporting disclosures collapsed by default',()=>{
+test('analytics keeps disclosures collapsed and shows data coverage only on Performance',()=>{
  for(const section of ['performance','forecast','recommendations']) {
   const {document}=parseHTML(renderAnalyticsReport({},selection,{section,details:{equipment:false,targets:false,definitions:false,'forecast-review':false}},helpers));
   assert.equal(document.querySelectorAll('details[open]').length,0,section);
-  assert.ok(document.querySelector('[data-analytics-detail="coverage"],.ana-coverage-compact'));
+  const coverage = document.querySelector('[data-analytics-detail="coverage"]');
+  if (section === 'performance') assert.ok(coverage, 'Descriptive performance section shows data coverage');
+  else assert.equal(coverage, null, `${section} should not render data coverage`);
   for(const panel of document.querySelectorAll('[data-analytics-detail]')) assert.equal(panel.hasAttribute('hidden'),false);
+   if (section === 'recommendations') {
+    const govGrid = document.querySelector('.ana-governance-grid');
+    assert.ok(govGrid);
+    assert.equal(govGrid.children.length, 1);
+    assert.ok(govGrid.classList.contains('is-single'));
+    assert.ok(govGrid.querySelector('[data-analytics-detail="targets"]'));
+   }
  }
 });

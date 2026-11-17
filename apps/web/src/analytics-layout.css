@@ -718,10 +718,6 @@
     grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.32fr);
     align-items: stretch;
   }
-  .analytics-workspace.ana-business .ana-governance-grid {
-    grid-template-columns: minmax(0, 1.45fr) minmax(0, 0.9fr);
-    align-items: stretch;
-  }
   .analytics-workspace.ana-business .ana-module-grid.is-growth {
     grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.34fr);
   }
@@ -771,8 +767,7 @@
   .analytics-workspace.ana-business .ana-module-grid > .ana-panel,
   .analytics-workspace.ana-business .ana-overview-grid > .ana-panel,
   .analytics-workspace.ana-business .ana-forecast-grid > .ana-panel,
-  .analytics-workspace.ana-business .ana-operations-grid > .ana-panel,
-  .analytics-workspace.ana-business .ana-governance-grid > .ana-panel {
+  .analytics-workspace.ana-business .ana-operations-grid > .ana-panel {
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -1920,11 +1915,6 @@
     var(--ui-surface) 78%);
 }
 .analytics-workspace.ana-business .ana-coverage-panel.is-issues { --coverage-accent: var(--ana-amber); }
-.analytics-workspace.ana-business .ana-governance-grid > .ana-coverage-panel {
-  display: grid;
-  align-self: start;
-  height: auto;
-}
 .analytics-workspace.ana-business .ana-coverage-panel > .ana-panel-head {
   align-items: center;
   gap: 10px;
@@ -2037,50 +2027,6 @@
 .analytics-workspace.ana-business .ana-coverage-issue-copy > header > span { color: #91500d; font-size: 10px; font-weight: 700; }
 .analytics-workspace.ana-business .ana-coverage-issue-copy > p { margin: 5px 0 0; color: var(--ui-muted); font-size: 11.5px; line-height: 1.55; }
 .analytics-workspace.ana-business .ana-coverage-disclaimer { margin: 0; color: var(--ui-muted); font-size: 11px; line-height: 1.5; }
-.analytics-workspace.ana-business .ana-coverage-preview {
-  border-top: 1px solid color-mix(in srgb, var(--coverage-accent) 24%, var(--ui-border));
-  padding-top: 11px;
-}
-.analytics-workspace.ana-business .ana-coverage-preview > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  cursor: pointer;
-  color: var(--ui-text);
-  font-size: 11.5px;
-  font-weight: 650;
-  list-style: none;
-}
-.analytics-workspace.ana-business .ana-coverage-preview > summary:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--ana-accent) 45%, transparent);
-  outline-offset: 4px;
-  border-radius: 4px;
-}
-.analytics-workspace.ana-business .ana-coverage-preview > summary::-webkit-details-marker { display: none; }
-.analytics-workspace.ana-business .ana-coverage-preview > summary::after { content: '+'; order: 2; color: var(--ana-accent-hover); font-size: 17px; line-height: 1; }
-.analytics-workspace.ana-business .ana-coverage-preview[open] > summary::after { content: '−'; }
-.analytics-workspace.ana-business .ana-coverage-preview > summary small {
-  margin-left: auto;
-  padding: 4px 7px;
-  border-radius: 999px;
-  color: var(--ui-muted);
-  background: var(--ui-soft);
-  font-size: 9.5px;
-  font-weight: 600;
-}
-.analytics-workspace.ana-business .ana-coverage-preview > .ana-coverage-issue { margin-top: 10px; }
-.analytics-workspace.ana-business .ana-coverage-issue-preview { border-style: dashed; }
-.analytics-workspace.ana-business .ana-coverage-issue-copy > footer { margin-top: 9px; justify-content: flex-start; }
-.analytics-workspace.ana-business .ana-coverage-issue-copy > footer > span {
-  padding: 4px 7px;
-  border-radius: 6px;
-  color: var(--ui-text);
-  background: color-mix(in srgb, var(--ui-surface) 78%, var(--ana-amber) 22%);
-  font-size: 10px;
-  font-weight: 650;
-}
-.analytics-workspace.ana-business .ana-coverage-issue-copy > footer small { color: var(--ui-muted); font-size: 10px; }
 [data-theme="dark"] .analytics-workspace.ana-business .ana-coverage-issue-icon,
 [data-theme="dark"] .analytics-workspace.ana-business .ana-coverage-issue-copy > header > span { color: #f7bd75; }
 @media (max-width: 560px) {
@@ -2088,11 +2034,15 @@
   .analytics-workspace.ana-business .ana-coverage-panel > .ana-panel-head { align-items: flex-start; }
   .analytics-workspace.ana-business .ana-coverage-badge { margin-left: auto; }
   .analytics-workspace.ana-business .ana-coverage-checks > span { flex: 1 1 145px; }
-  .analytics-workspace.ana-business .ana-coverage-preview > summary { align-items: flex-start; flex-wrap: wrap; }
 }
 
-.analytics-workspace.ana-business .ana-coverage-preview > header { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px; flex-wrap:wrap; font-size:12px; }
+.analytics-workspace.ana-business .ana-target-fields > label { min-width: 0; }
 .analytics-workspace.ana-business .ana-review-fields .ana-target-fields > label:nth-child(-n+2) { grid-column:1/-1; }
+@media (min-width: 761px) {
+  .analytics-workspace.ana-business .ana-review-fields .ana-target-fields { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .analytics-workspace.ana-business .ana-review-fields .ana-target-fields > label:nth-child(n+3):nth-child(-n+5) { grid-column: span 2; }
+  .analytics-workspace.ana-business .ana-review-fields .ana-target-fields > label:nth-child(n+6) { grid-column: span 3; }
+}
 
 /* Equipment sparklines open the same filtered series at a readable scale. */
 .analytics-workspace.ana-business .ana-equipment-trend-button {

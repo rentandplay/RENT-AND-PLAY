@@ -49,14 +49,18 @@ test('recommendations connect outcome measure target and action to evidence and 
   const html = renderAnalyticsReport({}, selection, { section: 'recommendations' }, helpers);
   const { document } = parseHTML(html);
   assert.deepEqual([...document.querySelectorAll('.ana-decision-flow strong')].map(row => row.textContent), ['Outcome', 'Measure', 'Target', 'Action']);
+  assert.equal(document.querySelectorAll('.ana-decision-flow [data-recommendation-step]').length, 4);
+  assert.equal(document.querySelectorAll('.ana-kpis [data-analytics-kpi-action]').length, 4);
+  assert.ok(document.querySelector('#analytics-action-queue'));
   const cards = [...document.querySelectorAll('[data-action-id]')];
   assert.ok(cards.length > 0);
   for (const card of cards) {
     assert.deepEqual([...card.querySelectorAll('dt')].map(row => row.textContent), ['Outcome', 'Measure', 'Target']);
     assert.ok(card.querySelector('.ana-evidence p').textContent.trim());
     assert.ok(card.querySelector('.ana-next-step p').textContent.trim());
+    assert.deepEqual([...card.querySelectorAll('[data-action-field]')].map(row => row.dataset.actionField), ['outcome', 'measure', 'target', 'action']);
     assert.ok(card.querySelector('.ana-rule-evidence p').textContent.trim());
-    assert.equal(card.querySelector('details'), null);
+    assert.equal(card.querySelector('[data-ana-disclosure]').hasAttribute('open'), false);
   }
   assert.ok(document.querySelector('[data-recommendation-type="all"]'));
   assert.ok(document.querySelector('[data-analytics-go-section="forecast"]'));
@@ -148,26 +152,50 @@ test('default displayed filters and computed reporting dates describe the same a
   assert.match(document.querySelector('.ana-scope').textContent,/Oct 14, 2025.*Oct 13, 2026/);
 });
 
-test('forecast exposes three plain-language models and interactive model selection',()=>{
+test('main report filters remain above active section KPI rows', () => {
+  for (const section of ['performance', 'forecast', 'recommendations']) {
+    const { document } = parseHTML(renderAnalyticsReport({}, selection, { section }, helpers));
+    const kpis = document.querySelector(`#analytics-panel-${section} .ana-kpis`);
+    const filters = document.querySelector('#analytics-filter-bar');
+    const tabs = document.querySelector('.ana-tabs');
+    assert.ok(kpis, `${section} should render its KPI row`);
+    assert.ok(filters, `${section} should render the main filter bar`);
+    assert.equal(tabs.nextElementSibling, filters, `${section} filter bar should follow the analytics tabs`);
+    assert.equal(filters.closest('[role="tabpanel"]'), null, `${section} filter bar should remain above the report panel`);
+  }
+});
+
+test('forecast uses technical model names and keeps plain-language explanations in the info button',()=>{
  const model={items:[{id:'bike',name:'Bicycle',status:'AVAILABLE',is_active:true,created_at:'2026-07-01'}],transactions:Array.from({length:4},(_,i)=>({id:'r'+i,item_id:'bike',status:'COMPLETED',confirmed_rental_at:'2026-10-12 10:00:00',rental_fee:100}))};
  const html=renderAnalyticsReport(model,selection,{section:'forecast'},helpers);
- assert.match(html,/Same-weekday moving average/);
- assert.match(html,/Exponential smoothing/);
- assert.match(html,/Linear trend/);
+ const {document}=parseHTML(`<html><body>${html}</body></html>`);
+ const panel=document.querySelector('.ana-outlook-panel');
+ const methodInfo=document.querySelector('[data-analytics-info-content="forecast-method"]');
+ assert.ok(methodInfo);
+ assert.match(panel.textContent,/Same-weekday moving average/);
+ assert.match(panel.textContent,/Exponential smoothing/);
+ assert.match(panel.textContent,/Linear regression trend/);
+ assert.doesNotMatch(panel.textContent,/Recent average|Recent weighted|Trend direction|Averages matching weekdays/);
+ const definitions=methodInfo.content.querySelector('.ana-method-guide');
+ assert.ok(definitions);
+ assert.match(definitions.textContent,/Averages the matching weekdays/);
+ assert.match(definitions.textContent,/α = 0\.35/);
+ assert.match(definitions.textContent,/least-squares line/);
+ assert.match(panel.textContent,/information button/);
  assert.match(html,/data-forecast-model="ma"/);
  assert.match(html,/data-forecast-model="ses"/);
  assert.match(html,/data-forecast-model="linear"/);
  assert.doesNotMatch(html,/NaN|Infinity|undefined/);
  const linearOnly=renderAnalyticsReport(model,selection,{section:'forecast',forecastModel:'linear'},helpers);
- assert.match(linearOnly,/data-forecast-model="linear" aria-pressed="true"/);
+ assert.match(linearOnly,/data-forecast-model="linear"[^>]*aria-pressed="true"/);
  assert.notEqual(linearOnly,html);
 });
 
-test('all analytics sections expose their evidence without expand or collapse controls',()=>{
+test('analytics keeps summary evidence visible and supporting disclosures collapsed by default',()=>{
  for(const section of ['performance','forecast','recommendations']) {
   const {document}=parseHTML(renderAnalyticsReport({},selection,{section,details:{equipment:false,targets:false,definitions:false,'forecast-review':false}},helpers));
-  assert.equal(document.querySelectorAll('details,summary,.ana-disclosure-label').length,0,section);
-  assert.ok(document.querySelector('[data-analytics-detail="coverage"]'));
+  assert.equal(document.querySelectorAll('details[open]').length,0,section);
+  assert.ok(document.querySelector('[data-analytics-detail="coverage"],.ana-coverage-compact'));
   for(const panel of document.querySelectorAll('[data-analytics-detail]')) assert.equal(panel.hasAttribute('hidden'),false);
  }
 });

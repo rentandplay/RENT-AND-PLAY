@@ -11,7 +11,7 @@ export function updateForecastWorkspace(root,html) {
   let scroller=outlook.parentElement;
   const view=root.ownerDocument.defaultView;
   while(scroller&&!(scroller.scrollHeight>scroller.clientHeight&&/auto|scroll/.test(view?.getComputedStyle?.(scroller)?.overflowY||''))) scroller=scroller.parentElement;
-  for(const selector of ['.ana-summary','.ana-forecast-kpis','.ana-forecast-evidence .ana-facts']) {
+  for(const selector of ['.ana-summary','.ana-forecast-kpis','.ana-forecast-evidence']) {
     const old=current.querySelector(selector),fresh=next.querySelector(selector);if(old&&fresh)old.innerHTML=fresh.innerHTML;
   }
   const title=outlook.querySelector('.ana-panel-head > div'),freshTitle=nextOutlook.querySelector('.ana-panel-head > div');
@@ -23,6 +23,7 @@ export function updateForecastWorkspace(root,html) {
     const fresh=nextOutlook.querySelector('#'+control.id);
     if(fresh) {control.setAttribute('aria-pressed',fresh.getAttribute('aria-pressed'));control.disabled=fresh.disabled;}
   }
+  const openDetails=new Set([...current.querySelectorAll('[data-ana-disclosure][open]')].map(detail=>detail.dataset.anaDisclosure));
   const expandedCollapses = new Set(
     [...current.querySelectorAll('[data-ana-collapse][aria-expanded="true"]')].map(btn => btn.dataset.anaCollapse)
   );
@@ -38,6 +39,7 @@ export function updateForecastWorkspace(root,html) {
     }
     content.innerHTML=freshContent.innerHTML;
   }
+  current.querySelectorAll('[data-ana-disclosure]').forEach(detail=>{if(openDetails.has(detail.dataset.anaDisclosure))detail.setAttribute('open','');});
   const collapseHint = (button, isOpen) => {
     const noun = button.classList.contains('is-section') ? 'insights' : 'notes';
     return `${isOpen ? 'Hide' : 'Show'} ${noun}`;

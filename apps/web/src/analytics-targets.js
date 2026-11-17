@@ -1,3 +1,4 @@
+import { manilaDateKey } from './analytics.js';
 // Optional owner-defined business goals. Null means unset, never an implied zero goal.
 export function normalizeAnalyticsTargets(raw = {}) {
   const numeric = value => !['number', 'string'].includes(typeof value) || typeof value === 'string' && !value.trim() ? null : Number.isFinite(Number(value)) ? Number(value) : null;
@@ -49,4 +50,28 @@ export function calculateAnalyticsTargets(result, selection = {}, raw = {}) {
       fees: active ? monthlyGoalForRange(config.monthly_fee_goal, row.from, row.to) : null,
       rentals: active ? monthlyGoalForRange(config.monthly_rental_goal, row.from, row.to) : null }))
   };
+}
+
+// Suggestions are historical baselines for owner review; they never save a target.
+export function suggestAnalyticsGoals(result) {
+  if (!result?.range || result.error) return {available:false,reason:'Choose a valid reporting period.'};
+  const {from,to}=result.range, coverage=result.forecast?.coverageStart;
+  const completeThrough=manilaDateKey(result.asOf) || to;
+  const start=[from,coverage || from].sort().at(-1);
+  const rows=result.confirmed || [], months=[];
+  let cursor=new Date(start.slice(0,7)+'-01T00:00:00Z');
+  while(cursor.toISOString().slice(0,10)<=to) {
+    const monthFrom=cursor.toISOString().slice(0,10);
+    cursor.setUTCMonth(cursor.getUTCMonth()+1);
+    const monthTo=new Date(cursor.getTime()-DAY).toISOString().slice(0,10);
+    if(monthFrom>=start && monthTo<=to && monthTo<completeThrough) months.push({from:monthFrom,to:monthTo});
+  }
+  const recent=months.slice(-6);
+  if(recent.length<3) return {available:false,reason:'Select a range with at least 3 complete months to suggest monthly goals.'};
+  // Match the report's Philippine calendar keys, including timestamps near midnight.
+  const observed=rows.filter(row=>{const day=manilaDateKey(row.confirmed_rental_at);return day && day>=recent[0].from && day<=recent.at(-1).to;});
+  if(observed.length<4) return {available:false,reason:'At least 4 confirmed rentals in the complete months are needed for a suggestion.'};
+  const fees=observed.reduce((total,row)=>{const fee=Number(row.rental_fee);return total+(Number.isFinite(fee)&&fee>0?Math.round(fee*100):0);},0)/100;
+  return {available:true,scoped:Boolean(result.targets?.scoped),months:recent.length,from:recent[0].from,to:recent.at(-1).to,
+    monthly_fee_goal:fees>0?Math.round(fees/recent.length*100)/100:null,monthly_rental_goal:Math.max(1,Math.round(observed.length/recent.length))};
 }

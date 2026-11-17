@@ -2,7 +2,7 @@ import { collectCsvRecords, serializeCsv, csvNumber, downloadCsv } from './csv-e
 
 import { recordCode, relatedCode } from './record-codes.js';
 import { analyticsRange, analyticsCsv } from './analytics.js';
-import { reviewFields } from './analytics-review.js';
+import { reviewFields, renderAnalyticsActionDetail } from './analytics-review.js';
 import { calculateDetailedAnalytics } from './analytics-insights.js';
 import { simulateWhatIfScenario } from './analytics-models.js';
 import { bindAnalyticsCharts } from './analytics-charts.js';
@@ -14,6 +14,7 @@ import { reportPathForSection, normalizeReportSection } from './workspace-naviga
 import { readPreferences, writePreferences, preferenceDefaults } from './preferences.js';
 import { actualReturnTime, chargeCell, enrichVerification, formatDurationHuman, outcomeMatches, renderConditionSnapshots, renderFeeBreakdown, renderAdminHandoff, renderRequestHistory, savedCharges } from './transaction-records.js';
 import { createTransactionWorkflow } from './transaction-workflow.js';
+import { rentalHoldExpired } from './rental-desk.js';
 import { createCustomerUI } from './customer-ui.js';
 import { renderWalkInReceipt } from './walk-in-receipt.js';
 import { openBluetoothReceipt } from './thermal-receipt.js';
@@ -50,8 +51,12 @@ export function createWorkspaceUI(h) {
   let settingsTab = 'business', businessDraft = null, businessDirty = false, businessSaving = false, preferencesDraft = null, businessSubTab = 'profile';
   let activeSessions = null, securityAlerts = null, securityLoading = false, securityErrors = {}, securityAttempted = false, securityEpoch = 0;
   const analyticsSelection = { period: preferences.reportPeriod, from: '', to: '', categoryId: '', itemId: '', groupBy: preferences.reportGrouping };
+  let analyticsFilterScrollHandler = null;
+  let analyticsFilterOutsideHandler = null;
+  let analyticsFilterKeyHandler = null;
+  let analyticsFilterPositionHandler = null;
   let demoHistoryBatch = '';
-  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', rankingMetric: 'rentals', equipmentLimit: '5', paretoMetric: 'fees', stackedMode: 'channel', histogramKind: 'duration', pivotMetric: 'fees', forecastMetric: 'rentals', forecastModel: 'all', forecastMixExpanded: false, recommendationType: 'all', recommendationPriority: 'all', whatIf: { targetGroupId: 'ALL', extraUnits: 0, rateChangePct: 0, demandShiftPct: 0 }, details: {} };
+  const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', rankingMetric: 'rentals', equipmentLimit: '5', paretoMetric: 'fees', stackedMode: 'channel', histogramKind: 'duration', pivotMetric: 'fees', forecastMetric: 'rentals', forecastModel: 'all', forecastMixExpanded: false, recommendationType: 'all', recommendationPriority: 'all', recommendationStep: '', whatIf: { targetGroupId: 'ALL', extraUnits: 0, rateChangePct: 0, demandShiftPct: 0 }, details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
   const status = value => `<span class="badge ${e(String(value || 'unknown').toLowerCase().replaceAll('_', '-').replaceAll(' ', '-'))}">${e(String(value || 'Unknown').replaceAll('_', ' '))}</span>`;
   const invalidate = () => { cancelPreload(); cacheVersion++; loadError = ''; financeUI.reset(); reportPayments.reset(); };
@@ -245,6 +250,7 @@ export function createWorkspaceUI(h) {
   };
 
   function transactionDetails(row, {extensionReview=false} = {}) {
+    if (rentalHoldExpired(row, clock())) row = { ...row, status: 'EXPIRED', final_reason: row.final_reason || 'This reservation expired. Ask the customer to submit a new request.' };
     const requests = ((model?.verification) || []).filter(request => String(request.rental_id) === String(row.id)).map(request => enrichVerification(request, model || {})).sort((a, b) => String(b.requested_at || "").localeCompare(String(a.requested_at || "")));
     const rentalStage = row.confirmed_rental_at ? `<li class="done"><span></span><div><strong>Rental confirmed</strong><small>${e(formatDate(row.confirmed_rental_at))}</small></div></li>` : `<li class="pending"><span></span><div><strong>${row.status === "APPROVED" ? (['PREPARED','OUT_FOR_DELIVERY'].includes(row.delivery_status) ? (row.fulfillment_mode === "SHOP_HANDOVER" ? "Approved · ready for shop handover" : "Approved · ready for delivery") : "Approved · preparing equipment") : row.status === "PENDING_ADMIN_APPROVAL" ? "Waiting for admin review" : row.status === "PENDING_VERIFICATION" ? "Awaiting rental confirmation" : "Rental confirmation not recorded"}</strong><small>${e(formatDate(row.created_at))}</small></div></li>`;
     const returnStage = row.confirmed_return_at ? `<li class="done"><span></span><div><strong>Return confirmed${txIsLate(row) ? " · late" : ""}</strong><small>${e(formatDate(row.confirmed_return_at))}</small></div></li>` : row.received_at ? `<li class="done"><span></span><div><strong>Physically received · inspection pending</strong><small>${e(formatDate(row.received_at))} · rental clock stopped</small></div></li>` : `<li><span></span><div><strong>${txIsReturned(row) ? "Return marked complete" : "Return not yet recorded"}</strong><small>${row.due_at ? `Due ${e(formatDate(row.due_at))}` : "No due date recorded"}</small></div></li>`;
@@ -727,6 +733,15 @@ export function createWorkspaceUI(h) {
   }
 
   function bind(page, user, rerender) {
+    const browserWindow = document.defaultView || globalThis.window;
+    if (page !== 'Reports') {
+      if (analyticsFilterScrollHandler) document.removeEventListener('scroll', analyticsFilterScrollHandler, true);
+      if (analyticsFilterOutsideHandler) document.removeEventListener('pointerdown', analyticsFilterOutsideHandler, true);
+      if (analyticsFilterKeyHandler) document.removeEventListener('keydown', analyticsFilterKeyHandler, true);
+      if (analyticsFilterPositionHandler) browserWindow?.removeEventListener('resize', analyticsFilterPositionHandler);
+      analyticsFilterScrollHandler = analyticsFilterOutsideHandler = analyticsFilterKeyHandler = analyticsFilterPositionHandler = null;
+    }
+    if (page !== 'Reports') document.querySelector('body > #analytics-filter-dock')?.remove();
     if(page==='Payments'){financeUI.bind(rerender);return;}
     if (!['Customers', 'Rates & Fees', 'Rentals', 'Returns', 'Transaction History', 'Maintenance', 'Reports', 'Settings', 'ESP32 terminal'].includes(page)) return;
     redraw = rerender;
@@ -1172,6 +1187,50 @@ export function createWorkspaceUI(h) {
       } catch (problem) { error.textContent = problem.message; button.disabled = false; button.textContent = 'Save business targets'; }
     });
     bindAnalyticsCharts();
+    const bindAnalyticsDisclosures = () => {
+      document.querySelectorAll('[data-ana-disclosure]').forEach(detail=>{
+        const key=detail.dataset.anaDisclosure;
+        if(key && reportView.details[key]) detail.setAttribute('open','');
+        detail.ontoggle=()=>{if(key)reportView.details[key]=detail.hasAttribute('open');};
+      });
+    };
+    bindAnalyticsDisclosures();
+    const bindAnalyticsInfo = () => {
+      document.querySelectorAll('[data-analytics-info]').forEach(button=>{
+        button.onclick=()=>{
+          const template=document.querySelector(`[data-analytics-info-content="${button.dataset.analyticsInfo}"]`);
+          if(!template)return;
+          showModal(template.dataset.title,template.innerHTML);
+          modal.addEventListener('close',()=>{if(button.isConnected)button.focus({preventScroll:true});},{once:true});
+          modal.querySelectorAll('[data-ana-glossary-search]').forEach(input=>{
+            input.oninput=()=>modal.querySelectorAll('[data-ana-glossary-item]').forEach(item=>{
+              item.hidden=!(item.dataset.searchText || '').includes(input.value.trim().toLowerCase());
+            });
+          });
+        };
+      });
+    };
+    bindAnalyticsInfo();
+    document.querySelectorAll('[data-analytics-action-records]').forEach(button=>{
+      button.onclick=()=>{
+        const result=getCachedAnalyticsDetail(model,analyticsSelection,reportView.section) || calculateDetailedAnalytics(model,analyticsSelection);
+        const detail=renderAnalyticsActionDetail(result,model,button.dataset.analyticsActionRecords,{escape:e,table,canViewSourceRecords:['OWNER','OPERATOR'].includes(user?.role)});
+        if(!detail){toast('Refresh the report to review the matching records.');return;}
+        showModal(detail.title,detail.html);
+        bindRecordLinks(modal,{transaction:id=>{const row=model.transactions.find(row=>String(row.id)===String(id));if(row)transactionDetails(row);},equipment:id=>h.showEquipmentDetails(id),maintenance:recordDetails.maintenance});
+        modal.addEventListener('close',()=>{if(button.isConnected)button.focus({preventScroll:true});},{once:true});
+      };
+    });
+    document.querySelectorAll('[data-analytics-use-suggestion]').forEach(button=>{
+      button.onclick=()=>{
+        const form=document.querySelector('#analytics-targets-form');
+        if(!form)return;
+        if(button.dataset.fee)form.elements.monthly_fee_goal.value=button.dataset.fee;
+        form.elements.monthly_rental_goal.value=button.dataset.rentals;
+        form.elements.monthly_fee_goal.focus();
+        toast('Historical averages copied to the draft. Review them, then save your business targets.');
+      };
+    });
     const openSparkDetail = (detail,button) => {
       if (!detail) { toast('This trend is unavailable. Refresh the report and try again.'); return; }
       showModal(detail.title,detail.html);
@@ -1227,11 +1286,159 @@ export function createWorkspaceUI(h) {
     document.querySelector('#analytics-item')?.addEventListener('change', event => { analyticsSelection.itemId = event.target.value; updateAnalytics(); });
     document.querySelector('#analytics-sort')?.addEventListener('change', event => { reportView.sort = event.target.value; pages['analytics-equipment'] = 0; rerender(); });
     document.querySelector('#analytics-reset')?.addEventListener('click', () => { Object.assign(analyticsSelection, { period: preferences.reportPeriod, groupBy: preferences.reportGrouping, from: '', to: '', categoryId: '', itemId: '' }); updateAnalytics(); });
+    const bindAnalyticsFilterMenu = () => {
+      if (analyticsFilterScrollHandler) {
+        document.removeEventListener('scroll', analyticsFilterScrollHandler, true);
+        analyticsFilterScrollHandler = null;
+      }
+      if (analyticsFilterOutsideHandler) {
+        document.removeEventListener('pointerdown', analyticsFilterOutsideHandler, true);
+        analyticsFilterOutsideHandler = null;
+      }
+      if (analyticsFilterKeyHandler) {
+        document.removeEventListener('keydown', analyticsFilterKeyHandler, true);
+        analyticsFilterKeyHandler = null;
+      }
+      if (analyticsFilterPositionHandler) {
+        browserWindow?.removeEventListener('resize', analyticsFilterPositionHandler);
+        analyticsFilterPositionHandler = null;
+      }
+      document.querySelector('body > #analytics-filter-dock')?.remove();
+      const workspace = document.querySelector('.analytics-workspace.ana-business');
+      const dock = workspace?.querySelector('#analytics-filter-dock');
+      const button = dock?.querySelector('#analytics-filter-fab');
+      const panel = workspace?.querySelector('#analytics-filter-panel');
+      const filterBar = workspace?.querySelector('#analytics-filter-bar');
+      if (!button || !panel || !filterBar) return;
+      dock.classList.add('ana-floating-filter-dock');
+      document.body.append(dock);
+
+      const setOpen = (open, restoreFocus = false) => {
+        dock.classList.toggle('is-open', open);
+        button.setAttribute('aria-expanded', String(open));
+        panel.setAttribute('aria-hidden', String(!open));
+        panel.inert = !open;
+        if (open) period.focus?.({ preventScroll: true });
+        else if (restoreFocus) button.focus?.({ preventScroll: true });
+      };
+
+      analyticsFilterScrollHandler = () => {
+        analyticsFilterPositionHandler?.();
+        const isPastFilters = filterBar.isConnected && filterBar.getBoundingClientRect().bottom <= 0;
+        dock.classList.toggle('is-visible',isPastFilters);
+        button.setAttribute('aria-hidden', String(!isPastFilters));
+        button.tabIndex = isPastFilters ? 0 : -1;
+        if (!isPastFilters && dock.classList.contains('is-open')) setOpen(false);
+      };
+      document.addEventListener('scroll', analyticsFilterScrollHandler, { capture: true, passive: true });
+      analyticsFilterScrollHandler();
+
+      const period = panel.querySelector('#analytics-floating-period');
+      const group = panel.querySelector('#analytics-floating-group');
+      const category = panel.querySelector('#analytics-floating-category');
+      const item = panel.querySelector('#analytics-floating-item');
+      const from = panel.querySelector('#analytics-floating-from');
+      const to = panel.querySelector('#analytics-floating-to');
+      const customRange = panel.querySelector('[data-analytics-custom-range]');
+      panel.querySelector('.ana-filter-dialog-form').onsubmit = event => event.preventDefault();
+      const updateCustomRange = () => {
+        const isCustom = period.value === 'custom';
+        if (isCustom && (!from.value || !to.value)) {
+          const fallback = analyticsRange({ period: '30d' });
+          if (!from.value) from.value = fallback.from;
+          if (!to.value) to.value = fallback.to;
+        }
+        customRange.hidden = !isCustom;
+      };
+      const updateEquipmentOptions = () => {
+        const selectedCategory = category.value;
+        for (const option of item.options) {
+          if (!option.value) continue;
+          option.hidden = Boolean(selectedCategory && option.dataset.categoryId !== selectedCategory);
+        }
+        if (item.selectedOptions[0]?.hidden) item.value = '';
+      };
+
+      button.onclick = () => {
+        period.value = analyticsSelection.period || '365d';
+        group.value = analyticsSelection.groupBy || 'monthly';
+        category.value = analyticsSelection.categoryId || '';
+        item.value = analyticsSelection.itemId || '';
+        from.value = analyticsSelection.from || '';
+        to.value = analyticsSelection.to || '';
+        updateCustomRange();
+        updateEquipmentOptions();
+        setOpen(!dock.classList.contains('is-open'));
+      };
+      panel.querySelectorAll('[data-analytics-filter-close]').forEach(closeButton => { closeButton.onclick = () => setOpen(false, true); });
+      analyticsFilterOutsideHandler = event => {
+        if (dock.classList.contains('is-open') && !dock.contains(event.target)) setOpen(false);
+      };
+      analyticsFilterKeyHandler = event => {
+        if (event.key === 'Escape' && dock.classList.contains('is-open')) {
+          event.preventDefault();
+          setOpen(false, true);
+        }
+      };
+      analyticsFilterPositionHandler = () => {
+        const sidebar = document.querySelector('.sidebar');
+        const isDesktop = browserWindow?.matchMedia?.('(min-width: 721px)').matches;
+        const sidebarEdge = sidebar && isDesktop
+          ? Math.max(0, sidebar.getBoundingClientRect().right)
+          : 0;
+        dock.style.setProperty('--ana-filter-dock-left', `${Math.max(16, sidebarEdge + 14)}px`);
+      };
+      document.addEventListener('pointerdown', analyticsFilterOutsideHandler, true);
+      document.addEventListener('keydown', analyticsFilterKeyHandler, true);
+      browserWindow?.addEventListener('resize', analyticsFilterPositionHandler, { passive: true });
+      analyticsFilterPositionHandler();
+      period.onchange = updateCustomRange;
+      category.onchange = updateEquipmentOptions;
+      panel.querySelector('[data-analytics-filter-reset]').onclick = () => {
+        period.value = preferences.reportPeriod || '365d';
+        group.value = preferences.reportGrouping || 'monthly';
+        category.value = '';
+        item.value = '';
+        from.value = '';
+        to.value = '';
+        updateEquipmentOptions();
+        updateCustomRange();
+      };
+      panel.querySelector('[data-analytics-filter-apply]').onclick = () => {
+        Object.assign(analyticsSelection, {
+          period: period.value,
+          groupBy: group.value,
+          categoryId: category.value,
+          itemId: item.value,
+          from: period.value === 'custom' ? from.value : '',
+          to: period.value === 'custom' ? to.value : ''
+        });
+        setOpen(false);
+        updateAnalytics();
+      };
+    };
+    bindAnalyticsFilterMenu();
     const bindForecastKpiActions = () => {
       bindSparkDetails();
+      bindAnalyticsInfo();
+      bindAnalyticsDisclosures();
+      document.querySelectorAll('[data-analytics-history]').forEach(button=>{button.onclick=()=>{analyticsSelection.period='90d';analyticsSelection.groupBy=button.dataset.analyticsHistory;updateAnalytics();};});
       document.querySelectorAll('[data-analytics-kpi-action]').forEach(button => {
         button.onclick = () => {
           const action = button.dataset.analyticsKpiAction;
+          if (action.startsWith('recommendation-')) {
+            const focus = action.slice('recommendation-'.length);
+            reportView.recommendationType = focus === 'operations' ? 'Operations' : focus === 'equipment-reliability' ? 'equipment-reliability' : 'all';
+            reportView.recommendationPriority = focus === 'high' ? 'high' : 'all';
+            reportView.recommendationStep = '';
+            rerender();
+            document.querySelector('#analytics-action-queue')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+            const control = focus === 'high'
+              ? document.querySelector('#analytics-prio-high')
+              : document.querySelector(`#analytics-focus-${encodeURIComponent(reportView.recommendationType)}`);
+            control?.focus?.({ preventScroll: true });
+            return;
+          }
           if (action === 'forecast-rentals' || action === 'forecast-fees') {
             const metric = action === 'forecast-rentals' ? 'rentals' : 'fees';
             reportView.forecastMetric = metric;
@@ -1243,8 +1450,8 @@ export function createWorkspaceUI(h) {
             return;
           }
           if (action === 'forecast-history') {
-            const guide = document.querySelector('[data-ana-collapse="forecast-method"]');
-            if (guide?.getAttribute('aria-expanded') !== 'true') guide?.click();
+            const guide = document.querySelector('[data-analytics-info="forecast-method"]');
+            guide?.click();
             document.querySelector('.ana-forecast-evidence')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             guide?.focus({ preventScroll: true });
           }
@@ -1265,6 +1472,16 @@ export function createWorkspaceUI(h) {
       else {reportView.performanceMetric=button.dataset.analyticsMetric;rerender();document.querySelector(selector)?.focus({preventScroll:true});}
     }; });
     document.querySelectorAll('[data-recommendation-type]').forEach(button => { button.onclick = () => { reportView.recommendationType = button.dataset.recommendationType; rerender(); document.querySelectorAll('[data-recommendation-type]').forEach(next => { if (next.dataset.recommendationType === reportView.recommendationType) next.focus({ preventScroll: true }); }); }; });
+    document.querySelectorAll('[data-recommendation-step]').forEach(button => {
+      button.onclick = () => {
+        const step = button.dataset.recommendationStep;
+        reportView.recommendationStep = reportView.recommendationStep === step ? '' : step;
+        rerender();
+        const target = document.querySelector(`#analytics-panel-recommendations [data-action-field="${step}"]`);
+        (target || document.querySelector('#analytics-action-queue'))?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+        document.querySelector(`[data-recommendation-step="${step}"]`)?.focus?.({ preventScroll: true });
+      };
+    });
     document.querySelectorAll('[data-recommendation-priority]').forEach(button => {
       button.onclick = () => {
         reportView.recommendationPriority = button.dataset.recommendationPriority;
@@ -1276,6 +1493,7 @@ export function createWorkspaceUI(h) {
       button.onclick = () => {
         reportView.recommendationType = 'all';
         reportView.recommendationPriority = 'all';
+        reportView.recommendationStep = '';
         rerender();
         document.querySelector('#analytics-focus-all')?.focus({ preventScroll: true });
       };
@@ -1309,16 +1527,6 @@ export function createWorkspaceUI(h) {
           hint.textContent = `${nextOpen ? 'Hide' : 'Show'} ${noun}`;
         }
       };
-    });
-    document.querySelectorAll('[data-ana-glossary-search]').forEach(input => {
-      input.addEventListener('input', () => {
-        const query = input.value.trim().toLowerCase();
-        const container = input.closest('[data-analytics-detail="definitions"]');
-        container?.querySelectorAll('[data-ana-glossary-item]').forEach(item => {
-          const text = item.dataset.searchText || item.textContent.toLowerCase();
-          item.toggleAttribute('hidden', Boolean(query) && !text.includes(query));
-        });
-      });
     });
     for (const [attr, prop, prefix] of [
       ['pareto-metric', 'paretoMetric', '#analytics-pareto-'],
@@ -1423,13 +1631,14 @@ export function createWorkspaceUI(h) {
   }
   async function openTransaction(id, meta = {}) {
     const extensionNotification = String(meta.notificationType || '').startsWith('EXTENSION_');
+    const freshRequired = Boolean(meta.refresh || meta.notificationType);
     const openRecord = rental => {
       if (meta.notificationType === 'EXTENSION_REQUESTED' && rental.status === 'ACTIVE' && !rental.received_at && rental.latest_return_request_status !== 'PENDING_ADMIN_APPROVAL' && rental.extension_request?.status === 'PENDING') planning.extensionForm(rental);
       else transactionDetails(rental,{extensionReview:extensionNotification});
     };
     const matches = row => String(row.id) === String(id) || String(row.rental_code) === String(id);
-    let row = meta?.refresh ? null : (model?.transactions?.find(matches) || meta?.rental);
-    if (!row && !meta?.refresh) {
+    let row = freshRequired ? null : (model?.transactions?.find(matches) || meta?.rental);
+    if (!row && !freshRequired) {
       // Navigation keeps recent page snapshots; reuse their rental details too.
       for (const cached of [...viewModelCache.values()].reverse()) {
         if (cached.version !== cacheVersion || clock() - cached.loadedAt >= snapshotTtlMs) continue;
@@ -1484,7 +1693,7 @@ export function createWorkspaceUI(h) {
       }
       if (stillLoading()) openRecord(row);
     } catch (err) {
-      if (meta?.rental && !extensionNotification) {
+      if (meta?.rental && !freshRequired) {
         transactionDetails(meta.rental);
         return;
       }

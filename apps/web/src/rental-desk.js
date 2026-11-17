@@ -50,6 +50,15 @@ export function renderBookingPrice(quote, { escape: e, money }) {
   return `<section class="rental-booking-price"><h3>Price summary</h3><dl><div><dt>Rental fee</dt><dd>${amount(quote.rental_fee)}</dd></div></dl><p>Billed duration: ${duration}. Timer starts at handoff.</p></section>`;
 }
 export const rentalOperationKey = () => globalThis.crypto.randomUUID().replaceAll('-', '');
+export function rentalHoldExpired(row = {}, now = Date.now()) {
+  if (row.status === 'EXPIRED') return true;
+  if (!['PENDING_ADMIN_APPROVAL', 'PENDING_ESP32_RENT', 'APPROVED'].includes(row.status) ||
+      ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED'].includes(row.delivery_status) || !row.hold_expires_at) return false;
+  const value = row.hold_expires_at;
+  const text = String(value);
+  const deadline = value instanceof Date ? value.getTime() : Date.parse(/Z$|[+-]\d{2}:\d{2}$/i.test(text) ? text : text.replace(' ', 'T') + '+08:00');
+  return Number.isFinite(deadline) && deadline <= now;
+}
 // Choose the next screen from committed state; opening it never submits an action.
 export function renderRentalTaskProgress(row = {}, stage = 'review') {
   const steps = [ ['review', 'Review request'], ['prepare', 'Prepare equipment'],
@@ -441,6 +450,7 @@ export function createRentalDesk(h) {
     syncDeliveryAndMode(true);
   }
   function reviewForm(row, action) {
+    if (showExpiredRequest(row)) return;
     const approve = action === 'APPROVE';
     if (approve && row.payment_method === 'QR') {
       if (row.payment_proof_status === 'PENDING_REVIEW') { paymentProofReviewForm(row); return; }
@@ -488,7 +498,19 @@ export function createRentalDesk(h) {
         form.querySelectorAll('[data-reject-preset]').forEach(btn => btn.classList.toggle('active', btn === chip));
       };
     });
-    submit(form, approve ? 'Approve this rental request?' : 'Reject this rental request?', approve ? 'The equipment stays reserved until preparation and handoff or expiry.' : 'The reservation will be released. Verified payments remain recorded for refund.', async fields => saved(await api(`/mobile/rentals/${encodeURIComponent(row.id)}/review`, { method: 'POST', body: JSON.stringify(approve ? { action, notes: fields.notes } : { action, reason: fields.reason }) }), approve ? 'Rental request approved. Prepare the equipment for delivery.' : 'Rental request rejected.', updated => continueRental({ ...row, ...updated })), { confirm: false });
+    submit(form, approve ? 'Approve this rental request?' : 'Reject this rental request?', approve ? 'The equipment stays reserved until preparation and handoff or expiry.' : 'The reservation will be released. Verified payments remain recorded for refund.', async fields => {
+      if (showExpiredRequest(row)) return;
+      await saved(await api(`/mobile/rentals/${encodeURIComponent(row.id)}/review`, { method: 'POST', body: JSON.stringify(approve ? { action, notes: fields.notes } : { action, reason: fields.reason }) }), approve ? 'Rental request approved. Prepare the equipment for delivery.' : 'Rental request rejected.', updated => continueRental({ ...row, ...updated }));
+    }, { confirm: false });
+  }
+  function showExpiredRequest(row) {
+    if (!rentalHoldExpired(row, h.nowMs?.() ?? Date.now())) return false;
+    if (h.transactionDetails) h.transactionDetails(row);
+    else {
+      showModal('Rental request expired', `${renderRentalSummaryCard(row, h)}<p role="status">This reservation expired. Ask the customer to submit a new request.</p><div class="form-actions"><button type="button" class="secondary" data-close>Close</button></div>`);
+      modal.querySelector('[data-close]').onclick = () => modal.close();
+    }
+    return true;
   }
   async function paymentProofReviewForm(row) {
     showModal('Review QR payment', `<form class="admin-form rental-desk-form">${renderRentalTaskProgress(row, 'review')}<p>Rental request · ${e(row.rental_code || row.id)} · ${e(row.customer_name)}</p><p>Expected transfer: <strong>${e(h.money(Number(row.rental_fee || 0)))}</strong></p><div data-proof-content>Loading payment screenshot…</div><label>Review note<textarea name="notes" maxlength="1000" rows="2"></textarea></label><label data-proof-reject-reason hidden>Why is this proof being rejected?<textarea name="reason" maxlength="1000" rows="3"></textarea></label><p class="form-error" role="alert"></p><div class="form-actions"><button type="button" class="secondary" data-close>Close</button><button type="button" class="secondary" data-reject-proof>Reject proof</button><button type="button" class="primary" data-verify-proof>Verify payment &amp; approve request</button></div></form>`);
@@ -497,6 +519,7 @@ export function createRentalDesk(h) {
     try {
       const result = await api(`/rentals/${encodeURIComponent(row.id)}/payment-proof`);
       if (!form.isConnected) return;
+      if (showExpiredRequest(row)) return;
       const proof = result.proof || {};
       const flags = Array.isArray(proof.security_flags) ? proof.security_flags : [];
       const isFlagged = proof.security_status === 'FLAGGED' || flags.length > 0;
@@ -511,6 +534,7 @@ export function createRentalDesk(h) {
     }
     const run = async action => {
       if (verify.disabled || reject.disabled) return;
+      if (showExpiredRequest(row)) return;
       const reason = form.elements.reason?.value.trim() || '';
       if (action === 'REJECT' && !reason) { form.querySelector('[data-proof-reject-reason]').hidden = false; form.elements.reason.required = true; error.textContent = 'Enter why the screenshot cannot be verified.'; form.elements.reason.focus(); return; }
       verify.disabled = reject.disabled = true; error.textContent = '';

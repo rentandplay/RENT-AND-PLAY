@@ -190,7 +190,7 @@ test('animateAnalyticsKPIs skips requestAnimationFrame under reduced motion and 
   assert.equal(strong.textContent, expectedText);
 });
 
-test('Performance renders KPI icons, sparklines, weekday peak highlight, and live searchable definitions without details/hidden', () => {
+test('Performance renders KPI icons, sparklines, weekday peak highlight, and searchable definitions in an info dialog', () => {
   const html = renderAnalyticsReport(buildRichModel(), { period: '90d', groupBy: 'monthly' }, { section: 'performance' }, helpers);
   const { document, window } = parseHTML(`<html><body><main>${html}</main></body></html>`);
 
@@ -201,12 +201,12 @@ test('Performance renders KPI icons, sparklines, weekday peak highlight, and liv
   );
   assert.equal(kpis.filter(k => k.querySelector('.ana-kpi-icon svg')).length, 4);
   assert.ok(document.querySelector('#analytics-panel-performance .ana-kpi-spark svg'));
-  assert.equal(document.querySelector('#analytics-panel-performance details'), null);
+  assert.equal(document.querySelectorAll('#analytics-panel-performance details[open]').length, 0);
   assert.equal(document.querySelector('[data-analytics-detail="definitions"]').hasAttribute('hidden'), false);
 
-  const searchInput = document.querySelector('#ana-glossary-search');
+  const searchInput = document.querySelector('[data-analytics-info-content="metrics"]').content.querySelector('#ana-glossary-search');
   assert.ok(searchInput);
-  const items = [...document.querySelectorAll('[data-ana-glossary-item]')];
+  const items = [...document.querySelector('[data-analytics-info-content="metrics"]').content.querySelectorAll('[data-ana-glossary-item]')];
   assert.ok(items.length > 3);
   searchInput.value = 'Overdue';
   searchInput.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -215,10 +215,11 @@ test('Performance renders KPI icons, sparklines, weekday peak highlight, and liv
 
 test('Performance glossary search filters items cleanly via workspace-ui bindings', async () => {
   const model = buildRichModel();
-  const { document, window } = parseHTML('<html><body><main></main></body></html>');
+  const { document, window } = parseHTML('<html><body><main></main><dialog id="modal"></dialog></body></html>');
   window.matchMedia = () => ({ matches: true });
   await withDomGlobals(document, window, async () => {
-    const ui = createWorkspaceUI({ escape, icon: () => '', money: helpers.money, formatDate: helpers.formatDate, toast: () => {}, api: async () => structuredClone(model) });
+    const modal=document.querySelector('#modal');
+    const ui = createWorkspaceUI({ escape, icon: () => '', money: helpers.money, formatDate: helpers.formatDate, toast: () => {},modal,showModal:(title,html)=>{modal.innerHTML=html;}, api: async () => structuredClone(model) });
     ui.setReportSection('performance');
     ui.render('Reports', { id: 'owner', role: 'OWNER' });
     await ui.load();
@@ -226,8 +227,9 @@ test('Performance glossary search filters items cleanly via workspace-ui binding
     main.innerHTML = ui.render('Reports', { id: 'owner', role: 'OWNER' });
     ui.bind('Reports', { id: 'owner', role: 'OWNER' }, () => {});
 
-    const search = main.querySelector('#ana-glossary-search');
-    const items = [...main.querySelectorAll('[data-ana-glossary-item]')];
+    main.querySelector('[data-analytics-info="metrics"]').click();
+    const search = modal.querySelector('#ana-glossary-search');
+    const items = [...modal.querySelectorAll('[data-ana-glossary-item]')];
     assert.ok(search && items.length > 2);
     search.value = 'utilization';
     search.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -238,7 +240,7 @@ test('Performance glossary search filters items cleanly via workspace-ui binding
   });
 });
 
-test('Forecasting uses Module 9 palette, orders Equipment Mix before Late-Risk, highlights selected model, and keeps supporting evidence visible across updates', () => {
+test('Forecasting preserves the Module 9 palette, equipment order, model focus and accessible evidence across updates', () => {
   const model = buildRichModel();
   const html = renderAnalyticsReport(model, { period: '365d', groupBy: 'monthly' }, { section: 'forecast' }, helpers);
   const { document } = parseHTML(`<html><body>${html}</body></html>`);
@@ -261,8 +263,8 @@ test('Forecasting uses Module 9 palette, orders Equipment Mix before Late-Risk, 
   // Method notes and operational insights remain visible after a model update.
   const root = parseHTML(`<div id="root">${html}</div>`).document.querySelector('#root');
   updateForecastWorkspace(root, focusedHtml);
-  assert.ok(root.querySelector('.ana-method-guide'));
-  assert.equal(root.querySelector('.ana-method-guide').closest('[hidden]'),null);
+  assert.ok(root.querySelector('[data-analytics-info-content="forecast-method"]').content.querySelector('.ana-method-guide'));
+  assert.equal(root.querySelector('[data-analytics-info="forecast-method"]').hidden,false);
   assert.equal(root.querySelector('[data-analytics-detail="late-risk"]').closest('[hidden]'),null);
   assert.equal(root.querySelector('[data-analytics-detail="customer-segments"]').closest('[hidden]'),null);
   assert.ok(root.querySelector('.is-selected-model'));
@@ -287,6 +289,28 @@ test('Recommendations shows 4 KPIs, interactive priority filter + Clear filters,
 
     const kpis = [...main.querySelectorAll('#analytics-panel-recommendations > .ana-kpis > .ana-kpi .ana-kpi-top')].map(el => el.textContent);
     assert.deepEqual(kpis, ['Suggested actions', 'High priority actions', 'Operations actions', 'Equipment & reliability']);
+    assert.equal(main.querySelectorAll('#analytics-panel-recommendations > .ana-kpis [data-analytics-kpi-action]').length, 4);
+    assert.equal(document.querySelector('#analytics-filter-dock').parentNode, document.body);
+    assert.equal(document.querySelector('#analytics-filter-fab').textContent.trim(), '');
+    const filterButton = document.querySelector('#analytics-filter-fab');
+    const filterPanel = document.querySelector('#analytics-filter-panel');
+    assert.equal(document.querySelector('#analytics-filter-dialog'), null);
+    assert.equal(filterPanel.getAttribute('role'), 'dialog');
+    assert.equal(filterPanel.getAttribute('aria-modal'), 'false');
+    assert.equal(filterPanel.getAttribute('aria-hidden'), 'true');
+    assert.equal(filterPanel.hasAttribute('inert'), true);
+    assert.equal(filterButton.getAttribute('aria-expanded'), 'false');
+    assert.ok(filterPanel.querySelector('#analytics-floating-period'));
+
+    main.querySelector('[data-analytics-kpi-action="recommendation-operations"]').click();
+    assert.equal(main.querySelector('#analytics-focus-Operations').getAttribute('aria-pressed'), 'true');
+    assert.match(main.querySelector('[data-recommendation-count]').textContent, /^Showing \d+ of \d+ recommendation/);
+    main.querySelector('[data-recommendation-step="measure"]').click();
+    assert.equal(main.querySelector('[data-recommendation-step="measure"]').getAttribute('aria-pressed'), 'true');
+    assert.ok(main.querySelector('[data-action-field="measure"].is-highlighted'));
+    main.querySelector('[data-recommendation-step="measure"]').click();
+    assert.equal(main.querySelector('[data-recommendation-step="measure"]').getAttribute('aria-pressed'), 'false');
+    main.querySelector('#analytics-focus-all').click();
 
     const countEl = main.querySelector('[data-recommendation-count]');
     assert.ok(countEl);
@@ -435,7 +459,7 @@ test('Adaptive pairedComparisonChart renders for <=2 periods while multi-period 
     // Verify Forecast vs. actual review uses pairedComparisonChart for <=2 periods and lineChart for >=3 periods
     const monthlyReviewHtml = renderAnalyticsReport(model, { period: '365d', groupBy: 'monthly' }, { section: 'forecast' }, helpers);
     const monthlyDoc = parseHTML(`<html><body>${monthlyReviewHtml}</body></html>`).document;
-    assert.ok(monthlyDoc.querySelector('[data-analytics-detail="forecast-review"] .ana-paired-chart'));
+    assert.ok(monthlyDoc.querySelector('[data-analytics-detail="forecast-review"] .ana-line-stroke'),'Use all eligible held-out months when more than two are available');
     const dailyReviewHtml = renderAnalyticsReport(model, { period: '90d', groupBy: 'daily' }, { section: 'forecast' }, helpers);
     const dailyDoc = parseHTML(`<html><body>${dailyReviewHtml}</body></html>`).document;
     assert.equal(dailyDoc.querySelector('[data-analytics-detail="forecast-review"] .ana-paired-chart'), null);

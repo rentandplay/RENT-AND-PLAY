@@ -262,6 +262,7 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const equipmentStatus={Available:0,Rented:0,Pending:0,Maintenance:0,Archived:0};
   const repairs=new Set(maintenance.filter(row=>['OPEN','IN_PROGRESS'].includes(row.status)).map(row=>String(row.item_id)));
   for(const item of selectedItems){const status=String(item.effective_status||item.status||'AVAILABLE').toUpperCase();if(item.is_active===false)equipmentStatus.Archived++;else if(status==='RENTED'||status==='UNDER_INSPECTION')equipmentStatus.Rented++;else if(status==='RESERVED_PENDING'||item.reserved_rental_id||reserved.has(String(item.id)))equipmentStatus.Pending++;else if(status==='UNDER_MAINTENANCE'||repairs.has(String(item.id)))equipmentStatus.Maintenance++;else equipmentStatus.Available++;}
+  const slowConfirmations=[];
   const terminalMap=new Map((data.terminals||[]).map(row=>[String(row.id),row])),terminalGroups=new Map(),verificationSamples=[];
   let invalidVerification=0,linkedConfirmationTimes=0;
   for(const request of data.verification||[]){
@@ -273,6 +274,7 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
     if(confirmedAt!==null&&!within(new Date(confirmedAt)))continue;
     if(confirmedAt===null||requestedAt===null||confirmedAt<requestedAt||!request.terminal_id){invalidVerification++;continue;}
     const seconds=(confirmedAt-requestedAt)/1000,key=String(request.terminal_id),terminal=terminalMap.get(key);
+    if(seconds>=60)slowConfirmations.push({request,rental,seconds,confirmedAt:new Date(confirmedAt).toISOString()});
     if(direct===null)linkedConfirmationTimes++;
     const group=terminalGroups.get(key)||{id:key,name:terminal?.name||'Unregistered terminal',code:terminal?.terminal_code||key,seconds:[]};
     group.seconds.push(seconds);terminalGroups.set(key,group);verificationSamples.push(seconds);
@@ -301,7 +303,7 @@ export function calculateAnalytics(data,selection={},now=new Date()) {
   const evidenceDates=[...selectedItems.map(item=>manilaDateKey(item.created_at)),...settled.map(row=>manilaDateKey(row.confirmed_rental_at))].filter(Boolean).sort();
   const forecast=forecastAnalytics(trend,groupBy,range,manilaDateKey(now),evidenceDates[0]||null);
   const recommendations=buildRecommendations(performance,totals,range);
-  return {range,groupBy,asOf:new Date(asOf).toISOString(),confirmed,returns,trend,equipment,leastRented,revenueEquipment,performance,categoryRevenue,equipmentStatus,maintenanceFrequency,maintenanceDowntime,terminalPerformance,linkedConfirmationTimes,quality,totals,forecast,recommendations};
+  return {range,groupBy,asOf:new Date(asOf).toISOString(),confirmed,returns,trend,equipment,leastRented,revenueEquipment,performance,categoryRevenue,equipmentStatus,maintenanceFrequency,maintenanceDowntime,terminalPerformance,linkedConfirmationTimes,quality,totals,forecast,recommendations,evidence:{overdueNow:settled.filter(row=>row.status==='ACTIVE'&&validDue(row)&&ms(row.due_at)<now.getTime()),lateReturns:overdueRentals,slowConfirmations,maintenance:maintenanceSelected.filter(row=>within(row.started_at))}};
 }
 
 export function analyticsCsv(result,data,selection={},view={}) {

@@ -20,7 +20,7 @@ test('record evidence reconciles all included rows before pagination without cus
   assert.match(html,/2 confirmed handoffs/);
   assert.match(html,/173\.45/);
   assert.equal(document.querySelectorAll('tbody tr').length,1);
-  assert.equal(document.querySelector('[data-record-type="rental"]').dataset.recordId,'b');
+  assert.equal(document.querySelector('[data-record-type="transaction"]').dataset.recordId,'b');
   assert.doesNotMatch(html,/Private Customer|private@example|9,999/);
   assert.equal(document.querySelector('bike'),null);
 });

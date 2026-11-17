@@ -38,7 +38,7 @@ export function analyticsEquipmentOptions(items = []) {
   return [...groups].map(([id, units]) => {
     const live = units.filter(item => item.is_active !== false);
     const item = live.find(item => String(item.id) === id) || live[0] || units.find(item => String(item.id) === id) || units[0];
-    return { id, name: item.name || 'Unnamed equipment', categoryId: String(item.category_id), units: live.length, archived: !live.length };
+    return { id, name: item.name || 'Unnamed equipment', categoryId: String(item.category_id ?? ''), units: live.length, archived: !live.length };
   }).sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -85,7 +85,8 @@ function comparisonFor(data, selection, current, now) {
 
 function backtest(trend, groupBy, today, coverageStart) {
   const completed = trend.filter(row => (!coverageStart || row.from >= coverageStart) && row.to < today && (groupBy === 'daily' || groupBy === 'weekly' && new Date(row.from + 'T00:00:00Z').getUTCDay() === 1 && (Date.parse(row.to) - Date.parse(row.from)) / DAY === 6 || groupBy === 'monthly' && row.from.endsWith('-01') && new Date(Date.parse(row.to) + DAY).getUTCDate() === 1));
-  const training = groupBy === 'daily' ? 28 : 8, holdout = groupBy === 'daily' ? 7 : 2;
+  const training = groupBy === 'daily' ? 28 : 8, minimumHoldout = groupBy === 'daily' ? 7 : 2;
+  const holdout = Math.min(groupBy === 'daily' ? 14 : 6, Math.max(minimumHoldout, completed.length-training));
   if (completed.length < training + holdout) return { available: false, required: training + holdout, found: completed.length };
   const windows = completed.slice(-holdout).map((actual, index) => {
     const at = completed.length - holdout + index, window = completed.slice(Math.max(0, at - training), at);

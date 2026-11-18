@@ -83,8 +83,7 @@ function comparisonFor(data, selection, current, now) {
     fees: change('fees'), rentals: change('rentals'), averageFee: change('averageFee'), utilization: change('utilization'), overdueRentals: change('overdueRentals'), overdueRate: change('overdueRate'), repeatCustomerRate: change('repeatCustomerRate') };
 }
 
-function backtest(trend, groupBy, today, coverageStart) {
-  const completed = trend.filter(row => (!coverageStart || row.from >= coverageStart) && row.to < today && (groupBy === 'daily' || groupBy === 'weekly' && new Date(row.from + 'T00:00:00Z').getUTCDay() === 1 && (Date.parse(row.to) - Date.parse(row.from)) / DAY === 6 || groupBy === 'monthly' && row.from.endsWith('-01') && new Date(Date.parse(row.to) + DAY).getUTCDate() === 1));
+function backtest(completed, groupBy) {
   const training = groupBy === 'daily' ? 28 : 8, minimumHoldout = groupBy === 'daily' ? 7 : 2;
   const holdout = Math.min(groupBy === 'daily' ? 14 : 6, Math.max(minimumHoldout, completed.length-training));
   if (completed.length < training + holdout) return { available: false, required: training + holdout, found: completed.length };
@@ -102,11 +101,19 @@ function backtest(trend, groupBy, today, coverageStart) {
 
 function recommendationsFor(result, groups, comparison, targets) {
   const actions = [], t = result.totals;
+  const planningGoalFor = metric => {
+    if (targets[metric]?.goal != null) return { ...targets[metric], source:'owner' };
+    if (!targets.scoped && targets.system?.available && targets.system[metric]?.goal != null) return { ...targets.system[metric], source:'system' };
+    return { goal:null, actual:targets[metric]?.actual ?? null, attainment:null, source:null };
+  };
   const contextFor = id => {
     if (id === 'overdue-now' || id === 'late-returns') return { outcome: 'Improve timely equipment returns', measure: 'Active overdue rentals and late return rate', target: targets.overdue.limit === null ? 'Management target not set; current overdue always needs review' : 'Late return alert at ' + Math.round(targets.overdue.limit * 100) + '%' };
     if (id.startsWith('capacity-')) return { outcome: 'Meet rental demand with suitable capacity', measure: 'Confirmed rentals and calendar-hour utilization' };
     if (id.startsWith('idle-')) return { outcome: 'Improve use of under-rented equipment', measure: 'Equipment rental count and observed hours' };
-    if (id.startsWith('below-target-')) return { outcome: 'Work toward the owner-defined goal', measure: id.endsWith('fees') ? 'Recorded rental fees' : 'Confirmed rental count', target: 'Owner-defined, calendar-day allocated goal' };
+    if (id.startsWith('below-target-')) {
+      const metric=id.endsWith('fees')?'fees':'rentals', goal=planningGoalFor(metric);
+      return { outcome: 'Review performance against the active planning target', measure: metric==='fees'?'Recorded rental fees':'Confirmed rental count', target: goal.source==='owner'?'Owner-defined, calendar-day allocated goal':'System target based on complete history and fleet capacity' };
+    }
     if (id === 'demand-decrease') return { outcome: 'Understand changes in rental demand', measure: 'Confirmed rentals versus the preceding matched period' };
     if (id === 'record-coverage') return { outcome: 'Improve the reliability of management decisions', measure: 'Missing-data and observation notes' };
     if (id === 'forecast-history') return { outcome: 'Build a usable demand outlook', measure: 'Complete recorded periods and confirmed rentals' };
@@ -129,8 +136,11 @@ function recommendationsFor(result, groups, comparison, targets) {
   if (!result.forecast.available) add('forecast-history', 'Planning', 'monitor', 'Build a usable forecast history', 'Choose a longer date range or a daily interval to check available history. Continue recording real rental confirmations so future estimates use actual activity.', result.forecast.reason, `${result.forecast.requiredPeriods} complete ${result.groupBy} periods and at least 4 confirmed rentals are required.`, { section: 'forecast', review: 'As more rentals are recorded' });
   if (t.rentals === 0) add('record-activity', 'Performance', 'monitor', 'Start with confirmed rental activity', 'Check the reporting filters, then record actual equipment handoffs through the rental workflow. Pending requests alone do not establish rental performance.', 'No confirmed rental activity was found in the selected dates and equipment filters.', 'Appears when the selected view contains zero confirmed rentals.', { page: 'Rentals', review: 'As rentals are confirmed' });
   if (!comparison.partial) for (const [metric, label] of [['fees', 'recorded rental fees'], ['rentals', 'confirmed rentals']]) {
-    const goal = targets[metric];
-    if (goal.goal !== null && goal.attainment < 1) add('below-target-' + metric, 'Performance', 'medium', 'Review the gap to the ' + label + ' goal', 'Compare equipment contribution, availability, and rental timing before adjusting rates or stock. Agree one change with the owner and review the next equal period.', `${goal.actual.toFixed(2)} actual versus ${goal.goal.toFixed(2)} allocated goal (${Math.round(goal.attainment * 100)}% attained).`, 'A completed selected period is below its owner-defined calendar-day allocated goal.', { section: 'performance', review: 'Next planning review', ruleKind: 'Owner-defined goal; completed periods only' });
+    const goal = planningGoalFor(metric);
+    if (goal.goal !== null && goal.attainment < 1) {
+      const targetSource=goal.source==='owner'?'owner-defined goal':'system-generated historical baseline';
+      add('below-target-' + metric, 'Performance', 'medium', 'Review the gap to the ' + label + ' goal', 'Compare equipment contribution, availability, and rental timing before adjusting rates or stock. Agree one change with the owner and review the next equal period.', `${goal.actual.toFixed(2)} actual versus ${goal.goal.toFixed(2)} allocated target (${Math.round(goal.attainment * 100)}% attained).`, `A completed selected period is below its ${targetSource}, allocated by calendar days.`, { section: 'performance', review: 'Next planning review', ruleKind: `${goal.source==='owner'?'Owner-defined goal':'System-generated target'}; completed periods only` });
+    }
   }
   if (!actions.length) add('monitor', 'Performance', 'monitor', 'Keep monitoring the current pattern', 'Review this dashboard after the next reporting period and watch for changes in rental demand, returns, and service load.', `${t.rentals} confirmed rentals reviewed. No supported action thresholds were triggered; this does not establish that every business issue is resolved.`, 'No other rule matched the selected records.', { section: 'performance', review: 'Next reporting period' });
   const order = { high: 0, medium: 1, monitor: 2 };
@@ -184,7 +194,7 @@ export function calculateDetailedAnalytics(data = {}, selection = {}, now = new 
   }
   const mixTotal = [...mix.values()].reduce((a, b) => a + b, 0), expectedRentals = sum(result.forecast.points, 'rentals');
   const demandMix = groups.filter(row => mix.has(row.stockGroupId)).map(row => ({ ...row, historyRentals: mix.get(row.stockGroupId), share: mixTotal ? mix.get(row.stockGroupId) / mixTotal : 0, expectedRentals: mixTotal ? expectedRentals * mix.get(row.stockGroupId) / mixTotal : 0 })).sort((a, b) => b.expectedRentals - a.expectedRentals);
-  const bt = backtest(result.trend, result.groupBy, manilaDateKey(now), result.forecast.coverageStart);
+  const bt = backtest(result.forecast.evaluationHistory, result.groupBy);
   const actions = recommendationsFor(result, groups, comparison, targets);
 
   // Per-equipment trend series across trend buckets for in-table sparklines.

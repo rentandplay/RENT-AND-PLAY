@@ -34,20 +34,22 @@ test('business drafts are escaped and save progress disables editing', () => {
 test('personal tabs provide working control hooks without exposing passwords', () => {
   assert.ok(render({ tab: 'appearance' }).includes('Theme controls'));
   const preferences = render({ tab: 'preferences' });
-  for (const hook of ['preferences-form', 'preferences-reset', 'autoRefresh', 'reportPeriod', 'reportGrouping']) assert.ok(preferences.includes(hook));
+  for (const hook of ['preferences-form', 'preferences-reset', 'autoRefresh', 'floatingReportFilters', 'reportPeriod', 'reportGrouping']) assert.ok(preferences.includes(hook));
   const account = render({ tab: 'account' });
   assert.ok(account.includes('settings-password-reset'));
   assert.ok(account.includes('data-page="Profile"'));
   assert.ok(!account.includes('type="password"'));
 });
 test('preferences validate saved data and survive a storage roundtrip', () => {
-  assert.deepEqual(normalizePreferences({ autoRefresh: 'false', reportPeriod: 'custom', reportGrouping: 'invalid' }), preferenceDefaults);
+  assert.deepEqual(normalizePreferences({ autoRefresh: 'false', floatingReportFilters: 'false', reportPeriod: 'custom', reportGrouping: 'invalid' }), preferenceDefaults);
   assert.deepEqual(normalizePreferences(null), preferenceDefaults);
   let saved;
   const storage = { getItem: () => saved, setItem: (_key, value) => { saved = value; } };
-  const value = { autoRefresh: false, reportPeriod: '90d', reportGrouping: 'monthly' };
+  const value = { autoRefresh: false, floatingReportFilters: false, reportPeriod: '90d', reportGrouping: 'monthly' };
   assert.deepEqual(writePreferences(storage, value), value);
   assert.deepEqual(readPreferences(storage), value);
+  saved = JSON.stringify({ autoRefresh: false, reportPeriod: '30d' });
+  assert.equal(readPreferences(storage).floatingReportFilters, true);
   saved = '{invalid'; assert.deepEqual(readPreferences(storage), preferenceDefaults);
   assert.deepEqual(readPreferences(), preferenceDefaults);
   assert.throws(() => writePreferences({ setItem: () => { throw Error('Storage blocked'); } }, value), /Storage blocked/);

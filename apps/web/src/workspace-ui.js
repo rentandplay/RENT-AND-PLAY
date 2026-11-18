@@ -54,7 +54,6 @@ export function createWorkspaceUI(h) {
   let analyticsFilterScrollHandler = null;
   let analyticsFilterOutsideHandler = null;
   let analyticsFilterKeyHandler = null;
-  let analyticsFilterPositionHandler = null;
   let demoHistoryBatch = '';
   const reportView = { section: 'performance', sort: 'rentals', performanceMetric: 'fees', rankingMetric: 'rentals', equipmentLimit: '5', paretoMetric: 'fees', stackedMode: 'channel', histogramKind: 'duration', pivotMetric: 'fees', forecastMetric: 'rentals', forecastModel: 'all', forecastMixExpanded: false, recommendationType: 'all', recommendationPriority: 'all', recommendationStep: '', whatIf: { targetGroupId: 'ALL', extraUnits: 0, rateChangePct: 0, demandShiftPct: 0 }, details: {} };
   const activeRates = () => model.rates.filter(rate => rate.is_active !== false);
@@ -738,8 +737,7 @@ export function createWorkspaceUI(h) {
       if (analyticsFilterScrollHandler) document.removeEventListener('scroll', analyticsFilterScrollHandler, true);
       if (analyticsFilterOutsideHandler) document.removeEventListener('pointerdown', analyticsFilterOutsideHandler, true);
       if (analyticsFilterKeyHandler) document.removeEventListener('keydown', analyticsFilterKeyHandler, true);
-      if (analyticsFilterPositionHandler) browserWindow?.removeEventListener('resize', analyticsFilterPositionHandler);
-      analyticsFilterScrollHandler = analyticsFilterOutsideHandler = analyticsFilterKeyHandler = analyticsFilterPositionHandler = null;
+      analyticsFilterScrollHandler = analyticsFilterOutsideHandler = analyticsFilterKeyHandler = null;
     }
     if (page !== 'Reports') document.querySelector('body > #analytics-filter-dock')?.remove();
     if(page==='Payments'){financeUI.bind(rerender);return;}
@@ -1073,7 +1071,7 @@ export function createWorkspaceUI(h) {
       });
     }
     const preferencesForm = document.querySelector('#preferences-form');
-    const preferenceValues = () => ({ autoRefresh: preferencesForm.elements.autoRefresh.checked, reportPeriod: preferencesForm.elements.reportPeriod.value, reportGrouping: preferencesForm.elements.reportGrouping.value });
+    const preferenceValues = () => ({ autoRefresh: preferencesForm.elements.autoRefresh.checked, floatingReportFilters: preferencesForm.elements.floatingReportFilters.checked, reportPeriod: preferencesForm.elements.reportPeriod.value, reportGrouping: preferencesForm.elements.reportGrouping.value });
     preferencesForm?.addEventListener('input', () => { preferencesDraft = preferenceValues(); });
     document.querySelector('#preferences-reset')?.addEventListener('click', async event => {
       const button = event.currentTarget;
@@ -1299,10 +1297,6 @@ export function createWorkspaceUI(h) {
         document.removeEventListener('keydown', analyticsFilterKeyHandler, true);
         analyticsFilterKeyHandler = null;
       }
-      if (analyticsFilterPositionHandler) {
-        browserWindow?.removeEventListener('resize', analyticsFilterPositionHandler);
-        analyticsFilterPositionHandler = null;
-      }
       document.querySelector('body > #analytics-filter-dock')?.remove();
       const workspace = document.querySelector('.analytics-workspace.ana-business');
       const dock = workspace?.querySelector('#analytics-filter-dock');
@@ -1310,6 +1304,7 @@ export function createWorkspaceUI(h) {
       const panel = workspace?.querySelector('#analytics-filter-panel');
       const filterBar = workspace?.querySelector('#analytics-filter-bar');
       if (!button || !panel || !filterBar) return;
+      if (!preferences.floatingReportFilters) { dock.remove(); return; }
       dock.classList.add('ana-floating-filter-dock');
       document.body.append(dock);
 
@@ -1323,7 +1318,6 @@ export function createWorkspaceUI(h) {
       };
 
       analyticsFilterScrollHandler = () => {
-        analyticsFilterPositionHandler?.();
         const isPastFilters = filterBar.isConnected && filterBar.getBoundingClientRect().bottom <= 0;
         dock.classList.toggle('is-visible',isPastFilters);
         button.setAttribute('aria-hidden', String(!isPastFilters));
@@ -1380,18 +1374,8 @@ export function createWorkspaceUI(h) {
           setOpen(false, true);
         }
       };
-      analyticsFilterPositionHandler = () => {
-        const sidebar = document.querySelector('.sidebar');
-        const isDesktop = browserWindow?.matchMedia?.('(min-width: 721px)').matches;
-        const sidebarEdge = sidebar && isDesktop
-          ? Math.max(0, sidebar.getBoundingClientRect().right)
-          : 0;
-        dock.style.setProperty('--ana-filter-dock-left', `${Math.max(16, sidebarEdge + 14)}px`);
-      };
       document.addEventListener('pointerdown', analyticsFilterOutsideHandler, true);
       document.addEventListener('keydown', analyticsFilterKeyHandler, true);
-      browserWindow?.addEventListener('resize', analyticsFilterPositionHandler, { passive: true });
-      analyticsFilterPositionHandler();
       period.onchange = updateCustomRange;
       category.onchange = updateEquipmentOptions;
       panel.querySelector('[data-analytics-filter-reset]').onclick = () => {

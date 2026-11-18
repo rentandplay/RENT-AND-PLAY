@@ -138,12 +138,13 @@ export function barChart(rows, { escape:e,title,currency=false,color='#3b82f6',h
 
 
 // Actual and target share one zero-based scale. Missing goals remain missing.
-export function combinationChart(labels = [], actualValues = [], targetValues = [], { escape:e=escapeHtml, id='performance-combination', title='Actual versus target', currency=false, previousValues=null, actualLabel='Actual', targetLabel='Target', previousLabel='Previous period', integerTicks=false, width=730, height=272, caption='' }={}) {
+export function combinationChart(labels = [], actualValues = [], targetValues = [], { escape:e=escapeHtml, id='performance-combination', title='Actual versus target', currency=false, previousValues=null, additionalSeries=[], actualLabel='Actual', targetLabel='Target', previousLabel='Previous period', integerTicks=false, width=730, height=272, caption='' }={}) {
   if (!labels.length) return '<div class="ana-empty"><strong>No periods to chart</strong><p>Select a reporting period with recorded history.</p></div>';
   const {left,right,top,bottom}=layout(width,height), column=(right-left)/labels.length;
   const clean=values=>labels.map((_,i)=>finite(values?.[i])?Math.max(0,values[i]):null);
   const actual=clean(actualValues),target=clean(targetValues),previous=clean(previousValues);
-  const series=[{name:actualLabel,values:actual,color:'#3b82f6',kind:'bar'},...(target.some(finite)?[{name:targetLabel,values:target,color:'#f97316',kind:'line'}]:[]),...(previous.some(finite)?[{name:previousLabel,values:previous,color:'#64748b',kind:'line',dashed:true}]:[])];
+  const extras=(Array.isArray(additionalSeries)?additionalSeries:[]).filter(row=>row&&typeof row.name==='string').map(row=>({name:row.name,values:clean(row.values),color:row.color||'#8b5cf6',kind:'line',dashed:row.dashed!==false})).filter(row=>row.values.some(finite));
+  const series=[{name:actualLabel,values:actual,color:'#3b82f6',kind:'bar'},...(target.some(finite)?[{name:targetLabel,values:target,color:'#f97316',kind:'line'}]:[]),...extras,...(previous.some(finite)?[{name:previousLabel,values:previous,color:'#64748b',kind:'line',dashed:true}]:[])];
   const scale=axisScale(Math.max(1,...series.flatMap(row=>row.values).filter(finite)),integerTicks);
   const x=i=>roundCoordinate(left+column*(i+.5)),y=value=>roundCoordinate(bottom-value/scale.maximum*(bottom-top));
   const grid=scale.ticks.map(value=>`<g><line x1="${left}" x2="${right}" y1="${y(value)}" y2="${y(value)}" class="ana-gridline"/><text x="${left-10}" y="${y(value)+4}" text-anchor="end" class="ana-axis-label">${currency?'₱':''}${compact(value)}</text></g>`).join('') + `<text x="${left-10}" y="${top-12}" text-anchor="end" class="ana-axis-unit">${currency?'PHP':'Rentals'}</text>`;
@@ -165,7 +166,7 @@ export function combinationChart(labels = [], actualValues = [], targetValues = 
     : `<text x="${x(i)}" y="${height-15}" text-anchor="${i===0?'start':i===labels.length-1?'end':'middle'}" class="ana-axis-label" data-ana-time-tick="${i}">${e(labels[i])}</text>`).join('');
   const inspection=labels.map((label,i)=>({label,x:x(i),rows:series.flatMap((row,seriesIndex)=>finite(row.values[i])?[{seriesIndex,name:row.name,color:row.color,x:x(i),y:y(row.values[i]),value:`${currency?'₱':''}${plain(row.values[i])}`,label:row.kind==='bar'?'Recorded actual':row.name}]:[])}));
   const hits=labels.map((_,i)=>`<rect data-ana-point="${i}" aria-hidden="true" focusable="false" x="${roundCoordinate(left+column*i)}" y="${top}" width="${roundCoordinate(column)}" height="${bottom-top}" fill="transparent"/>`).join('');
-  const payload={type:'combination',labels,actualValues:actual,targetValues:target,options:{id,title,currency,previousValues:previous,actualLabel,targetLabel,previousLabel,integerTicks,width,height,caption}};
+  const payload={type:'combination',labels,actualValues:actual,targetValues:target,options:{id,title,currency,previousValues:previous,additionalSeries:extras,actualLabel,targetLabel,previousLabel,integerTicks,width,height,caption}};
   return `<figure class="ana-chart ana-interactive ana-modern-chart ana-combination-chart" data-ana-chart data-ana-values="${e(JSON.stringify(inspection))}" data-ana-source="${e(JSON.stringify(payload))}" data-ana-view="${e(JSON.stringify(payload))}" aria-labelledby="${id}-title">${chartTools(labels.length>14)}<div class="ana-plot" data-ana-plot tabindex="0" role="group" aria-label="${e(title)}. Left and Right inspect periods; Enter pins; Escape dismisses."><svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${id}-title ${id}-description"><title id="${id}-title">${e(title)}</title><desc id="${id}-description">${e(series.map(row=>row.name).join(', '))}. Columns and lines use the same ${currency?'Philippine peso':'value'} scale starting at zero. Missing targets are omitted.</desc>${defs}${grid}${marks}${ticks}<line data-ana-crosshair x1="${left}" x2="${left}" y1="${top}" y2="${bottom}" class="ana-crosshair" hidden/>${hits}</svg>${chartTooltip()}</div><figcaption class="ana-chart-legend">${series.map((row,i)=>`<button type="button" data-ana-toggle="${i}" aria-pressed="true" aria-label="Show ${e(row.name)}"><i style="--ana-series-color:${row.color};background:${row.color}" class="${row.dashed?'is-dashed':''}"></i>${e(row.name)}</button>`).join('')}${caption?`<span class="ana-range-key">${e(caption)}</span>`:''}</figcaption></figure>`;
 }
 
@@ -576,7 +577,7 @@ function slicedChart(source,count,dimensions={}) {
   }
   if(source.type==='combination') {
     const start=count?Math.max(0,source.labels.length-count):0;
-    return combinationChart(source.labels.slice(start),source.actualValues.slice(start),source.targetValues.slice(start),{...source.options,...dimensions,previousValues:source.options.previousValues?.slice(start),escape:escapeHtml});
+    return combinationChart(source.labels.slice(start),source.actualValues.slice(start),source.targetValues.slice(start),{...source.options,...dimensions,previousValues:source.options.previousValues?.slice(start),additionalSeries:source.options.additionalSeries?.map(row=>({...row,values:row.values.slice(start)})),escape:escapeHtml});
   }
   if(source.type!=='line') return renderChart(source,dimensions);
   const start=count?Math.max(0,source.labels.length-count):0;

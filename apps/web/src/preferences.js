@@ -1,8 +1,9 @@
-export const preferenceDefaults=Object.freeze({autoRefresh:true,reportPeriod:'365d',reportGrouping:'monthly'});
+export const preferenceDefaults=Object.freeze({autoRefresh:true,floatingReportFilters:true,reportPeriod:'365d',reportGrouping:'monthly'});
 const key='rent-play-workspace-preferences';
 export function normalizePreferences(value={}) {
   return {
     autoRefresh:typeof value?.autoRefresh==='boolean'?value.autoRefresh:true,
+    floatingReportFilters:typeof value?.floatingReportFilters==='boolean'?value.floatingReportFilters:true,
     reportPeriod:['7d','30d','90d','365d'].includes(value?.reportPeriod)?value.reportPeriod:'365d',
     reportGrouping:['auto','daily','weekly','monthly'].includes(value?.reportGrouping)?value.reportGrouping:'monthly'
   };

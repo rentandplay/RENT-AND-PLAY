@@ -13,6 +13,17 @@ const money = amount => `₱${Number(amount).toFixed(2)}`;
 const validAmount = amount => typeof amount === 'number' && Number.isFinite(amount) && amount >= 0;
 export const isMobileRental = rental => rental.request_source === 'MOBILE_APP' || Boolean(rental.admin_review) || Boolean(rental.customerId);
 
+function normalizeCommaOrderedName(raw) {
+  if (typeof raw !== 'string') return raw;
+  const trimmed = raw.trim().replace(/\s+/g, ' ');
+  const parts = trimmed.split(',');
+  if (parts.length === 2 && parts[0].trim() && parts[1].trim()) {
+    const reordered = `${parts[1].trim()} ${parts[0].trim()}`.replace(/\s+/g, ' ');
+    if (!nameError(reordered)) return reordered;
+  }
+  return trimmed;
+}
+
 export async function mobileProfile(db, claims, input = {}, method = 'GET', now = new Date(), onWrite = () => {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Profile details are required.');
   const userRef = db.collection('users').doc(String(claims.uid));
@@ -42,9 +53,20 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
       if (typeof value !== 'string' || value.trim().length > max) fail(400, `Enter a valid ${label}.`);
       return value.trim();
     };
-    if (!existing && input.name !== undefined) validationFailure(nameError(input.name));
+    const normalizedInputName = input.name !== undefined ? normalizeCommaOrderedName(input.name) : undefined;
+    const normalizedClaimsName = claims.name ? normalizeCommaOrderedName(claims.name) : '';
+    const isUnchangedExistingName = typeof normalizedInputName === 'string' && (
+      normalizedInputName === String(existing?.full_name || '').trim() ||
+      normalizedInputName === String(existing?.name || '').trim() ||
+      normalizedInputName === String(claims.name || '').trim() ||
+      normalizedInputName === normalizedClaimsName
+    );
+    if (!existing && normalizedInputName !== undefined && !isGoogleAccount) {
+      validationFailure(nameError(normalizedInputName));
+    }
     if (!existing && input.phone !== undefined) validationFailure(phoneError(input.phone, false));
-    const initialName = clean(input.name || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name');
+    const validInitialInputName = normalizedInputName && !nameError(normalizedInputName) ? normalizedInputName : '';
+    const initialName = clean(validInitialInputName || normalizedClaimsName || claims.name || claims.email?.split('@')[0] || 'Customer', 150, 'name');
     const initialPhone = clean(input.phone || claims.phone_number || '', 40, 'phone');
     const initialPhoto = input.profileImageUrl ? clean(input.profileImageUrl, 2048, 'profile image') : (claims.picture ? clean(claims.picture, 2048, 'profile image') : null);
     const created = existing ? { ...existing, role: existingRole } : { full_name: initialName, email: claims.email || '', phone: initialPhone, profileImageUrl: initialPhoto, role: 'CUSTOMER', is_active: true, hasAcceptedTerms: false, created_at: now };
@@ -55,12 +77,16 @@ export async function mobileProfile(db, claims, input = {}, method = 'GET', now 
         if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs) || Object.keys(prefs).some(key => !['push_enabled', 'return_reminders'].includes(key)) || Object.values(prefs).some(value => typeof value !== 'boolean')) fail(400, 'Choose valid notification preferences.');
         changes.notification_preferences = { push_enabled: true, return_reminders: true, ...existing?.notification_preferences, ...prefs };
       }
-      if (input.name !== undefined && input.name.trim()) {
-        validationFailure(nameError(input.name));
-        const newName = clean(input.name, 150, 'name');
-        if (!existing?.full_name || existing.full_name === 'Customer' || existing.full_name === claims.email?.split('@')[0] || method === 'PATCH') {
-          changes.full_name = newName;
-          changes.name = newName;
+      if (normalizedInputName !== undefined && normalizedInputName.trim()) {
+        const nameErr = nameError(normalizedInputName);
+        if (nameErr) {
+          if (method === 'PATCH' && !isUnchangedExistingName) validationFailure(nameErr);
+        } else {
+          const newName = clean(normalizedInputName, 150, 'name');
+          if (!existing?.full_name || existing.full_name === 'Customer' || existing.full_name === claims.email?.split('@')[0] || method === 'PATCH') {
+            changes.full_name = newName;
+            changes.name = newName;
+          }
         }
       }
       if (input.phone !== undefined && input.phone.trim()) {
